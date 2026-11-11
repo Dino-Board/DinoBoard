@@ -1,0 +1,237 @@
+{
+  "_doc": "Single source of truth for which games are enabled, surfaced to the web, and tested across the framework matrix. setup.py consumes sources verbatim; top-level CMakeLists.txt consumes id/enabled to add each game subdirectory, while each game's own CMakeLists.txt must keep its target source list in sync. tests/conftest.py / platform/game_service also consume this file. Schema per entry: id (str), enabled (bool, default true \u2014 disabled games skip build entirely), sources (list[str]; relative to games/<id>/, consumed by setup.py), capabilities (list[str]; tags consumed by the framework test matrix \u2014 see capability glossary below), framework_whitelist (bool, default false \u2014 true means the game must satisfy the core invariants the framework guards). To add a game: append an entry and add games/<id>/CMakeLists.txt. To temporarily disable: set enabled=false. Display order in the web UI follows declaration order here.",
+  "_capabilities_doc": {
+    "hidden_info": "Game has perspective-private slots (viz != all_public). Triggers tests that verify AI cannot read truth's hidden fields.",
+    "snapshot": "Game registers public_state_applier \u2014 public state flows wire-side via PublicEventTrace.public_snapshot rather than via do_action_fast. Triggers public-snapshot round-trip tests.",
+    "tracker": "Game registers a belief_tracker factory. Triggers tracker-consistency tests."
+  },
+  "games": [
+    {
+      "id": "tictactoe",
+      "enabled": true,
+      "framework_whitelist": true,
+      "capabilities": [],
+      "sources": [
+        "tictactoe_state.cpp",
+        "tictactoe_rules.cpp",
+        "tictactoe_net_adapter.cpp",
+        "tictactoe_register.cpp"
+      ]
+    },
+    {
+      "id": "splendor",
+      "enabled": true,
+      "framework_whitelist": true,
+      "capabilities": [
+        "hidden_info",
+        "snapshot",
+        "tracker"
+      ],
+      "sources": [
+        "splendor_state.cpp",
+        "splendor_rules.cpp",
+        "splendor_net_adapter.cpp",
+        "splendor_register.cpp",
+        "heuristic/splendor_rule_heuristic.cpp"
+      ]
+    },
+    {
+      "id": "azul",
+      "enabled": true,
+      "framework_whitelist": true,
+      "capabilities": [
+        "snapshot"
+      ],
+      "sources": [
+        "azul_state.cpp",
+        "azul_rules.cpp",
+        "azul_net_adapter.cpp",
+        "azul_register.cpp",
+        "heuristic/azul_rule_heuristic.cpp"
+      ]
+    },
+    {
+      "id": "quoridor",
+      "enabled": true,
+      "framework_whitelist": true,
+      "capabilities": [],
+      "sources": [
+        "quoridor_state.cpp",
+        "quoridor_rules.cpp",
+        "quoridor_net_adapter.cpp",
+        "quoridor_register.cpp",
+        "heuristic/quoridor_rule_heuristic.cpp",
+        "heuristic/quoridor_simple_max_heuristic.cpp"
+      ]
+    },
+    {
+      "id": "loveletter",
+      "enabled": true,
+      "framework_whitelist": true,
+      "capabilities": [
+        "hidden_info",
+        "snapshot",
+        "tracker"
+      ],
+      "sources": [
+        "loveletter_state.cpp",
+        "loveletter_rules.cpp",
+        "loveletter_net_adapter.cpp",
+        "loveletter_register.cpp",
+        "heuristic/loveletter_rule_heuristic.cpp"
+      ]
+    },
+    {
+      "id": "coup",
+      "enabled": true,
+      "framework_whitelist": true,
+      "capabilities": [
+        "hidden_info",
+        "snapshot",
+        "tracker"
+      ],
+      "sources": [
+        "coup_state.cpp",
+        "coup_rules.cpp",
+        "coup_net_adapter.cpp",
+        "coup_register.cpp"
+      ]
+    },
+    {
+      "id": "6nimmit",
+      "enabled": true,
+      "framework_whitelist": true,
+      "capabilities": [
+        "hidden_info",
+        "snapshot",
+        "tracker"
+      ],
+      "sources": [
+        "6nimmit_state.cpp",
+        "6nimmit_rules.cpp",
+        "6nimmit_net_adapter.cpp",
+        "6nimmit_register.cpp",
+        "heuristic/sixnimmit_rule_heuristic.cpp",
+        "heuristic/sixnimmit_lkf_heuristic.cpp"
+      ]
+    },
+    {
+      "id": "harmonies",
+      "enabled": true,
+      "framework_whitelist": false,
+      "capabilities": [
+        "hidden_info",
+        "snapshot",
+        "tracker"
+      ],
+      "sources": [
+        "harmonies_state.cpp",
+        "harmonies_rules.cpp",
+        "harmonies_net_adapter.cpp",
+        "harmonies_register.cpp",
+        "heuristic/harmonies_greedy_heuristic.cpp",
+        "heuristic/harmonies_greedy_pv_evaluator.cpp"
+      ]
+    },
+    {
+      "id": "liarsdice",
+      "enabled": true,
+      "framework_whitelist": true,
+      "capabilities": [
+        "hidden_info",
+        "snapshot",
+        "tracker"
+      ],
+      "sources": [
+        "liarsdice_state.cpp",
+        "liarsdice_rules.cpp",
+        "outcome_index.cpp",
+        "liarsdice_net_adapter.cpp",
+        "liarsdice_register.cpp",
+        "heuristic/liarsdice_rule_heuristic.cpp"
+      ]
+    },
+    {
+      "id": "maskmen",
+      "enabled": true,
+      "framework_whitelist": true,
+      "capabilities": [
+        "hidden_info",
+        "snapshot"
+      ],
+      "sources": [
+        "maskmen_state.cpp",
+        "maskmen_rules.cpp",
+        "maskmen_net_adapter.cpp",
+        "maskmen_register.cpp"
+      ]
+    },
+    {
+      "id": "jaipur",
+      "enabled": true,
+      "framework_whitelist": false,
+      "capabilities": [
+        "hidden_info",
+        "snapshot",
+        "tracker"
+      ],
+      "sources": [
+        "jaipur_state.cpp",
+        "jaipur_rules.cpp",
+        "jaipur_net_adapter.cpp",
+        "jaipur_belief_tracker.cpp",
+        "jaipur_register.cpp",
+        "heuristic/jaipur_rule_heuristic.cpp",
+        "heuristic/jaipur_heuristic_pv_evaluator.cpp",
+        "heuristic/jaipur_smart_heuristic.cpp"
+      ]
+    },
+    {
+      "id": "carcassonne",
+      "enabled": true,
+      "framework_whitelist": false,
+      "capabilities": [
+        "snapshot"
+      ],
+      "sources": [
+        "carcassonne_state.cpp",
+        "carcassonne_tiles.cpp",
+        "carcassonne_rules.cpp",
+        "carcassonne_net_adapter.cpp",
+        "carcassonne_register.cpp",
+        "heuristic/carcassonne_rule_heuristic.cpp",
+        "heuristic/carcassonne_heuristic_pv_evaluator.cpp"
+      ]
+    },
+    {
+      "id": "arknova",
+      "enabled": true,
+      "framework_whitelist": false,
+      "capabilities": [
+        "hidden_info",
+        "snapshot",
+        "tracker"
+      ],
+      "sources": [
+        "arknova_cards.cpp",
+        "arknova_map.cpp",
+        "arknova_engine.cpp",
+        "arknova_effects.cpp",
+        "arknova_action_cards_build.cpp",
+        "arknova_action_animals.cpp",
+        "arknova_action_association.cpp",
+        "arknova_action_sponsors.cpp",
+        "arknova_abilities.cpp",
+        "arknova_card_effects.cpp",
+        "arknova_json.cpp",
+        "arknova_state.cpp",
+        "arknova_actions.cpp",
+        "arknova_rules.cpp",
+        "arknova_belief.cpp",
+        "arknova_encoder.cpp",
+        "arknova_register.cpp",
+        "heuristic/arknova_greedy_heuristic.cpp"
+      ]
+    }
+  ]
+}

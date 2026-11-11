@@ -1,0 +1,5 @@
+{
+  "world_cap": 150,
+  "c_puct": 2.0,
+  "opponent_selection": "prior"
+}

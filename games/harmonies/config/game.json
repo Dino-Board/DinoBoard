@@ -1,0 +1,60 @@
+{
+  "game_id": "harmonies",
+  "display_name": "自然和弦",
+  "display_name_en": "Harmonies",
+  "players": {
+    "min": 2,
+    "max": 4
+  },
+  "max_game_plies": 320,
+  "web_variants": {
+    "2": "harmonies_tok"
+  },
+  "variants": {
+    "harmonies": {
+      "feature_dim": 1250,
+      "action_space": 988,
+      "num_players": 2
+    },
+    "harmonies_2p": {
+      "feature_dim": 1250,
+      "action_space": 988,
+      "num_players": 2
+    },
+    "harmonies_3p": {
+      "feature_dim": 1768,
+      "action_space": 988,
+      "num_players": 3
+    },
+    "harmonies_4p": {
+      "feature_dim": 2286,
+      "action_space": 988,
+      "num_players": 4
+    },
+    "harmonies_a": {
+      "feature_dim": 1190,
+      "action_space": 912,
+      "num_players": 2
+    },
+    "harmonies_a_2p": {
+      "feature_dim": 1190,
+      "action_space": 912,
+      "num_players": 2
+    },
+    "harmonies_a_3p": {
+      "feature_dim": 1678,
+      "action_space": 912,
+      "num_players": 3
+    },
+    "harmonies_a_4p": {
+      "feature_dim": 2166,
+      "action_space": 912,
+      "num_players": 4
+    },
+    "harmonies_tok": {
+      "feature_dim": 0,
+      "action_space": 988,
+      "num_players": 2
+    }
+  }
+}

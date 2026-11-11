@@ -1,0 +1,63 @@
+{
+  "network": {
+    "type": "mlp",
+    "hidden_layers": [256, 256, 256],
+    "activation": "relu",
+    "residual": false,
+    "block_size": 2
+  },
+  "training": {
+    "episodes_per_step": 100,
+    "batch_size": 1024,
+    "train_batches_per_step": 10,
+    "learning_rate": 1e-4,
+    "lr_schedule": {
+      "type": "cosine",
+      "lr_min": 1e-5
+    },
+    "steps": 10000,
+    "eval_benchmarks": ["heuristic_free"],
+    "selfplay_concurrency": {
+      "enabled": true,
+      "leaf_batch_size": 1,
+      "opponent_pool_max_distinct": 10,
+      "evaluator": {
+        "batch_size": 100,
+        "batch_timeout_us": 30,
+        "max_queue_size": 256,
+        "intra_op_num_threads": 1,
+        "num_inference_threads": 1,
+        "providers": []
+      }
+    }
+  },
+  "mcts": {
+    "selfplay": {
+      "dirichlet_alpha": 0.5,
+      "dirichlet_epsilon": 0.25,
+      "simulations": 1000,
+      "temperature": 1.0,
+      "temperature_schedule": {
+        "enabled": true,
+        "initial": 1.0,
+        "final": 0.1,
+        "decay_plies": 50
+      }
+    },
+    "eval": {
+      "simulations": 1000
+    }
+  },
+  "heuristic_guidance": {
+    "name": "rule_mcts",
+    "hold_steps": 100,
+    "steps": 200,
+    "initial_ratio": 1.0,
+    "temperature": 0.0
+  },
+  "runtime": {
+    "eval_every": 100,
+    "eval_games": 100,
+    "save_every": 100
+  }
+}

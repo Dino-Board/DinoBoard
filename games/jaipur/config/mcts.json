@@ -1,0 +1,5 @@
+{
+  "c_puct": 1.4,
+  "opponent_selection": "puct",
+  "simulations": 1000
+}

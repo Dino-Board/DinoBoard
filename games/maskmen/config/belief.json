@@ -1,0 +1,17 @@
+{
+  "architecture": [
+    256,
+    256,
+    256,
+    256,
+    256,
+    256
+  ],
+  "activation": "relu",
+  "batch_norm": true,
+  "residual": true,
+  "block_size": 2,
+  "training": {
+    "loss": "mse"
+  }
+}

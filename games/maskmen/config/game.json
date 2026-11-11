@@ -1,0 +1,26 @@
+{
+  "game_id": "maskmen",
+  "display_name": "面具人",
+  "display_name_en": "Maskmen",
+  "players": {
+    "min": 3,
+    "max": 4
+  },
+  "max_game_plies": 200,
+  "variants": {
+    "maskmen_3p": {
+      "feature_dim": 673,
+      "action_space": 7,
+      "num_players": 3,
+      "belief_feature_dim": 658,
+      "belief_logit_count": 12
+    },
+    "maskmen_4p": {
+      "feature_dim": 736,
+      "action_space": 7,
+      "num_players": 4,
+      "belief_feature_dim": 715,
+      "belief_logit_count": 18
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "_provenance": "Board Game Arena Carcassonne `gamedatas.tile_types` (feature spots and their links) and the number of base-game tiles of each type (`gamedatas.tile_data`, expansion 0), copied unchanged from a live BGA table capture: bga-dinoboard/tests/fixtures/carcassonne-bga-frame.json. Edges: 1 up, 2 right, 3 bottom, 4 left. Field links: border halves 10..17 clockwise from the left half of the top edge. `citylink` lists the city spots a field borders; `bonus` marks a pennant.",
+  "tile_counts": {"1": 1, "2": 2, "3": 3, "4": 2, "5": 3, "6": 2, "7": 1, "8": 2, "9": 2, "10": 3, "11": 5, "12": 3, "13": 3, "14": 3, "15": 4, "16": 8, "17": 9, "18": 4, "19": 1, "20": 4, "21": 2, "22": 1, "23": 3, "24": 1},
+  "tile_types": {
+    "1": {"abbey": null, "city": {"2": {"link": [1, 2, 4]}}, "field": {"3": {"citylink": [2], "link": [15]}, "4": {"citylink": [2], "link": [14]}}, "road": {"1": {"link": [3]}}},
+    "2": {"abbey": null, "city": {"2": {"bonus": 1, "link": [1, 2, 4]}}, "field": {"3": {"citylink": [2], "link": [15]}, "4": {"citylink": [2], "link": [14]}}, "road": {"1": {"link": [3]}}},
+    "3": {"abbey": null, "city": {"1": {"link": [1, 4]}}, "field": {"2": {"citylink": [1], "link": [12, 13, 14, 15]}}, "road": []},
+    "4": {"abbey": null, "city": {"1": {"bonus": 1, "link": [1, 4]}}, "field": {"2": {"citylink": [1], "link": [12, 13, 14, 15]}}, "road": []},
+    "5": {"abbey": null, "city": {"2": {"link": [1, 4]}}, "field": {"3": {"citylink": [2], "link": [12, 15]}, "4": {"citylink": [], "link": [13, 14]}}, "road": {"1": {"link": [2, 3]}}},
+    "6": {"abbey": null, "city": {"2": {"bonus": 1, "link": [1, 4]}}, "field": {"3": {"citylink": [2], "link": [12, 15]}, "4": {"citylink": [], "link": [13, 14]}}, "road": {"1": {"link": [2, 3]}}},
+    "7": {"abbey": null, "city": {"1": {"link": [2, 4]}}, "field": {"2": {"citylink": [1], "link": [10, 11]}, "3": {"citylink": [1], "link": [14, 15]}}, "road": []},
+    "8": {"abbey": null, "city": {"1": {"bonus": 1, "link": [2, 4]}}, "field": {"2": {"citylink": [1], "link": [10, 11]}, "3": {"citylink": [1], "link": [14, 15]}}, "road": []},
+    "9": {"abbey": null, "city": {"1": {"link": [1]}, "2": {"link": [4]}}, "field": {"3": {"citylink": [1, 2], "link": [12, 13, 14, 15]}}, "road": []},
+    "10": {"abbey": null, "city": {"1": {"link": [1]}, "2": {"link": [3]}}, "field": {"3": {"citylink": [1, 2], "link": [12, 13, 16, 17]}}, "road": []},
+    "11": {"abbey": null, "city": {"1": {"link": [1]}}, "field": {"2": {"citylink": [1], "link": [12, 13, 14, 15, 16, 17]}}, "road": []},
+    "12": {"abbey": null, "city": {"2": {"link": [1]}}, "field": {"3": {"citylink": [2], "link": [12, 13, 14, 17]}, "4": {"citylink": [], "link": [15, 16]}}, "road": {"1": {"link": [3, 4]}}},
+    "13": {"abbey": null, "city": {"2": {"link": [1]}}, "field": {"3": {"citylink": [2], "link": [12, 15, 16, 17]}, "4": {"citylink": [], "link": [13, 14]}}, "road": {"1": {"link": [2, 3]}}},
+    "14": {"abbey": null, "city": {"4": {"link": [1]}}, "field": {"5": {"citylink": [4], "link": [12, 17]}, "6": {"citylink": [], "link": [15, 16]}, "7": {"citylink": [], "link": [13, 14]}}, "road": {"1": {"link": [4]}, "2": {"link": [2]}, "3": {"link": [3]}}},
+    "15": {"abbey": null, "city": {"2": {"link": [1]}}, "field": {"3": {"citylink": [2], "link": [12, 17]}, "4": {"citylink": [], "link": [13, 14, 15, 16]}}, "road": {"1": {"link": [2, 4]}}},
+    "16": {"abbey": null, "city": [], "field": {"3": {"citylink": [], "link": [10, 15, 16, 17]}, "4": {"citylink": [], "link": [11, 12, 13, 14]}}, "road": {"1": {"link": [1, 3]}}},
+    "17": {"abbey": null, "city": [], "field": {"2": {"citylink": [], "link": [10, 11, 12, 13, 14, 17]}, "3": {"citylink": [], "link": [15, 16]}}, "road": {"1": {"link": [3, 4]}}},
+    "18": {"abbey": null, "city": [], "field": {"4": {"citylink": [], "link": [10, 11, 12, 17]}, "5": {"citylink": [], "link": [15, 16]}, "6": {"citylink": [], "link": [13, 14]}}, "road": {"1": {"link": [4]}, "2": {"link": [2]}, "3": {"link": [3]}}},
+    "19": {"abbey": null, "city": [], "field": {"5": {"citylink": [], "link": [10, 17]}, "6": {"citylink": [], "link": [11, 12]}, "7": {"citylink": [], "link": [13, 14]}, "8": {"citylink": [], "link": [15, 16]}}, "road": {"1": {"link": [4]}, "2": {"link": [2]}, "3": {"link": [3]}, "4": {"link": [1]}}},
+    "20": {"abbey": {"1": []}, "city": [], "field": {"2": {"citylink": [], "link": [10, 11, 12, 13, 14, 15, 16, 17]}}, "road": []},
+    "21": {"abbey": {"1": []}, "city": [], "field": {"3": {"citylink": [], "link": [10, 11, 12, 13, 14, 15, 16, 17]}}, "road": {"2": {"link": [3]}}},
+    "22": {"abbey": null, "city": {"1": {"bonus": 1, "link": [1, 2, 3, 4]}}, "field": [], "road": []},
+    "23": {"abbey": null, "city": {"1": {"link": [1, 2, 4]}}, "field": {"2": {"citylink": [1], "link": [14, 15]}}, "road": []},
+    "24": {"abbey": null, "city": {"1": {"bonus": 1, "link": [1, 2, 4]}}, "field": {"2": {"citylink": [1], "link": [14, 15]}}, "road": []}
+  }
+}

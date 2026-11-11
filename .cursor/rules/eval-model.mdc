@@ -1,0 +1,70 @@
+---
+description: Evaluate DinoBoard ONNX models and heuristics with scripts/eval_model.py
+globs:
+  - "scripts/eval_model.py"
+  - "training/**/*.py"
+  - "games/**/config/heuristic.json"
+  - "games/**/config/train.json"
+alwaysApply: false
+---
+
+# DinoBoard Eval Model
+
+Use `scripts/eval_model.py` for model strength checks, heuristic baselines,
+random-init sanity tests, and replay generation.
+
+## Defaults
+
+- `--model` is the measured side in the printed W-L-D summary.
+- Bare `heuristic` resolves through `heuristic.json::selectors[--heuristic-selector]`.
+- The measured side rotates by `game_idx % num_players` unless `--fixed-seat`
+  or `--paired-seats` is used.
+- Model-involved eval defaults to the same batched evaluator config as training
+  self-play when `train.json::training.selfplay_concurrency.enabled=true`.
+- Pass `--providers coreml,cpu` on Apple or `--providers cuda,cpu` on NVIDIA
+  to override the JSON provider list for a run.
+- Use `--no-save` for benchmark sweeps unless replay JSON is needed.
+
+## Common Commands
+
+Model vs heuristic:
+
+```bash
+python3 scripts/eval_model.py --game carcassonne \
+  --model games/carcassonne/model/carcassonne_2p.onnx \
+  --opponent heuristic --games 100 --workers 100 \
+  --sims 1000 --profile eval --providers coreml,cpu \
+  --no-save -o /tmp/eval
+```
+
+Heuristic as measured side:
+
+```bash
+python3 scripts/eval_model.py --game carcassonne \
+  --model heuristic \
+  --opponent games/carcassonne/model/carcassonne_2p.onnx \
+  --name-model rule_mcts --name-opponent model \
+  --games 100 --workers 100 --sims 1000 --profile eval \
+  --providers coreml,cpu --no-save -o /tmp/eval
+```
+
+Model vs model:
+
+```bash
+python3 scripts/eval_model.py --game coup \
+  --model runs/coup/models/model_latest.onnx --name-model latest \
+  --opponent runs/coup/models/model_best.onnx --name-opponent best \
+  --games 40 --workers 40 --providers cuda,cpu \
+  --no-save -o /tmp/eval
+```
+
+## Pitfalls
+
+- `--sims` controls ONNX model-seat MCTS only. Heuristic MCTS-PV sims come
+  from `heuristic.json`; temporary heuristic sim changes must be restored.
+- Batched eval accelerates ONNX leaf inference only. Tree search and
+  hand-written heuristic PV evaluation remain CPU work.
+- Confirm the launch prints `Using batched eval` before trusting a long GPU
+  benchmark.
+- `--no-batched` is a legacy/debug path and can multiply ONNX memory by worker
+  count.

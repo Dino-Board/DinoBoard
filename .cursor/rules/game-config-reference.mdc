@@ -1,0 +1,266 @@
+---
+description: "Game configuration reference — all fields for game.json, mcts.json, train.json, web.json, heuristic.json, belief.json"
+globs:
+  - "games/**/config/*.json"
+alwaysApply: false
+---
+
+# Game Configuration Reference
+
+All config lives in `games/<id>/config/`. Six files, each with a distinct scope.
+
+---
+
+## game.json — Game-Level Properties
+
+| Field | Type | Description |
+|-------|------|-------------|
+| game_id | string | Canonical ID (matches manifest.json) |
+| display_name | string | Chinese display name for web UI |
+| display_name_en | string | English display name for web UI |
+| victory_mode | "winner_takes"\|"loser_pays" | Controls gating threshold variance formula. `winner_takes` (default): 1 winner, N-1 losers. `loser_pays`: 1 loser, N-1 winners. Does NOT affect C++ value model (which reads `winners()`/`losers()` from state). Only consumer: Python training pipeline gating threshold. |
+| players.min | int | Minimum player count |
+| players.max | int | Maximum player count |
+| max_game_plies | int | Maximum plies before forced termination (used by dirichlet_on_first_n_plies sentinel) |
+| variants | object | Per-variant dimensions (keyed by variant_id) |
+| variants.<v>.feature_dim | int | Input feature dimension for this variant |
+| variants.<v>.action_space | int | Action space size for this variant |
+| variants.<v>.num_players | int | Player count for this variant |
+
+Variant naming: base `<game_id>` for 2p, `<game_id>_3p`/`<game_id>_4p` for multi.
+
+---
+
+## mcts.json — MCTS Baseline (Flat, No Profile Names)
+
+Shared knobs every profile inherits. All fields are optional (fall back to _BASE_DICT in mcts_profile.py).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| simulations | int | 200 | MCTS simulation count |
+| world_cap | int | 0 | 0=every sim its own world; >0 caps K outer determinizations |
+| c_puct | float | 1.4 | Exploration constant |
+| temperature | float | 0.0 | Action selection temperature |
+| temperature_schedule | object | (disabled) | {enabled, initial, final, decay_plies} |
+| dirichlet_alpha | float | 0.0 | Root noise alpha (off by default) |
+| dirichlet_epsilon | float | 0.0 | Root noise weight |
+| dirichlet_on_first_n_plies | int | -1 | -1 = whole game (resolved to max_game_plies) |
+| opponent_selection | "puct"\|"prior" | "puct" | Non-root opponent node selection |
+| tail_solve_enabled | bool | false | Enable tail solver |
+| tail_solve_depth_limit | int | 10 | Tail solver depth |
+| tail_solve_node_budget | int | 200000 | Tail solver node cap |
+| tail_solve_auxiliary_weight | float | 0.0 | Tail solver aux score weight |
+| ai_use_action_filter | bool | false | Enable TrainingActionFilter in AI |
+| cover_root_edges | bool | false | Force at least 1 visit on every root child |
+
+---
+
+## train.json — Training Configuration
+
+### Top-level blocks:
+
+#### network
+| Field | Type | Description |
+|-------|------|-------------|
+| type | "mlp" | Network type. Only `"mlp"` is implemented; other values are rejected. |
+| hidden_layers | int[] | Layer widths, e.g. [512,512,512,512] |
+| activation | "relu" | Activation function. Only `"relu"` is implemented; other values are rejected. |
+| residual | bool | Enable residual connections |
+| block_size | int | Layers per residual block (typically 2) |
+
+#### training
+| Field | Type | Description |
+|-------|------|-------------|
+| steps | int | Total training steps |
+| episodes_per_step | int | Self-play episodes per step |
+| batch_size | int | Training batch size |
+| learning_rate | float | Initial learning rate |
+| lr_schedule.type | string | Schedule type: `"cosine"` (recommended), `"step"`, or `"constant"` |
+| lr_schedule.lr_min | float | Minimum LR at end of cosine schedule |
+| lr_schedule.gamma | float | Decay factor per step (step schedule only) |
+| lr_schedule.step_size | int | Steps between decays (step schedule only) |
+| grad_clip_norm | float | Gradient clipping norm (default 1.0) |
+| weight_decay | float | L2 regularization weight (default 1e-4) |
+| train_batches_per_step | int | Gradient updates per step |
+| replay_buffer_size | int | Max samples in replay buffer |
+| simulations_start | int | Simulations override for initial steps (before model ready) |
+| eval_benchmarks | string[] | Benchmark list, e.g. ["heuristic_free"] |
+| opponent_pool_enabled | bool | Enable past-model opponent pool |
+| opponent_pool_self_ratio | float | Fraction of games vs self (vs pool) |
+| gating_accept_win_rate | float | Override auto-computed gating threshold |
+
+#### training.selfplay_concurrency
+| Field | Type | Description |
+|-------|------|-------------|
+| enabled | bool | Enable batched concurrent inference |
+| opponent_pool_max_distinct | int | Max distinct models loaded simultaneously |
+| evaluator.batch_size | int | Max batch for inference |
+| evaluator.batch_timeout_us | int | Microseconds to wait for batch fill |
+| evaluator.max_queue_size | int | Max pending requests |
+| evaluator.intra_op_num_threads | int | ONNX intra-op threads |
+| evaluator.providers | string[] | ONNX execution providers (empty = CPU) |
+
+#### mcts (profile deltas)
+Contains `selfplay` and `eval` profile deltas. Each overrides baseline fields.
+
+Selfplay is the ONLY place dirichlet non-zero values belong.
+Eval profile is used for both benchmark eval and latest-vs-best gating.
+
+#### heuristic_guidance
+| Field | Type | Description |
+|-------|------|-------------|
+| name | string | Heuristic name from heuristic.json::named |
+| hold_steps | int | Steps before guidance starts decaying |
+| steps | int | Steps over which guidance ratio decays to 0 |
+| initial_ratio | float | Starting guidance ratio (1.0 = 100% heuristic) |
+| temperature | float | Temperature for heuristic action selection |
+
+Set `initial_ratio: 0.0` and `steps: 0` to disable guidance entirely.
+
+#### runtime
+| Field | Type | Description |
+|-------|------|-------------|
+| eval_every | int | Steps between eval runs |
+| eval_games | int | Games per eval run |
+| save_every | int | Steps between checkpoint saves |
+| seed | int | Optional fixed seed for reproducibility |
+
+---
+
+## web.json — Web/API Profile Deltas
+
+Three required profiles, each a flat object overriding baseline fields:
+
+| Profile | Purpose |
+|---------|---------|
+| web_expert | Full-strength AI for web play |
+| web_casual | Weak AI (low simulations, no tail solve) |
+| analysis | Drop-score / smart-hint pipeline. Only `simulations` and `world_cap` are consumed from this profile; the pipeline hard-codes `temperature=0.0`, `cover_root_edges=true`, and unfiltered search so every legal human move has visit data. |
+
+Example:
+```json
+{
+  "web_expert": { "simulations": 5000, "tail_solve_enabled": true },
+  "web_casual": { "simulations": 10 },
+  "analysis":   { "simulations": 5000, "world_cap": 32 }
+}
+```
+
+---
+
+## heuristic.json — Named Heuristic Pool + Selectors
+
+### named (heuristic pool)
+Each entry has a `type` and type-specific fields:
+
+| Type | Fields | Description |
+|------|--------|-------------|
+| "rule" | (none) | C++-registered rule heuristic |
+| "mcts_pv" | simulations, c_puct, [model_path] | PV evaluator + MCTS. With model_path: ONNX model as PV. Without model_path: hand-written C++ PV evaluator (e.g. quoridor's rule_mcts_v1). |
+
+`mcts_pv` fields are real runtime knobs. The C++ game registration reads
+`heuristic.json::named.<name>.simulations/c_puct/model_path` when constructing
+`MctsPVHeuristic`; do not duplicate these values as hard-coded constants in the
+registration file.
+
+### Three independent heuristic consumers
+
+All three pick from the same named pool but are configured independently — changing one does not affect the others.
+
+| Consumer | Configured in | Purpose |
+|----------|--------------|---------|
+| Selfplay guidance | `train.json::heuristic_guidance.name` | Early training uses heuristic instead of MCTS for a fraction of episodes |
+| Eval baseline | `heuristic.json::selectors.eval_vs_heuristic` | Opponent for eval benchmark (model vs heuristic) |
+| Web hint | `heuristic.json::selectors.web` | Opponent for web "heuristic" difficulty |
+
+Each selector in heuristic.json: `{ "name": "<named_key>", "temperature": 0.0 }`
+
+---
+
+## belief.json — Belief Network (Optional)
+
+Only for games with belief tracking (coup, 6nimmit, liarsdice).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| architecture | int[] | Hidden layer widths |
+| activation | "relu" | Activation function. Only `"relu"` is implemented; other values are rejected. |
+| batch_norm | bool | Enable batch normalization |
+| residual | bool | Enable residual connections |
+| block_size | int | Layers per residual block |
+| training.loss | "ce"\|"bce"\|"mse" | Loss function (cross-entropy, binary cross-entropy, or MSE) |
+
+Belief is enabled by engine capability plus the presence of `belief.json`.
+There is no `enabled` field. Belief logit temperature is framework-fixed at
+`1.0` and must not be configured.
+
+---
+
+## Profile Resolution Architecture
+
+```
+resolve_profile(game_id, profile_name):
+  1. Start with _BASE_DICT (in-code defaults, all zeros for dirichlet)
+  2. Overlay mcts.json (game's shared baseline)
+  3. Overlay profile delta:
+     - selfplay/eval -> train.json["mcts"][name]
+     - web_expert/web_casual/analysis -> web.json[name]
+  4. Resolve dirichlet_on_first_n_plies sentinel (-1 -> max_game_plies)
+  5. Validate (opponent_selection in {puct,prior}, tail_solve needs trigger)
+  6. Return frozen MctsProfile dataclass
+```
+
+Profile names: `selfplay`, `eval`, `web_expert`, `web_casual`, `analysis`
+
+All five profiles share the same mcts.json baseline. Dirichlet defaults to 0/0/0 in baseline -- only selfplay sets non-zero.
+
+---
+
+## Config Principles
+
+- No silent fallbacks for real knobs: MCTS profiles start from explicit
+  `_BASE_DICT` defaults plus `mcts.json` and profile deltas, while loaders reject
+  unknown fields and missing required top-level config blocks.
+- MCTS profile files (`mcts.json`, `train.json::mcts`, `web.json`) reject
+  unknown fields via `training.mcts_profile`. Other config files validate only
+  the fields their loaders know about; add explicit loader validation when a
+  new knob is meant to be real.
+- Legacy keys `heuristic_guidance_*` / `heuristic_temperature` at train.json::training level hard-fail with ValueError.
+- Heuristic guidance (train.json), eval baseline (heuristic.json::selectors.eval_vs_heuristic), and web hint (heuristic.json::selectors.web) are three independent selectors — changing one does not affect the others.
+- `opponent_selection` is set in mcts.json baseline only (inherited by all profiles). Never overridden per-profile, never a wire field.
+
+---
+
+## CLI Flags (training.cli)
+
+| Flag | Description |
+|------|-------------|
+| `--init-from <path.pt>` | Warmstart from existing checkpoint weights |
+| `--resume <output_dir>` | Resume interrupted training from checkpoint.pt in that directory |
+| `--providers <comma-sep>` | Override selfplay_concurrency.evaluator.providers (e.g. `"coreml,cpu"` or `"cuda,cpu"`) |
+| `--train-config <path>` | Override train.json path |
+| `--config-override <path.json>` | Deep-merge a JSON object file into train config |
+| `--belief-config <path>` | Override belief.json path |
+| `--eval-benchmark <onnx_path ...>` | Additional ONNX models to benchmark against during eval |
+| `--safe-mode` | Enable MCTS safe mode: validate DAG edges at every descent step. Slower but catches hash/schema bugs. |
+
+Example:
+```bash
+python -m training.cli --game coup --output runs/coup_test \
+  --init-from output/coup/step_500.pt \
+  --providers "coreml,cpu" \
+  --config-override overrides/coup_lr.json
+```
+
+---
+
+## Example: Minimal Config Set (Love Letter)
+
+```
+games/loveletter/config/
+  game.json       — game_id, display_name, players, max_game_plies, variants
+  mcts.json       — {"c_puct": 1.6, "opponent_selection": "prior"}
+  train.json      — network + training + mcts.{selfplay,eval} + heuristic_guidance + runtime
+  web.json        — web_expert + web_casual + analysis
+  heuristic.json  — named pool + selectors
+```

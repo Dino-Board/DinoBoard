@@ -1,0 +1,279 @@
+---
+description: "Optional training features — heuristic, tail solver, filter, adjudicator, stats, opponent pool"
+globs:
+  - "games/**/config/train.json"
+alwaysApply: false
+---
+
+# Optional Training Features Reference
+
+## Training loop constraints (read first)
+
+- Training is config-driven: `train.json` + `heuristic.json`. No code changes per run.
+- Self-play loss not decreasing is normal (opponent also gets stronger).
+- Latest model always moves forward, never rolls back. Best model tracked independently.
+- Eval must use the same compiled code as selfplay.
+- The entire selfplay pipeline runs in C++. Never write Python fallback.
+- ONNX model is mandatory for selfplay/arena/eval. No uniform-policy fallback.
+
+## IHeuristic (engine/core/heuristic.h)
+
+```cpp
+struct HeuristicResult {
+  std::vector<ActionId> actions;
+  std::vector<double> scores;
+};
+
+class IHeuristic {
+  virtual std::string name() const = 0;
+  virtual HeuristicResult pick(
+      IGameState& masked_state,
+      const IBeliefTracker* tracker,
+      const IGameRules& rules,
+      std::uint64_t rng_seed) const = 0;
+};
+```
+
+Input: perspective-masked state (same surface as encoder). `tracker` may be
+nullptr for fully-public games. `masked_state` is non-const because some
+heuristics use do_action_deterministic + undo_action for shallow lookahead
+on the clone.
+
+### Three heuristic flavors
+
+| Flavor         | Key              | Description                                    |
+|----------------|------------------|------------------------------------------------|
+| Pure rule       | `"type": "rule"` | Hand-written scoring, no search                |
+| Hand-written PV + MCTS | `"type": "mcts_pv"` (no model_path) | PV evaluator written in C++, wrapped in MCTS |
+| ONNX PV + MCTS | `"type": "mcts_pv"` (with model_path) | ONNX model as PV evaluator inside MCTS       |
+
+### Three selectors (independent)
+
+| Selector               | Config location                    | Purpose                         |
+|------------------------|------------------------------------|---------------------------------|
+| heuristic_guidance     | `train.json::heuristic_guidance`   | Training-time guidance schedule |
+| eval_vs_heuristic      | `heuristic.json::selectors`        | Eval baseline opponent          |
+| web                    | `heuristic.json::selectors`        | Web hint provider               |
+
+Each selector references a name from the HeuristicRegistry pool. Improving the
+guidance heuristic does not pollute the eval baseline.
+
+Config consumption:
+
+- `heuristic_guidance`: `training/pipeline.py` reads `name`, `initial_ratio`,
+  `hold_steps`, `steps`, and `temperature`, then forwards the resolved ratio,
+  temperature, and selector name into the C++ selfplay runner.
+- `eval_vs_heuristic`: `training/pipeline.py` reads selector `name` and
+  `temperature`, then passes both into the eval-vs-heuristic bindings.
+- `web`: `platform/game_service/sessions.py` reads selector `name` and
+  `temperature`, stores both on the session config, and web AI / hint paths pass
+  both into `GameSession.get_heuristic_action`.
+
+### HeuristicRegistry (engine/core/heuristic_registry.h)
+
+Per-game named pool populated in `<game>_register.cpp`, exposed via
+`GameBundle::heuristics`. Lookup by name throws on miss (no fallback).
+`heuristic.json::named` lists entries; `test_heuristic_registry.py` validates.
+For `mcts_pv` entries, `simulations`, `c_puct`, and optional `model_path` are
+runtime construction inputs: the C++ registration reads them from
+`heuristic.json` before constructing `MctsPVHeuristic`.
+
+### Temperature
+
+Selection rule (argmax-with-tie or softmax(T)) is applied by the caller, not by
+the heuristic itself. Most heuristic episode/eval paths use
+`runtime::sample_heuristic_index`; selfplay guidance applies the same rule
+inline in `selfplay_runner.cpp` when it converts heuristic scores into training
+targets. All three configured consumers (`heuristic_guidance`,
+`eval_vs_heuristic`, `web`) must treat `temperature=0` as uniform sampling over
+argmax ties, not "first max wins".
+
+### MctsPVHeuristic Factory Methods
+
+Two static constructors on `MctsPVHeuristic` (`heuristic/mcts_pv_heuristic.h`):
+
+```cpp
+// Hand-written PV evaluator wrapped in MCTS
+static std::unique_ptr<IHeuristic> make_from_evaluator(
+    std::string name,
+    const IPolicyValueEvaluator* evaluator,  // borrowed, caller owns lifetime
+    const IStateValueModel* value_model,
+    int simulations, float c_puct);
+
+// ONNX model as PV evaluator inside MCTS
+static std::unique_ptr<IHeuristic> make_from_onnx(
+    std::string name,
+    const std::string& model_path,
+    const IFeatureEncoder* encoder,
+    const IStateValueModel* value_model,
+    int simulations, float c_puct);
+```
+
+Both return `std::unique_ptr<IHeuristic>` ready for registration in the
+heuristic pool.
+
+### heuristic_pv_evaluators (GameBundle field)
+
+```cpp
+std::vector<std::unique_ptr<IPolicyValueEvaluator>> heuristic_pv_evaluators;
+```
+
+Owns hand-written PV evaluators that `MctsPVHeuristic` instances borrow-point
+to. Registered on `GameBundle` during `<game>_register.cpp` setup. Lifetime
+is tied to the bundle (process-wide singleton), so the borrowed pointers in
+`make_from_evaluator` remain valid for the entire process.
+
+### TailSolveTrigger
+
+```cpp
+using TailSolveTrigger = std::function<bool(const IGameState& state, int ply)>;
+```
+
+Game-supplied predicate deciding when tail solve should attempt. Must be
+registered on `GameBundle` alongside `tail_solver`. Runtime callsites check it
+at each decision ply before setting `NetMctsConfig::tail_solve_enabled`; if it
+returns false, MCTS proceeds normally even when `tail_solve_enabled = true` in
+the profile. `NetMcts` itself only sees the already-resolved config.
+
+## ITailSolver (engine/search/tail_solver.h)
+
+```cpp
+class ITailSolver {
+  virtual TailSolveResult solve(
+      IGameState& state, const IGameRules& rules,
+      const IStateValueModel& value_model,
+      int perspective_player,
+      const TailSolveConfig& config) const = 0;
+};
+```
+
+Alpha-beta search on `do_action_deterministic + undo_action`. The implementation
+lives in `engine/search/tail_solver.cpp`; production callers route through
+`NetMctsConfig::tail_solver` (MCTS/selfplay/arena/web) or explicit pybind test /
+debug helpers. All of them rely on the deterministic action path.
+
+TailSolveConfig fields: `depth_limit`, `node_budget`, `time_limit_ms`,
+`auxiliary_weight`, `margin_scorer`.
+
+Safety: if a game has both belief_tracker and tail_solver, it MUST set
+`stochastic_tail_solve_safe = true` (explicit opt-in). Otherwise
+`GameRegistry::create_game` throws at runtime. The game must override
+`do_action_deterministic` so alpha-beta never consumes hidden chance outcomes.
+
+BUG-004: tail solver + hidden info without stochastic_tail_solve_safe poisons
+training samples (proven-win strategy correct only for one realization).
+
+### Tail-solve tuning
+
+Tune in this order:
+
+1. Pick `node_budget` first. When tail solve hits budget, its wall time should
+   be roughly comparable to the MCTS call it may replace; otherwise the search
+   mix becomes unbalanced.
+2. Tune `depth_limit` next. The goal is that, when the trigger fires, tail solve
+   usually completes and returns a classified result (win/loss/draw), even if it
+   does not prove a win.
+3. Tune `tail_solve_trigger` last using game knowledge. Fire it only in
+   high-value, low-branching, near-resolution positions where alpha-beta has a
+   good chance to finish; avoid spending the budget in broad middlegame states.
+
+## TrainingActionFilter
+
+```cpp
+using TrainingActionFilter = std::function<std::vector<ActionId>(
+    const IGameState& state, const IGameRules& rules,
+    const std::vector<ActionId>& legal)>;
+```
+
+Prunes legal actions to focus exploration. Returns a subset of `legal`; if the
+filter returns empty, `FilteredRulesWrapper` falls back to the original legal
+set.
+
+Primary use is selfplay training via `training_filter_*` schedule. It can also
+be enabled explicitly in analysis / Web AI profiles with `ai_use_action_filter`;
+do not assume public inference always uses the full legal action set.
+
+## AuxiliaryScorer
+
+```cpp
+using AuxiliaryScorer = std::function<float(
+    const IGameState& state, int player, int depth_remaining)>;
+```
+
+Tiebreak bonus for tail solver among proven wins. `depth_remaining` lets
+game-side scorers fold "prefer faster wins". Recommended shape:
+`depth_remaining + 0.1f * normalized_margin`, weight = 0.01.
+
+## GameAdjudicator
+
+```cpp
+using GameAdjudicator = std::function<int(const IGameState& state)>;
+```
+
+Fallback judge for games that hit `max_game_plies` without natural terminal.
+Returns winner player index, or -1 for draw / no adjudication. Selfplay calls it
+after the episode loop when the state is still non-terminal, not every ply.
+
+## EpisodeStatsExtractor
+
+```cpp
+using EpisodeStatsExtractor = std::function<
+    std::map<std::string, double>(
+        const IGameState& final_state,
+        const IGameState& initial_state,
+        const std::vector<SelfplaySampleView>& samples)>;
+```
+
+Post-episode statistics for logging/diagnostics. Receives both final and initial
+state plus the full sample trace. `SelfplaySampleView` includes `ply`, `player`,
+`action_id`, and a `features` pointer (borrowed, valid only inside callback).
+
+### Custom stats in train.log
+
+The map returned by the extractor is averaged over all episodes in the step and
+logged to train.log as key=value pairs. Naming conventions:
+
+- Use `_rate` suffix for rate-like metrics — formatted to 3 decimal places.
+- Use plain names for count-like metrics — formatted to 1 decimal place.
+
+Example (Coup): registers `opening_duke_rate`, `opening_duke_challenged_rate`,
+`opening_duke_real_rate` — these appear in train.log as averaged per-step values
+alongside the standard loss/win-rate columns.
+
+## Opponent pool
+
+Configured by `train.json::training.opponent_pool_enabled` and
+`opponent_pool_self_ratio`. When enabled, each selfplay batch mixes mirror games
+against the latest model with games against historical `model_step_*.onnx`
+checkpoints from the current run's `models/` directory. The best model is
+tracked separately for gating and is not the opponent pool source.
+
+## Config defaults and validation
+
+Training reads `train.json`, `heuristic.json`, and optional `belief.json`.
+`mcts.json` and profile deltas are resolved through
+`training.mcts_profile.resolve_profile`; unknown MCTS profile fields raise.
+
+Important defaults / guards:
+
+- `training.steps`, `episodes_per_step`, `batch_size`, `learning_rate`, and
+  `runtime.*` have CLI-level defaults, but game configs should spell out real
+  run recipes.
+- `weight_decay` defaults to `1e-4`; `grad_clip_norm` defaults to `1.0`;
+  `train_batches_per_step` defaults to `3`.
+- `replay_buffer_size` defaults to `episodes_per_step * 50 * 20`.
+- Missing `selfplay_concurrency` means legacy multi-process selfplay. If present
+  with `enabled=false`, no other keys may appear in that block.
+- `belief.json` is shape/loss only. PV-side schedule knobs are forbidden there;
+  belief training mirrors PV batch size, LR schedule, batches/step, and weight
+  decay.
+- `heuristic.json::named.<mcts_pv>` is runtime-significant:
+  `simulations`, `c_puct`, and optional `model_path` are read by C++ registration
+  when constructing `MctsPVHeuristic`.
+
+## Known issues
+
+- BUG-004: tail solver + hidden info safety gate (see ITailSolver section above)
+- Legacy heuristic_guidance keys (`heuristic_guidance_*`,
+  `heuristic_temperature`) in `train.json::training` hard-fail via
+  `find_train_config` ValueError. Use `train.json::heuristic_guidance` (top-level).

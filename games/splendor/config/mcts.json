@@ -1,0 +1,6 @@
+{
+  "c_puct": 1.6,
+  "tail_solve_depth_limit": 6,
+  "tail_solve_node_budget": 100000,
+  "tail_solve_auxiliary_weight": 0.01
+}

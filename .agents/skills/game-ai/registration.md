@@ -1,0 +1,229 @@
+# GameBundle and GameRegistrar Reference
+
+## GameBundle fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `game_id` | `string` | Yes | Matches manifest.json id |
+| `state` | `unique_ptr<IGameState>` | Yes | Initial state, seeded and reset |
+| `rules` | `unique_ptr<IGameRules>` | Yes | Action validation and application |
+| `value_model` | `unique_ptr<IStateValueModel>` | Yes | Terminal value computation |
+| `encoder` | `unique_ptr<IFeatureEncoder>` | Yes | Feature encoding for network |
+| `belief_tracker` | `unique_ptr<IBeliefTracker>` | Hidden-info | Observation-based belief |
+| `state_serializer` | `StateSerializer` | Yes | State to AnyMap for web/API |
+| `action_descriptor` | `ActionDescriptor` | Yes | Action to AnyMap for web/API |
+| `heuristics` | `HeuristicRegistry` | Optional | Named pool of IHeuristic instances |
+| `heuristic_pv_evaluators` | `vector<unique_ptr<IPolicyValueEvaluator>>` | Optional | Hand-written PV evaluators for mcts_pv heuristics |
+| `tail_solver` | `unique_ptr<ITailSolver>` | Optional | Alpha-beta endgame solver |
+| `stochastic_tail_solve_safe` | `bool` | Special | Must be true if both tracker + tail_solver registered |
+| `tail_solve_trigger` | `TailSolveTrigger` | Optional | When to activate tail solver |
+| `episode_stats_extractor` | `EpisodeStatsExtractor` | Optional | Per-episode training statistics |
+| `adjudicator` | `GameAdjudicator` | Optional | Early game termination |
+| `auxiliary_scorer` | `AuxiliaryScorer` | Optional | Extra scoring for tail solver |
+| `final_score_extractor` | `FinalScoreExtractor` | Optional | One score per seat from a terminal state (e.g. victory points). Episodes then report `final_scores`; required by `training.score_head` (see `training/katago-techniques.md`) |
+| `training_action_filter` | `TrainingActionFilter` | Optional | Filter actions during training |
+| `public_event_extractor` | `PublicEventExtractor` | Snapshot | Full events + snapshot extractor |
+| `events_only_extractor` | `EventsOnlyExtractor` | Snapshot | Sim-only events (no snapshot overhead) |
+| `public_state_applier` | `PublicStateApplier` | Snapshot | Applies snapshot to observer session |
+| `belief_feature_extractor` | `unique_ptr<IBeliefFeatureExtractor>` | Optional | Belief net input features |
+| `belief_model_path` | `string` | Optional | Path to belief ONNX model, usually injected by runtime/training rather than hard-coded in register.cpp |
+| `belief_label_extractor` | `unique_ptr<IBeliefLabelExtractor>` | Optional | GT-side belief training labels |
+| `external_state_loader` | `ExternalStateLoader` | Optional | Load a state exported by another engine of the game as the truth state (`GameSession.load_external_state`); AI views are rebuilt masked |
+| `external_option_lister` | `ExternalOptionLister` | Optional | Pending options as (other engine's key, atom sequence), consistent with the applied atoms (`GameSession.external_options`) |
+| `external_rules_switch` | `ExternalRulesSwitch` | Optional | Follow the other engine where it departs from the rulebook, process-wide (`set_external_rules`) |
+
+## Type signatures
+
+```cpp
+using StateSerializer = std::function<AnyMap(const IGameState& state)>;
+using ActionDescriptor = std::function<AnyMap(ActionId action)>;
+using GameFactory = std::function<GameBundle(std::uint64_t seed)>;
+using PublicEventExtractor = std::function<PublicEventTrace(
+    const IGameState& before, ActionId action,
+    const IGameState& after, int perspective)>;
+using EventsOnlyExtractor = std::function<std::vector<PublicEvent>(
+    const IGameState& before, ActionId action,
+    const IGameState& after, int perspective)>;
+using PublicStateApplier = std::function<void(
+    IGameState& state, const AnyMap& snapshot, int receiver_seat)>;
+using EpisodeStatsExtractor = std::function<
+    std::map<std::string, double>(
+        const IGameState& final_state,
+        const IGameState& initial_state,
+        const std::vector<SelfplaySampleView>& samples)>;
+using GameAdjudicator = std::function<int(const IGameState& state)>;
+using AuxiliaryScorer = std::function<float(
+    const IGameState& state, int player, int depth_remaining)>;
+using FinalScoreExtractor = std::function<std::vector<float>(const IGameState& final_state)>;
+using TrainingActionFilter = std::function<std::vector<ActionId>(
+    const IGameState& state, const IGameRules& rules,
+    const std::vector<ActionId>& legal)>;
+using TailSolveTrigger = std::function<bool(const IGameState& state, int ply)>;
+using ExternalStateLoader = std::function<void(IGameState& state, const std::string& json)>;
+using ExternalOptionLister = std::function<std::vector<std::pair<std::string,
+    std::vector<ActionId>>>(const IGameState& state)>;
+using ExternalRulesSwitch = std::function<void(bool enabled)>;
+```
+
+## Minimal registration (fully-public game)
+
+```cpp
+// tictactoe_register.cpp
+#include "../../engine/core/game_registry.h"
+#include "tictactoe_state.h"
+#include "tictactoe_rules.h"
+#include "tictactoe_net_adapter.h"
+
+namespace {
+
+board_ai::GameBundle make_tictactoe(std::uint64_t seed) {
+  board_ai::GameBundle b;
+  b.game_id = "tictactoe";
+  auto s = std::make_unique<TicTacToeState>();
+  s->reset_with_seed(seed);
+  b.state = std::move(s);
+  b.rules = std::make_unique<TicTacToeRules>();
+  b.value_model = std::make_unique<board_ai::DefaultStateValueModel>();
+  b.encoder = std::make_unique<TicTacToeFeatureEncoder>();
+  b.state_serializer = serialize_tictactoe;
+  b.action_descriptor = describe_tictactoe;
+  return b;
+}
+
+board_ai::GameRegistrar reg("tictactoe", make_tictactoe);
+
+}  // namespace
+```
+
+## Complete registration (hidden-info game with tracker)
+
+```cpp
+// loveletter_register.cpp
+template <int NPlayers>
+board_ai::GameBundle make_loveletter(const std::string& game_id, std::uint64_t seed) {
+  board_ai::GameBundle b;
+  b.game_id = game_id;
+  auto s = std::make_unique<LoveLetterState<NPlayers>>();
+  s->reset_with_seed(seed);
+  // Apply start-of-game viz reveals (rules are sole viz writer)
+  LoveLetterRules<NPlayers>::reveal_starting_draw(*s, s->data.current_player);
+  b.state = std::move(s);
+  b.rules = std::make_unique<LoveLetterRules<NPlayers>>();
+  b.value_model = std::make_unique<board_ai::DefaultStateValueModel>();
+  b.encoder = std::make_unique<LoveLetterFeatureEncoder<NPlayers>>();
+  b.belief_tracker = std::make_unique<LoveLetterBeliefTracker<NPlayers>>();
+  b.state_serializer = serialize_loveletter<NPlayers>;
+  b.action_descriptor = describe_loveletter;
+  b.heuristics.register_named(
+      "rule_v1",
+      std::make_unique<LoveLetterRuleHeuristic<NPlayers>>("rule_v1"));
+
+  // Event protocol: auto-derives 3 wire-protocol fields
+  b.install_event_protocol(
+      board_ai::viz::no_events_extractor,  // no custom events
+      []() -> const board_ai::viz::VisibilitySchema& {
+        return LoveLetterState<NPlayers>::schema();
+      });
+
+  return b;
+}
+
+// Register multiple variants
+board_ai::GameRegistrar reg("loveletter", [](std::uint64_t seed) {
+  return make_loveletter<2>("loveletter", seed);
+});
+board_ai::GameRegistrar reg_3p("loveletter_3p", [](std::uint64_t seed) {
+  return make_loveletter<3>("loveletter_3p", seed);
+});
+```
+
+Hidden-info games that register a tracker MUST also install the event
+protocol — `GameRegistry::create_game` throws at session creation if a
+`belief_tracker` is present without a `public_state_applier` (and matching
+`public_event_extractor`). This is not only for the public AI API: selfplay
+per-seat states use the public snapshot/applier path, and MCTS sim descent
+uses the events-only path to keep the sim-local tracker synchronized with the
+simulated action sequence. Without the applier the session falls back to
+replaying `do_action_fast` on its masked seat, which reads viz=0 hidden slots
+(unread bytes) and silently desyncs from truth — surfacing as illegal moves
+or empty legal-action sets mid-training, not at startup (the harmonies
+`632ebe2` regression was exactly this).
+
+## install_event_protocol
+
+One-shot helper that auto-fills the three wire-protocol fields from an events-only diff + schema provider:
+
+```cpp
+template <typename EventsOnlyFn, typename SchemaProviderFn>
+void install_event_protocol(EventsOnlyFn events_only,
+                            SchemaProviderFn schema_provider);
+```
+
+Produces:
+- `events_only_extractor` = `events_only` (consumed by MCTS sim descent)
+- `public_event_extractor` = `events_only` + `viz::serialize_public_snapshot` (consumed by ply/wire/trace)
+- `public_state_applier` = `viz::apply_public_snapshot` (consumed by receiver session)
+
+`events_only_extractor` is called inside MCTS after each simulated
+`do_action_fast`. The search passes `perspective = root_player`; tracker content
+must therefore be perspective-invariant. If encoder features depend on
+tracker-derived public aggregates that can change after actions, `events_only`
+must emit enough events to keep the sim-local tracker in sync. If
+`events_only_extractor` is missing but `public_event_extractor` exists, the sim
+path can fall back to the full extractor, but `install_event_protocol` is the
+standard way to wire all three fields consistently.
+
+For games with custom events:
+```cpp
+b.install_event_protocol(
+    [](const IGameState& before, ActionId action,
+       const IGameState& after, int perspective)
+        -> std::vector<PublicEvent> {
+      std::vector<PublicEvent> events;
+      // diff before/after, emit events
+      return events;
+    },
+    []() -> const viz::VisibilitySchema& {
+      return MyGameState::schema();
+    });
+```
+
+For tracker-present games without custom events (all info flows through snapshot/viz):
+```cpp
+b.install_event_protocol(
+    viz::no_events_extractor,
+    []() -> const viz::VisibilitySchema& { return MyGameState::schema(); });
+```
+
+Use `viz::no_events_extractor` only when the tracker does not need any
+per-action event payloads. Games like Splendor, Coup, and 6 nimmt! register
+custom events because their trackers need public facts that are easier to
+express as action-derived observations than as raw snapshot fields.
+
+## Multi-variant registration
+
+Games with multiple player-count variants use a templated factory:
+
+```cpp
+// Template on NPlayers
+template <int NPlayers>
+GameBundle make_game(const std::string& id, uint64_t seed) { ... }
+
+// Register each variant
+GameRegistrar reg_2p("game", [](uint64_t seed) { return make_game<2>("game", seed); });
+GameRegistrar reg_3p("game_3p", [](uint64_t seed) { return make_game<3>("game_3p", seed); });
+GameRegistrar reg_4p("game_4p", [](uint64_t seed) { return make_game<4>("game_4p", seed); });
+```
+
+## Safety invariant
+
+If a game registers both `belief_tracker` and `tail_solver`, it MUST set `stochastic_tail_solve_safe = true` after verifying that `do_action_deterministic` never consumes hidden chance outcomes. This flag is a proof obligation, not a convenience switch: only set it after the deterministic path freezes or suppresses hidden draws. `GameRegistry::create_game` enforces this at runtime.
+
+## Belief model path
+
+Games that use a learned belief network register `belief_feature_extractor` and
+`belief_label_extractor` in `register.cpp`. The actual `belief_model_path` is
+usually injected later by training, arena, web, or pybind runtime code. When no
+model path is provided, no ONNX belief evaluator is constructed;
+`prepare_for_root` behaves like a no-op and `randomize_unseen` falls back to the
+tracker's uniform / multiset-derived sampling.

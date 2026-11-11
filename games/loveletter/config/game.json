@@ -1,0 +1,27 @@
+{
+  "game_id": "loveletter",
+  "display_name": "情书",
+  "display_name_en": "Love Letter",
+  "players": {
+    "min": 2,
+    "max": 4
+  },
+  "max_game_plies": 30,
+  "variants": {
+    "loveletter": {
+      "feature_dim": 70,
+      "action_space": 47,
+      "num_players": 2
+    },
+    "loveletter_3p": {
+      "feature_dim": 99,
+      "action_space": 47,
+      "num_players": 3
+    },
+    "loveletter_4p": {
+      "feature_dim": 128,
+      "action_space": 47,
+      "num_players": 4
+    }
+  }
+}

@@ -1,0 +1,10 @@
+---
+description: "Modify MCTS / search / framework internals — algorithm understanding, safety red lines, performance hot paths"
+globs:
+  - "engine/**"
+  - "bindings/**"
+  - "ALGORITHM_OVERVIEW.md"
+alwaysApply: false
+---
+**STOP. Before touching any framework code, read framework-dev-reference completely.** Framework changes affect every game simultaneously. One wrong line can silently weaken all AI or leak hidden information with no test failure.<｜end▁of▁thinking｜>: Here is the rules doc.
+

@@ -1,0 +1,27 @@
+---
+description: "Implement game state, rules, schema, and build integration (Phase 1 of adding a new game)"
+globs:
+  - "games/**/*_state.*"
+  - "games/**/*_rules.*"
+  - "games/**/CMakeLists.txt"
+  - "games/manifest.json"
+alwaysApply: false
+---
+# Game Rules Development
+
+Before implementing a game mechanic, check the **mechanic recipes** below for which existing game to mirror.
+
+## Mechanic recipes (which game to mirror)
+- **Bag draw** (public count reservoir, weighted draw): see game-rules-bag-draw — Azul, Harmonies
+- **Hidden deck** (secret contents, public size, belief resample): see game-rules-deck-maintenance — Splendor, Harmonies
+- **Tail solving** (alpha-beta endgame without peeking random): see game-rules-tail-solve — Splendor, Azul
+- **Viz tricks** (precision reveals that raise AI strength): see game-rules-viz-tricks — Love Letter
+- **Intra-turn phase state machine** (multi-stage sub-protocol): see game-rules-phase-state-machine — Coup
+- **Enumerated state + transition table** (finite legal combos -> type enum): see game-rules-enumerated-state-transition — Harmonies
+- **Simultaneous actions** (acts_mask + pending_commits): see game-rules-simultaneous — 6 nimmt!
+- **Count form + effect-based action ids** (unordered multisets): see game-rules-count-and-effect-encoding — Jaipur
+
+## Interface reference
+- **IGameState** (schema, viz fields, hash dispatchers): see game-rules-state
+- **IGameRules** (legal_actions, do_action_fast, viz maintenance, undo): see game-rules-rules
+- **Build integration** (manifest.json, CMakeLists, invariants): see game-rules-build

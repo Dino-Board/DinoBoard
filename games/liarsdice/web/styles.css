@@ -1,0 +1,334 @@
+/* ============================================================
+ * Liar's Dice — Web frontend stylesheet.
+ *
+ * Layout (top → bottom, fixed regions per WEB_DESIGN_PRINCIPLES §2):
+ *   .ld-root
+ *     .ld-current-bid       (top, big "X 个 Y" plate)
+ *     .ld-opponents         (mid, opponent dice cups; face-down "?" until terminal)
+ *     .ld-self              (own dice cup; always face-up)
+ *     .ld-controls          (X / Y stepper + bid / challenge buttons)
+ *
+ * All widths are written so 2p / 3p / 4p reuse the same grid.
+ * Opponent rows use a fixed-slot grid (max 3 opponents) so adding a 3rd
+ * or 4th seat doesn't shift the cups already on screen.
+ * ============================================================ */
+
+/* Align game to top of board-stage so terminal modal doesn't cover dice */
+/* Push game to top of viewport so terminal modal doesn't cover dice */
+.board-stage { align-items: flex-start !important; }
+.board-content { margin-top: 40px !important; margin-bottom: auto !important; }
+
+.ld-root {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 4px 12px;
+  width: min(640px, 96vw);
+  margin: 0 auto;
+}
+
+/* ----- Top: current bid plate ----- */
+
+.ld-current-bid {
+  width: 100%;
+  min-height: 64px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fff7ed 0%, #ffedd5 100%);
+  border: 1px solid #fdba74;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.ld-current-bid-label {
+  font-size: 12px;
+  color: #9a3412;
+  letter-spacing: 0.05em;
+}
+
+.ld-current-bid-value {
+  font-size: 30px;
+  font-weight: 700;
+  color: #7c2d12;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ld-current-bid-empty .ld-current-bid-value {
+  font-size: 18px;
+  color: #9a3412;
+  font-weight: 500;
+}
+
+.ld-bid-die {
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  background: #fff;
+  border: 1px solid #fdba74;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+}
+
+/* ----- Opponents area ----- */
+
+.ld-opponents {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ld-cup {
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
+  padding: 10px;
+  background: #f9fafb;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  min-height: 80px;
+}
+
+.ld-cup-current {
+  border-color: #2563eb;
+  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.45);
+  background: #eff6ff;
+}
+
+.ld-cup-tag {
+  font-size: 13px;
+  color: #374151;
+  font-weight: 600;
+}
+
+.ld-cup-tag-current::after {
+  content: ' ●';
+  color: #2563eb;
+}
+
+.ld-dice-row {
+  display: flex;
+  gap: 6px;
+}
+
+.ld-die {
+  width: 38px;
+  height: 38px;
+  border-radius: 7px;
+  background: #fff;
+  border: 1px solid #d1d5db;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  color: #111827;
+  user-select: none;
+}
+
+.ld-die-back {
+  background: #4b5563;
+  color: #f9fafb;
+  border-color: #374151;
+  font-weight: 700;
+  font-size: 22px;
+}
+
+.ld-die-wild {
+  background: #fef3c7;
+  border-color: #f59e0b;
+  color: #92400e;
+  font-weight: 700;
+}
+
+.ld-die-match {
+  background: #dcfce7;
+  border-color: #16a34a;
+  color: #14532d;
+  font-weight: 700;
+}
+
+.ld-die-revealed { animation: ld-die-flip 480ms ease-out both; }
+
+@keyframes ld-die-flip {
+  0% { transform: rotateY(180deg); opacity: 0.2; }
+  100% { transform: rotateY(0deg); opacity: 1; }
+}
+
+/* ----- Self area ----- */
+
+.ld-self {
+  width: 100%;
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
+  padding: 12px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.ld-self.cup-current {
+  border-color: #2563eb;
+  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.45);
+}
+
+.ld-self-tag {
+  font-size: 13px;
+  color: #374151;
+  font-weight: 600;
+}
+
+/* Self dice match opponent dice 1:1 — equal seat treatment per
+   WEB_DESIGN_PRINCIPLES (no implicit "this seat is bigger / more
+   important" via size). */
+
+/* ----- Controls ----- */
+
+.ld-controls {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 14px;
+  background: #fafafa;
+}
+
+.ld-controls-row {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+}
+
+.ld-stepper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.ld-stepper-label {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.ld-stepper-buttons {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.ld-stepper button {
+  width: 36px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.ld-stepper button:hover:not(:disabled) {
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+
+.ld-stepper button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.ld-stepper-value {
+  width: 56px;
+  height: 44px;
+  border: 1px solid #2563eb;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 26px;
+  font-weight: 700;
+  color: #1d4ed8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ld-draft-times {
+  font-size: 22px;
+  color: #6b7280;
+  font-weight: 600;
+}
+
+.ld-draft-status {
+  font-size: 12px;
+  color: #6b7280;
+  height: 16px;
+}
+
+.ld-draft-status.illegal {
+  color: #b91c1c;
+}
+
+.ld-draft-status.legal {
+  color: #15803d;
+}
+
+.ld-buttons {
+  display: flex;
+  gap: 14px;
+}
+
+.ld-btn {
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.ld-btn-primary {
+  background: #2563eb;
+  border-color: #1d4ed8;
+  color: #fff;
+}
+
+.ld-btn-primary:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.ld-btn-danger {
+  background: #dc2626;
+  border-color: #b91c1c;
+  color: #fff;
+}
+
+.ld-btn-danger:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
+.ld-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+@media (max-width: 600px) {
+  .ld-die { width: 32px; height: 32px; font-size: 18px; }
+  .ld-current-bid-value { font-size: 24px; }
+}

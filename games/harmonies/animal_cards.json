@@ -1,0 +1,1530 @@
+{
+  "_comment": "Harmonies 32 animal cards data extracted from physical game photos (2026-06-08). Colors: Blue=Water, Gray=Mountain, Brown=TreeTrunk, Green=TreeLeaf, Yellow=Field, Red=Building. Offsets use axial hex coordinates (q,r). Position numbering: 0=center, 1=N, 2=NE, 3=SE, 4=S, 5=SW, 6=NW (clockwise from top). Terms: 水=Blue1, 田=Yellow1, 树1=Green1, 树2=Brown+Green, 树3=Brown+Brown+Green, 山1/2/3=Gray×N, 房={Brown|Gray|Red}+Red (building can stack on tree trunk, mountain, or another building; NOT on field). levels[i] can be null, a single color, or an array of acceptable colors.",
+  "_position_to_offset": {
+    "0": [
+      0,
+      0
+    ],
+    "1": [
+      0,
+      -1
+    ],
+    "2": [
+      1,
+      -1
+    ],
+    "3": [
+      1,
+      0
+    ],
+    "4": [
+      0,
+      1
+    ],
+    "5": [
+      -1,
+      1
+    ],
+    "6": [
+      -1,
+      0
+    ]
+  },
+  "_habitat_legend": {
+    "blue": "Water (blue card border)",
+    "gray": "Mountain (gray card border)",
+    "yellow": "Field (yellow card border)",
+    "green": "Tree (green/olive card border)",
+    "red": "Building (red card border)"
+  },
+  "cards": [
+    {
+      "id": 1,
+      "animal": "Bee",
+      "animal_zh": "蜜蜂",
+      "habitat": "yellow",
+      "scores": [
+        8,
+        18
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Brown",
+            "Green",
+            null
+          ]
+        },
+        {
+          "offset": [
+            1,
+            0
+          ],
+          "levels": [
+            "Yellow",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            0,
+            1
+          ],
+          "levels": [
+            "Yellow",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            1
+          ],
+          "levels": [
+            "Yellow",
+            null,
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142245_63_1.jpg"
+    },
+    {
+      "id": 2,
+      "animal": "Frog",
+      "animal_zh": "青蛙",
+      "habitat": "blue",
+      "scores": [
+        2,
+        4,
+        6,
+        10,
+        15
+      ],
+      "anchor_index": 1,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Green",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            1,
+            0
+          ],
+          "levels": [
+            "Blue",
+            null,
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142246_64_1.jpg"
+    },
+    {
+      "id": 3,
+      "animal": "Arctic Fox",
+      "animal_zh": "北极狐",
+      "habitat": "yellow",
+      "scores": [
+        5,
+        10,
+        17
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Yellow",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            1,
+            0
+          ],
+          "levels": [
+            "Brown",
+            "Green",
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            1
+          ],
+          "levels": [
+            "Brown",
+            "Green",
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142246_65_1.jpg"
+    },
+    {
+      "id": 4,
+      "animal": "Stingray",
+      "animal_zh": "魔鬼鱼",
+      "habitat": "blue",
+      "scores": [
+        4,
+        10,
+        16
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Blue",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            0
+          ],
+          "levels": [
+            "Gray",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            1
+          ],
+          "levels": [
+            "Gray",
+            null,
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142247_66_1.jpg"
+    },
+    {
+      "id": 5,
+      "animal": "Ladybug",
+      "animal_zh": "瓢虫",
+      "habitat": "yellow",
+      "scores": [
+        2,
+        5,
+        8,
+        12,
+        17
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Yellow",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            1,
+            0
+          ],
+          "levels": [
+            "Green",
+            null,
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142248_67_1.jpg"
+    },
+    {
+      "id": 6,
+      "animal": "Fox",
+      "animal_zh": "狐狸",
+      "habitat": "gray",
+      "scores": [
+        4,
+        9,
+        16
+      ],
+      "anchor_index": 2,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Gray",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            0,
+            -1
+          ],
+          "levels": [
+            "Yellow",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            0,
+            1
+          ],
+          "levels": [
+            "Gray",
+            null,
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142249_68_1.jpg"
+    },
+    {
+      "id": 7,
+      "animal": "Boar",
+      "animal_zh": "野猪",
+      "habitat": "green",
+      "scores": [
+        4,
+        8,
+        13
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Brown",
+            "Green",
+            null
+          ]
+        },
+        {
+          "offset": [
+            1,
+            0
+          ],
+          "levels": [
+            [
+              "Brown",
+              "Gray",
+              "Red"
+            ],
+            "Red",
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142250_69_1.jpg"
+    },
+    {
+      "id": 8,
+      "animal": "Kingfisher",
+      "animal_zh": "翠鸟",
+      "habitat": "green",
+      "scores": [
+        5,
+        11,
+        18
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Brown",
+            "Brown",
+            "Green"
+          ]
+        },
+        {
+          "offset": [
+            1,
+            0
+          ],
+          "levels": [
+            "Blue",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            1
+          ],
+          "levels": [
+            "Blue",
+            null,
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142251_70_1.jpg"
+    },
+    {
+      "id": 9,
+      "animal": "Flamingo",
+      "animal_zh": "火烈鸟",
+      "habitat": "blue",
+      "scores": [
+        4,
+        10,
+        16
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Blue",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            1
+          ],
+          "levels": [
+            "Yellow",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            0
+          ],
+          "levels": [
+            "Yellow",
+            null,
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142252_71_1.jpg"
+    },
+    {
+      "id": 10,
+      "animal": "Parrot",
+      "animal_zh": "鹦鹉",
+      "habitat": "green",
+      "scores": [
+        4,
+        9,
+        14
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Brown",
+            "Green",
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            0
+          ],
+          "levels": [
+            "Blue",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            1
+          ],
+          "levels": [
+            "Blue",
+            null,
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142259_72_1.jpg"
+    },
+    {
+      "id": 11,
+      "animal": "Bat",
+      "animal_zh": "蝙蝠",
+      "habitat": "gray",
+      "scores": [
+        3,
+        6,
+        10,
+        15
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Gray",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            1,
+            0
+          ],
+          "levels": [
+            "Brown",
+            "Brown",
+            "Green"
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142300_73_1.jpg"
+    },
+    {
+      "id": 12,
+      "animal": "Gecko",
+      "animal_zh": "壁虎",
+      "habitat": "red",
+      "scores": [
+        5,
+        10,
+        16
+      ],
+      "anchor_index": 2,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Yellow",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            1,
+            0
+          ],
+          "levels": [
+            "Yellow",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            0
+          ],
+          "levels": [
+            [
+              "Brown",
+              "Gray",
+              "Red"
+            ],
+            "Red",
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142302_74_1.jpg"
+    },
+    {
+      "id": 13,
+      "animal": "Crocodile",
+      "animal_zh": "鳄鱼",
+      "habitat": "blue",
+      "scores": [
+        4,
+        9,
+        15
+      ],
+      "anchor_index": 1,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Blue",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            0
+          ],
+          "levels": [
+            "Blue",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            1,
+            0
+          ],
+          "levels": [
+            "Brown",
+            "Brown",
+            "Green"
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142303_75_1.jpg"
+    },
+    {
+      "id": 14,
+      "animal": "Wolf",
+      "animal_zh": "狼",
+      "habitat": "green",
+      "scores": [
+        4,
+        10,
+        16
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Brown",
+            "Brown",
+            "Green"
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            0
+          ],
+          "levels": [
+            "Yellow",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            1
+          ],
+          "levels": [
+            "Yellow",
+            null,
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142304_76_1.jpg"
+    },
+    {
+      "id": 15,
+      "animal": "Rabbit",
+      "animal_zh": "兔子",
+      "habitat": "green",
+      "scores": [
+        5,
+        10,
+        17
+      ],
+      "anchor_index": 1,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Green",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            0
+          ],
+          "levels": [
+            "Green",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            1,
+            0
+          ],
+          "levels": [
+            [
+              "Brown",
+              "Gray",
+              "Red"
+            ],
+            "Red",
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142305_77_1.jpg"
+    },
+    {
+      "id": 16,
+      "animal": "Marmot",
+      "animal_zh": "熊",
+      "habitat": "green",
+      "scores": [
+        5,
+        11
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Green",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            0
+          ],
+          "levels": [
+            "Gray",
+            "Gray",
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            1
+          ],
+          "levels": [
+            "Gray",
+            "Gray",
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142305_78_1.jpg"
+    },
+    {
+      "id": 17,
+      "animal": "Llama",
+      "animal_zh": "羊驼",
+      "habitat": "yellow",
+      "scores": [
+        5,
+        12
+      ],
+      "anchor_index": 1,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Yellow",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            0,
+            -1
+          ],
+          "levels": [
+            "Yellow",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            0,
+            1
+          ],
+          "levels": [
+            "Gray",
+            "Gray",
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142307_79_1.jpg"
+    },
+    {
+      "id": 18,
+      "animal": "Crow",
+      "animal_zh": "乌鸦",
+      "habitat": "yellow",
+      "scores": [
+        4,
+        9
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Yellow",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            1,
+            0
+          ],
+          "levels": [
+            [
+              "Brown",
+              "Gray",
+              "Red"
+            ],
+            "Red",
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            1
+          ],
+          "levels": [
+            [
+              "Brown",
+              "Gray",
+              "Red"
+            ],
+            "Red",
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142308_80_1.jpg"
+    },
+    {
+      "id": 19,
+      "animal": "Eagle",
+      "animal_zh": "鹰",
+      "habitat": "gray",
+      "scores": [
+        5,
+        11
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Gray",
+            "Gray",
+            "Gray"
+          ]
+        },
+        {
+          "offset": [
+            1,
+            0
+          ],
+          "levels": [
+            "Yellow",
+            null,
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142309_81_1.jpg"
+    },
+    {
+      "id": 20,
+      "animal": "Otter",
+      "animal_zh": "水獭",
+      "habitat": "blue",
+      "scores": [
+        5,
+        10,
+        16
+      ],
+      "anchor_index": 2,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Green",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            0,
+            -1
+          ],
+          "levels": [
+            "Green",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            0,
+            1
+          ],
+          "levels": [
+            "Blue",
+            null,
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142310_82_1.jpg"
+    },
+    {
+      "id": 21,
+      "animal": "Mouse",
+      "animal_zh": "老鼠",
+      "habitat": "red",
+      "scores": [
+        5,
+        10,
+        17
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            [
+              "Brown",
+              "Gray",
+              "Red"
+            ],
+            "Red",
+            null
+          ]
+        },
+        {
+          "offset": [
+            1,
+            0
+          ],
+          "levels": [
+            "Yellow",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            1
+          ],
+          "levels": [
+            "Yellow",
+            null,
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142311_83_1.jpg"
+    },
+    {
+      "id": 22,
+      "animal": "Owl",
+      "animal_zh": "猴子",
+      "habitat": "gray",
+      "scores": [
+        5,
+        11
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Gray",
+            "Gray",
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            0
+          ],
+          "levels": [
+            "Blue",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            1
+          ],
+          "levels": [
+            "Blue",
+            null,
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142312_84_1.jpg"
+    },
+    {
+      "id": 23,
+      "animal": "Panther",
+      "animal_zh": "黑豹",
+      "habitat": "yellow",
+      "scores": [
+        5,
+        11
+      ],
+      "anchor_index": 2,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Brown",
+            "Green",
+            null
+          ]
+        },
+        {
+          "offset": [
+            0,
+            -1
+          ],
+          "levels": [
+            "Brown",
+            "Green",
+            null
+          ]
+        },
+        {
+          "offset": [
+            0,
+            1
+          ],
+          "levels": [
+            "Yellow",
+            null,
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142314_85_1.jpg"
+    },
+    {
+      "id": 24,
+      "animal": "Hedgehog",
+      "animal_zh": "刺猬",
+      "habitat": "red",
+      "scores": [
+        5,
+        12
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            [
+              "Brown",
+              "Gray",
+              "Red"
+            ],
+            "Red",
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            0
+          ],
+          "levels": [
+            "Brown",
+            "Green",
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            1
+          ],
+          "levels": [
+            "Brown",
+            "Green",
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142315_86_1.jpg"
+    },
+    {
+      "id": 25,
+      "animal": "Meerkat",
+      "animal_zh": "猫鼬",
+      "habitat": "gray",
+      "scores": [
+        2,
+        5,
+        9,
+        14
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Gray",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            0
+          ],
+          "levels": [
+            "Yellow",
+            null,
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142316_87_1.jpg"
+    },
+    {
+      "id": 26,
+      "animal": "Salmon",
+      "animal_zh": "三文鱼",
+      "habitat": "blue",
+      "scores": [
+        3,
+        6,
+        10,
+        16
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Blue",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            0,
+            1
+          ],
+          "levels": [
+            "Gray",
+            "Gray",
+            "Gray"
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142318_88_1.jpg"
+    },
+    {
+      "id": 27,
+      "animal": "Raccoon",
+      "animal_zh": "浣熊",
+      "habitat": "yellow",
+      "scores": [
+        6,
+        12
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Yellow",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            1,
+            0
+          ],
+          "levels": [
+            "Blue",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            0,
+            1
+          ],
+          "levels": [
+            "Blue",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            1
+          ],
+          "levels": [
+            "Blue",
+            null,
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142329_89_1.jpg"
+    },
+    {
+      "id": 28,
+      "animal": "Duck",
+      "animal_zh": "鸭子",
+      "habitat": "blue",
+      "scores": [
+        2,
+        4,
+        8,
+        13
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Blue",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            1,
+            0
+          ],
+          "levels": [
+            [
+              "Brown",
+              "Gray",
+              "Red"
+            ],
+            "Red",
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142331_90_1.jpg"
+    },
+    {
+      "id": 29,
+      "animal": "Penguin",
+      "animal_zh": "企鹅",
+      "habitat": "gray",
+      "scores": [
+        4,
+        10,
+        16
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Gray",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            1,
+            0
+          ],
+          "levels": [
+            "Blue",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            1
+          ],
+          "levels": [
+            "Blue",
+            null,
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142337_91_1.jpg"
+    },
+    {
+      "id": 30,
+      "animal": "Peacock",
+      "animal_zh": "孔雀",
+      "habitat": "red",
+      "scores": [
+        5,
+        10,
+        17
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            [
+              "Brown",
+              "Gray",
+              "Red"
+            ],
+            "Red",
+            null
+          ]
+        },
+        {
+          "offset": [
+            1,
+            0
+          ],
+          "levels": [
+            "Blue",
+            null,
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            1
+          ],
+          "levels": [
+            "Blue",
+            null,
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142416_93_1.jpg"
+    },
+    {
+      "id": 31,
+      "animal": "Koala",
+      "animal_zh": "考拉",
+      "habitat": "green",
+      "scores": [
+        3,
+        6,
+        10,
+        15
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            "Brown",
+            "Green",
+            null
+          ]
+        },
+        {
+          "offset": [
+            1,
+            0
+          ],
+          "levels": [
+            "Green",
+            null,
+            null
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142418_94_1.jpg"
+    },
+    {
+      "id": 32,
+      "animal": "Squirrel",
+      "animal_zh": "松鼠",
+      "habitat": "red",
+      "scores": [
+        4,
+        9,
+        15
+      ],
+      "anchor_index": 0,
+      "pattern": [
+        {
+          "offset": [
+            0,
+            0
+          ],
+          "levels": [
+            [
+              "Brown",
+              "Gray",
+              "Red"
+            ],
+            "Red",
+            null
+          ]
+        },
+        {
+          "offset": [
+            -1,
+            0
+          ],
+          "levels": [
+            "Brown",
+            "Brown",
+            "Green"
+          ]
+        }
+      ],
+      "photo": "微信图片_20260608142415_92_1.jpg"
+    }
+  ]
+}

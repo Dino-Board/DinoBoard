@@ -1,0 +1,17 @@
+{
+  "game_id": "jaipur",
+  "display_name": "斋普尔",
+  "display_name_en": "Jaipur",
+  "players": {
+    "min": 2,
+    "max": 2
+  },
+  "max_game_plies": 200,
+  "variants": {
+    "jaipur": {
+      "feature_dim": 75,
+      "action_space": 35,
+      "num_players": 2
+    }
+  }
+}

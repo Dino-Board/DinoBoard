@@ -1,0 +1,20 @@
+---
+description: "Wire AI components — encoder, tracker, registration, event protocol, belief, training features, API (Phase 2 of adding a new game)"
+globs:
+  - "games/**/encoder*.cpp"
+  - "games/**/tracker*.cpp"
+  - "games/**/*_register.cpp"
+  - "games/**/config/belief.json"
+alwaysApply: false
+---
+# Game AI Components
+
+See the rule matching your current task:
+- **IFeatureEncoder** (encode_features, masked_state, perspective): see game-ai-encoder
+- **History chain encoding** (bounded per-round play history): see game-ai-history-chain-encoding — Maskmen
+- **IBeliefTracker** (init, observe, randomize_unseen): see game-ai-tracker
+- **Belief sampling precision** (choosing randomize_unseen tier): see game-ai-belief-sampling
+- **GameBundle + GameRegistrar** (wire components, install_event_protocol): see game-ai-registration
+- **Learned belief network** (bluff games — Coup/LiarsDice/6nimmit): see game-ai-belief-net
+- **Optional training features** (heuristic, tail solver, filter, adjudicator, stats, opponent pool): see game-ai-training
+- **REST AI API** (observation-only session lifecycle, endpoints): see game-ai-api

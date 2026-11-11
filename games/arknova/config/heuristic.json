@@ -1,0 +1,27 @@
+{
+  "_doc": "C++ ports of ark-nova-ai's bots, each searching one world sampled by the tracker from the masked state. greedy is GreedyBot (position valuation plus a search to the end of its own turn). beam_2x3 / beam_3x8 are LookaheadBot (depth x width) with opponents passive; at turn decisions they search a beam of whole turns, other decisions are greedy's. Measured over 100 games per pair: beam_2x3 beats greedy 64%, beam_3x8 beats greedy 74% and beam_2x3 64% (ark-nova-ai's Python bots: 67% / 75% / 75%). Wall time of a game on one core: greedy vs greedy ~1 s, beam_2x3 vs greedy ~2 s, beam_3x8 vs greedy ~9 s.",
+  "named": {
+    "greedy": {
+      "type": "rule"
+    },
+    "beam_2x3": {
+      "type": "rule"
+    },
+    "beam_3x8": {
+      "type": "rule"
+    },
+    "random": {
+      "type": "rule"
+    }
+  },
+  "selectors": {
+    "eval_vs_heuristic": {
+      "name": "beam_3x8",
+      "temperature": 0.0
+    },
+    "web": {
+      "name": "greedy",
+      "temperature": 0.0
+    }
+  }
+}

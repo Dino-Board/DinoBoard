@@ -1,0 +1,30 @@
+{
+  "named": {
+    "rule": {
+      "type": "rule"
+    },
+    "greedy": {
+      "type": "rule"
+    },
+    "greedy_mcts": {
+      "type": "mcts_pv",
+      "simulations": 20000,
+      "c_puct": 1.4
+    },
+    "greedy_mcts_train": {
+      "type": "mcts_pv",
+      "simulations": 1000,
+      "c_puct": 1.4
+    }
+  },
+  "selectors": {
+    "eval_vs_heuristic": {
+      "name": "greedy_mcts_train",
+      "temperature": 0.0
+    },
+    "web": {
+      "name": "greedy_mcts",
+      "temperature": 0.0
+    }
+  }
+}

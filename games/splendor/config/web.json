@@ -1,0 +1,19 @@
+{
+  "web_expert": {
+    "simulations": 10000,
+    "tail_solve_depth_limit": 7,
+    "tail_solve_node_budget": 1000000,
+    "tail_solve_enabled": true
+  },
+  "web_casual": {
+    "simulations": 10,
+    "tail_solve_depth_limit": 7,
+    "tail_solve_node_budget": 1000000
+  },
+  "analysis": {
+    "simulations": 10000,
+    "tail_solve_depth_limit": 7,
+    "tail_solve_node_budget": 1000000,
+    "tail_solve_enabled": true
+  }
+}

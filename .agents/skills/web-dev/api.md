@@ -1,0 +1,81 @@
+# createApp API Reference
+
+Source: `platform/static/general/app.js`
+
+---
+
+## createApp(config)
+
+Entry point for every game frontend. Called from `games/<id>/web/<id>.js`.
+
+### Config Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| gameId | string | yes | Game identifier (matches manifest.json) |
+| players | {min,max} | no | Player count range (default {min:2, max:2}). Shows player-count selector when max > 2. |
+| gameTitle | string | no | Unused legacy field (sidebar title now comes from game switcher, not config) |
+| renderBoard | (container, gameState, ctx) => void | yes | Renders the board into refs.boardCol |
+| renderPlayerArea | (container, gameState, ctx) => void | no | Renders below-board player info into refs.playerArea |
+| getPlayerSymbol | (playerIdx) => string | no | Human-readable label for a seat (e.g. "Black"/"White") |
+| hideSeatPicker | bool | no | Hide seat-selection UI; human fixed to last seat. Used by simultaneous-action games (6 nimmt!). |
+| difficulties | string[] | no | Available difficulty levels (default: ["heuristic","casual","expert"]) |
+| defaultDifficulty | string | no | Initial difficulty selection (default: "expert") |
+| showWinrateDefault | bool | no | Default state of win-rate toggle (default: true; hidden-info games set false) |
+| disableForce | bool | no | Hide "play for opponent" button (hidden-info games set true) |
+| describeTransition | (prevState, newState, actionInfo, actionId) => step[] | no | Animation descriptor (highly recommended) |
+| formatOpponentMove | (actionInfo, actionId, actorIdx) => string | no | Human-readable move description for info panel |
+| formatSuggestedMove | (actionInfo, actionId, actorIdx) => string | no | Human-readable hint/suggestion text |
+| onGameStart | () => void | no | Called after session created |
+| onUndo | () => void | no | Called after undo completes |
+| onActionSubmitted | () => void | no | Called when human submits an action |
+| onReplayFrames | (allFrames) => void | no | Called when replay frames are loaded |
+| gameIntro | string | no | Brief guidance text shown until opponent's first move |
+| extensions | array | no | Custom info-panel extension renderers, each with `render(el, gameState)` |
+
+---
+
+## ctx Object
+
+Passed to renderBoard and renderPlayerArea. Properties:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| canPlay | bool (getter) | True when it's the human's turn and game is active (not busy, not AI's turn, not terminal). Respects forceMode. |
+| state | object (getter) | Internal state including sessionId, gameState, humanPlayer, aiPlayers, busy, forceMode, replayMode, difficulty |
+| revealHidden | bool (getter) | True during replay when user has opted into showing hidden info. Gate opponent-private rendering on this. |
+| submitAction(actionId) | function | Submit a legal action. Validates legal_actions before sending. |
+| rerender() | function | Force re-render of board + player area + info panel. |
+| setInfoStatus(text) | function | Set transient status line in info panel (e.g. "Selected: Duke"). Pass null to clear. |
+
+---
+
+## gameState Object
+
+Returned from backend, available as `ctx.state.gameState` or passed directly to renderBoard.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| current_player | int | Whose turn it is (0-indexed) |
+| is_terminal | bool | Game is over |
+| winner | int | Winner index (-1 for draw, only meaningful when is_terminal) |
+| legal_actions | int[] | Currently legal action IDs |
+| human_player | int | Human's seat index |
+| ai_players | int[] | AI seat indices |
+| state | object | Game-specific state dict from C++ StateSerializer (all public fields visible to human) |
+| action_info | object | Info about the action just played (set in response to `/action`) |
+| last_action_info | object | Info about the last action played (set client-side after AI moves) |
+| last_action_id | int | Last action ID |
+| last_action_actor | int | Who played the last action |
+| num_players | int | Number of players in this session |
+| ply_index | int | Current ply number (in replay frames) |
+| last_actor | string | Tag of last actor (e.g. "player_0") for undo loop |
+| is_turn_start | bool | Whether this is the start of a logical turn |
+
+Game-specific fields live under `gameState.state` (not merged into top level). Access them as `gameState.state.factories`, `gameState.state.players`, etc.
+
+---
+
+## describeTransition
+
+`describeTransition(prevState, newState, actionInfo, actionId)` returns an animation step array. For the complete step type reference, pitfalls, and multi-phase choreography guide, use the `/web-animation` skill.

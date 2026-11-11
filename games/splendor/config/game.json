@@ -1,0 +1,35 @@
+{
+  "game_id": "splendor",
+  "display_name": "\u7480\u74a8\u5b9d\u77f3",
+  "display_name_en": "Splendor",
+  "players": {
+    "min": 2,
+    "max": 4
+  },
+  "max_game_plies": 160,
+  "web_variants": {
+    "2": "splendor_tok"
+  },
+  "variants": {
+    "splendor": {
+      "feature_dim": 295,
+      "action_space": 70,
+      "num_players": 2
+    },
+    "splendor_tok": {
+      "feature_dim": 810,
+      "action_space": 70,
+      "num_players": 2
+    },
+    "splendor_3p": {
+      "feature_dim": 355,
+      "action_space": 71,
+      "num_players": 3
+    },
+    "splendor_4p": {
+      "feature_dim": 415,
+      "action_space": 72,
+      "num_players": 4
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "named": {
+    "rule_v1": {
+      "type": "rule"
+    }
+  },
+  "selectors": {
+    "eval_vs_heuristic": {
+      "name": "rule_v1",
+      "temperature": 0.0
+    },
+    "web": {
+      "name": "rule_v1",
+      "temperature": 0.0
+    }
+  }
+}

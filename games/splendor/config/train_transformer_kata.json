@@ -1,0 +1,66 @@
+{
+  "network": {
+    "type": "token_transformer",
+    "d_model": 128,
+    "num_layers": 4,
+    "num_heads": 4,
+    "ffn_dim": 256
+  },
+  "training": {
+    "steps": 5000,
+    "episodes_per_step": 400,
+    "batch_size": 1024,
+    "learning_rate": 0.0002,
+    "lr_schedule": {
+      "type": "cosine",
+      "lr_min": 4e-06
+    },
+    "train_batches_per_step": 12,
+    "replay_buffer_size": 200000,
+    "playout_cap": {
+      "full_simulations": 800,
+      "fast_simulations": 150,
+      "full_search_prob": 0.25
+    },
+    "score_head": {
+      "loss_weight": 0.5,
+      "scale": 15.0
+    },
+    "opponent_policy_head": {
+      "loss_weight": 0.15
+    },
+    "ema": {
+      "decay": 0.99
+    },
+    "inference_precision": "fp16",
+    "eval_benchmarks": [
+      "heuristic_free"
+    ],
+    "selfplay_concurrency": {
+      "enabled": true,
+      "leaf_batch_size": 16,
+      "evaluator": {
+        "batch_size": 1024,
+        "batch_timeout_us": 30,
+        "max_queue_size": 8192,
+        "intra_op_num_threads": 1,
+        "num_inference_threads": 2,
+        "providers": []
+      }
+    }
+  },
+  "heuristic_guidance": {
+    "name": "pv_512x4",
+    "hold_steps": 0,
+    "steps": 0,
+    "initial_ratio": 0.0,
+    "temperature": 0.0
+  },
+  "runtime": {
+    "workers": 400,
+    "eval_every": 50,
+    "eval_games": 100,
+    "save_every": 50,
+    "seed": 20260514
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "web_expert": {
+    "simulations": 2000,
+    "world_cap": 200,
+    "temperature": 0.0
+  },
+  "web_casual": {
+    "simulations": 50,
+    "world_cap": 10,
+    "temperature": 0.0
+  },
+  "analysis": {
+    "simulations": 2000,
+    "world_cap": 200
+  }
+}

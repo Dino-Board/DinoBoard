@@ -1,0 +1,8 @@
+---
+description: "Web animation system — describeTransition step types, multi-phase choreography, common pitfalls"
+globs:
+  - "games/**/web/*.js"
+  - "games/**/web/*.css"
+alwaysApply: false
+---
+The animation system is the #1 source of frontend bugs. See web-animation-reference for the full guide before writing any describeTransition.

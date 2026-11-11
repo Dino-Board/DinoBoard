@@ -1,0 +1,60 @@
+# Training Metrics Plotting
+
+## Quick Usage
+
+```bash
+# Plot all custom metrics from a training run
+python3 scripts/plot_training_metrics.py runs/<run_dir>
+
+# Output: runs/<run_dir>/custom_metrics.png
+```
+
+The script auto-discovers all game-specific custom metrics in `train.log` (anything beyond the standard fields like p_loss, v_loss, plies, sims, lr, etc.) and plots them on a single chart with light smoothing.
+
+## What Gets Plotted
+
+Custom metrics come from each game's `episode_stats_extractor` registered on GameBundle. The pipeline averages them over all episodes in a step and logs them at the end of the step line.
+
+### Coup metrics
+- `opening_duke_rate` — fraction of games where seat 0 claims Duke on ply 0
+- `opening_duke_real_rate` — of those claims, fraction where seat 0 actually had Duke
+- `opening_duke_challenged_rate` — of those claims, fraction where seat 1 challenged
+
+### Liar's Dice metrics
+- `challenge_safety` — when AI challenges, how safe was the challenge from the challenger's perspective (1 - p_safe, where p_safe is the normal-approximation probability the bid is true given the challenger's own dice). High = safe challenge, low = risky challenge.
+
+## How to Add Custom Metrics to a Game
+
+In `<game>_register.cpp`, set `b.episode_stats_extractor`:
+
+```cpp
+b.episode_stats_extractor = [](
+    const board_ai::IGameState& final_state,
+    const board_ai::IGameState& initial_state,
+    const std::vector<board_ai::SelfplaySampleView>& samples)
+    -> std::map<std::string, double> {
+  std::map<std::string, double> out;
+  // Compute metrics from final_state, initial_state, or samples.
+  // Return only metrics that apply to this episode — pipeline
+  // averages over present values, so conditional metrics (e.g. only
+  // when a challenge happened) stay meaningful.
+  out["my_metric_rate"] = some_value;
+  return out;
+};
+```
+
+### Naming conventions
+- `_rate` suffix for rate-like metrics (0-1 range, formatted to 3 decimals in train.log)
+- Plain names for counts (formatted to 1 decimal)
+- Conditional metrics: only include the key when the condition is met. The pipeline averages over episodes that returned the key, not over all episodes.
+
+## Customizing the Plot
+
+Edit `scripts/plot_training_metrics.py`:
+- `WINDOW` — smoothing window (default 5, set 1 for raw data)
+- `DEFAULT_RUN` — fallback run directory when no argument given
+- `STANDARD_FIELDS` — set of field names to exclude from custom metrics
+
+## Reference Implementations
+- Coup: `games/coup/coup_register.cpp` — 3 conditional opening-duke metrics
+- Liar's Dice: `games/liarsdice/liarsdice_register.cpp` — challenge_safety metric using normal-approximation p_safe

@@ -1,0 +1,26 @@
+{
+  "game_id": "carcassonne",
+  "display_name": "卡卡颂",
+  "display_name_en": "Carcassonne",
+  "victory_mode": "winner_takes",
+  "players": {
+    "min": 2,
+    "max": 2
+  },
+  "max_game_plies": 160,
+  "web_variants": {
+    "2": "carcassonne_tok"
+  },
+  "variants": {
+    "carcassonne": {
+      "num_players": 2,
+      "feature_dim": 3124,
+      "action_space": 1614
+    },
+    "carcassonne_tok": {
+      "num_players": 2,
+      "feature_dim": 0,
+      "action_space": 1614
+    }
+  }
+}

@@ -1,0 +1,8 @@
+---
+description: "Plot custom training metrics from train.log — bluff rates, challenge safety, any game-specific stats"
+globs:
+  - "**/train.log"
+  - "training/**"
+alwaysApply: false
+---
+Visualize game-specific custom metrics logged during training. See plot-metrics-reference for usage and how to add new metrics.

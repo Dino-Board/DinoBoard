@@ -1,0 +1,391 @@
+/* Harmonies web styles */
+
+:root {
+  --col-blue: #3b82f6;
+  --col-gray: #94a3b8;
+  --col-brown: #a16207;
+  --col-green: #22c55e;
+  --col-yellow: #facc15;
+  --col-red: #dc2626;
+  --hex-size: 48px;
+}
+
+.harm-root {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px;
+  align-items: center;
+  max-width: 100%;
+}
+
+/* Status banner — fixed height, no layout shift */
+.harm-banner {
+  font-size: 14px;
+  background: #f3f4f6;
+  padding: 8px 16px;
+  border-radius: 6px;
+  text-align: center;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.harm-banner.my-turn {
+  background: #dcfce7;
+  border: 2px solid #16a34a;
+  font-weight: 600;
+  color: #15803d;
+}
+
+.harm-section-title {
+  font-size: 13px;
+  color: #6b7280;
+  margin: 4px 0 2px;
+  text-align: center;
+}
+
+.harm-placeholder {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+/* Central token board: 5 horizontal slots */
+.harm-central {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.harm-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  border: 2px solid #d1d5db;
+  border-radius: 8px;
+  padding: 8px;
+  background: #fff;
+  min-width: 60px;
+  min-height: 48px;
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.harm-slot.legal {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37,99,235,0.2);
+}
+.harm-slot.legal:hover {
+  transform: scale(1.05);
+  box-shadow: 0 0 0 3px rgba(37,99,235,0.35);
+}
+.harm-slot.disabled { opacity: 0.55; cursor: default; }
+.harm-slot-tokens {
+  display: flex;
+  gap: 3px;
+  flex-wrap: wrap;
+  justify-content: center;
+  min-height: 18px;
+}
+.harm-token-mini {
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  border: 1px solid #00000022;
+}
+.harm-token-mini.c1 { background: var(--col-blue); }
+.harm-token-mini.c2 { background: var(--col-gray); }
+.harm-token-mini.c3 { background: var(--col-brown); }
+.harm-token-mini.c4 { background: var(--col-green); }
+.harm-token-mini.c5 { background: var(--col-yellow); }
+.harm-token-mini.c6 { background: var(--col-red); }
+.harm-slot-label {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+/* Selected hand: row of selected tokens to place — fixed height */
+.harm-hand {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-height: 48px;
+  justify-content: center;
+}
+.harm-hand-token {
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  border: 3px solid #e5e7eb;
+  cursor: pointer;
+  transition: transform 0.15s, border-color 0.15s;
+}
+.harm-hand-token:hover {
+  transform: scale(1.1);
+  border-color: #2563eb;
+}
+.harm-hand-token.active {
+  border-color: #16a34a;
+  box-shadow: 0 0 0 3px rgba(22,163,74,0.3);
+  transform: scale(1.1);
+}
+.harm-hand-token.c1 { background: var(--col-blue); }
+.harm-hand-token.c2 { background: var(--col-gray); }
+.harm-hand-token.c3 { background: var(--col-brown); }
+.harm-hand-token.c4 { background: var(--col-green); }
+.harm-hand-token.c5 { background: var(--col-yellow); }
+.harm-hand-token.c6 { background: var(--col-red); }
+
+/* Player boards side-by-side; wrap to multiple rows for 3p / 4p. */
+.harm-boards {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.harm-pboard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.harm-pboard-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+.harm-pboard-title.me { color: #16a34a; }
+
+/* Hex grid: column-based with flat-top hexes */
+.harm-hex-grid {
+  display: grid;
+  grid-template-columns: repeat(5, calc(var(--hex-size) * 0.75));
+  gap: 0;
+  align-items: start;
+}
+.harm-hex-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.harm-hex-col.offset { padding-top: calc(var(--hex-size) * 0.433); }
+.harm-hex {
+  width: var(--hex-size);
+  height: calc(var(--hex-size) * 0.866);
+  position: relative;
+  cursor: default;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.harm-hex-bg {
+  position: absolute; inset: 0;
+  background: #d4dce6;
+  clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);
+  transition: background 0.15s;
+}
+.harm-hex.legal .harm-hex-bg {
+  background: #dbeafe;
+  outline: 2px solid #2563eb;
+}
+.harm-hex.legal:hover .harm-hex-bg {
+  background: #bfdbfe;
+  outline: 3px solid #1d4ed8;
+}
+.harm-hex.legal { cursor: pointer; }
+.harm-hex-dot {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  border: 1px solid #00000033;
+  z-index: 1;
+}
+.harm-hex-dot.c1 { background: var(--col-blue); }
+.harm-hex-dot.c2 { background: var(--col-gray); }
+.harm-hex-dot.c3 { background: var(--col-brown); }
+.harm-hex-dot.c4 { background: var(--col-green); }
+.harm-hex-dot.c5 { background: var(--col-yellow); }
+.harm-hex-dot.c6 { background: var(--col-red); }
+.harm-hex-animal {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--col-yellow);
+  border: 1.5px solid #a16207;
+  z-index: 2;
+}
+
+/* Animation highlight classes */
+.harm-slot-flash {
+  animation: harm-flash 0.4s ease;
+}
+.harm-hex-flash .harm-hex-bg {
+  animation: harm-flash 0.35s ease;
+}
+.harm-card-flash {
+  animation: harm-flash 0.4s ease;
+}
+@keyframes harm-flash {
+  0% { opacity: 1; }
+  50% { opacity: 0.4; }
+  100% { opacity: 1; }
+}
+
+/* Animal market: 5 cards */
+.harm-market {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: nowrap;
+  min-height: 100px;
+}
+.harm-card {
+  border: 2px solid #d1d5db;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fff;
+  width: 130px;
+  height: 150px;
+  font-size: 12px;
+  text-align: center;
+  cursor: default;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transition: transform 0.15s, box-shadow 0.15s;
+  overflow: hidden;
+}
+.harm-card.legal {
+  border-color: #16a34a;
+  cursor: pointer;
+  box-shadow: 0 0 0 2px rgba(22,163,74,0.2);
+}
+.harm-card.legal:hover {
+  transform: scale(1.05);
+  box-shadow: 0 0 0 3px rgba(22,163,74,0.35);
+}
+.harm-card.empty { opacity: 0.3; }
+.harm-card-name { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+
+/* Card score checkboxes: 3 per row, max 2 rows */
+.harm-card-scores {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px 4px;
+  width: 100%;
+  margin-bottom: 4px;
+}
+.harm-card-score-item {
+  font-size: 11px;
+  color: #6b7280;
+  white-space: nowrap;
+  text-align: center;
+}
+.harm-card-score-item.done {
+  color: #16a34a;
+  font-weight: 600;
+}
+
+/* Card hex mini-map */
+.harm-card-map {
+  margin: auto auto 0;
+}
+.harm-map-cell {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+}
+.harm-map-dot {
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  border: 1px solid #00000022;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.harm-map-dot.c1 { background: var(--col-blue); }
+.harm-map-dot.c2 { background: var(--col-gray); }
+.harm-map-dot.c3 { background: var(--col-brown); }
+.harm-map-dot.c4 { background: var(--col-green); }
+.harm-map-dot.c5 { background: var(--col-yellow); }
+.harm-map-dot.c6 { background: var(--col-red); }
+.harm-map-animal {
+  position: absolute;
+  left: 50%;
+  transform: translate(-50%, 0);
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--col-yellow);
+  border: 1.5px solid #a16207;
+  z-index: 2;
+}
+
+/* Held cards row — fixed height with placeholders */
+.harm-hand-cards {
+  display: flex;
+  gap: 6px;
+  flex-wrap: nowrap;
+  justify-content: center;
+  min-height: 100px;
+}
+.harm-held-card {
+  border: 2px solid #d1d5db;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fff;
+  width: 130px;
+  height: 150px;
+  font-size: 12px;
+  text-align: center;
+  position: relative;
+  cursor: default;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transition: transform 0.15s, border-color 0.15s;
+  overflow: hidden;
+}
+.harm-held-card.empty {
+  opacity: 0.25;
+}
+.harm-held-card.active {
+  border-color: #16a34a;
+  box-shadow: 0 0 0 3px rgba(22,163,74,0.3);
+  transform: scale(1.05);
+}
+.harm-held-card:hover:not(.empty) {
+  border-color: #93c5fd;
+}
+
+/* Action buttons */
+.harm-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+  justify-content: center;
+  min-height: 40px;
+}
+.harm-btn {
+  padding: 8px 18px;
+  border-radius: 6px;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  min-height: 44px;
+  transition: background 0.15s;
+}
+.harm-btn.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+.harm-btn.primary:disabled { background: #9ca3af; border-color: #9ca3af; cursor: not-allowed; }
+.harm-btn:hover:not(:disabled) { background: #f3f4f6; }
+.harm-btn.primary:hover:not(:disabled) { background: #1d4ed8; }
+
+/* Mobile: scale board down */
+@media (max-width: 600px) {
+  :root { --hex-size: 36px; }
+  .harm-boards { gap: 12px; }
+  .harm-hand-token { width: 44px; height: 44px; }
+}

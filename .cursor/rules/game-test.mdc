@@ -1,0 +1,12 @@
+---
+description: "Write and run game acceptance tests (11-step checklist, framework architecture, hidden-info tests)"
+globs:
+  - "tests/**"
+alwaysApply: false
+---
+# Game Testing
+
+See the rule matching your current task:
+- **11-step acceptance checklist** (what to test, which functions): see game-test-checklist
+- **Framework test architecture** (carrier games, capability-driven, conftest helpers): see game-test-framework
+- **Hidden-info game tests** (tracker consistency, ISMCTS sampling, hash scope): see game-test-hidden-info

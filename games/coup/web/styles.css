@@ -1,0 +1,397 @@
+.coup-board {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+}
+
+.coup-status-banner {
+  background: linear-gradient(90deg, #2a1f4a, #3a2560);
+  border: 1px solid #6c4cb0;
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #f1e6ff;
+  text-align: center;
+  letter-spacing: 0.3px;
+}
+
+/* Stage + deck size live in the sidebar info-panel as a custom
+ * extension pill (see stageExtension in coup.js). Styles below target
+ * that pill context. */
+.coup-stage {
+  color: #e8a;
+  font-weight: bold;
+}
+
+.coup-deck {
+  color: #94a3b8;
+  margin-left: 12px;
+}
+
+.coup-players {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.coup-player-card {
+  background: #1e1e3a;
+  border: 2px solid #333;
+  border-radius: 12px;
+  padding: 12px 16px;
+  min-width: 130px;
+  text-align: center;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.coup-player-card.eliminated {
+  opacity: 0.4;
+  border-color: #555;
+}
+
+.coup-player-card.current-turn {
+  border-color: #e8a;
+}
+
+.coup-player-card.active {
+  box-shadow: 0 0 8px rgba(232, 170, 100, 0.2);
+}
+
+.coup-player-card.selectable {
+  cursor: pointer;
+  border-color: #fa0;
+  animation: coup-pulse 1s ease-in-out infinite;
+}
+
+.coup-player-card.selectable:hover {
+  box-shadow: 0 0 12px rgba(255, 170, 0, 0.5);
+}
+
+@keyframes coup-pulse {
+  0%, 100% { box-shadow: 0 0 4px rgba(255, 170, 0, 0.3); }
+  50% { box-shadow: 0 0 12px rgba(255, 170, 0, 0.6); }
+}
+
+.coup-pname {
+  font-weight: bold;
+  color: #ccc;
+  margin-bottom: 6px;
+}
+
+.coup-coins {
+  font-size: 16px;
+  margin-bottom: 8px;
+  color: #fff;
+}
+
+.coup-influences {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+}
+
+.coup-inf-card {
+  width: 64px;
+  height: 44px;
+  border: 2px solid #555;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: bold;
+}
+
+.coup-inf-card.hidden {
+  background: #2a2a4a;
+  color: #888;
+  font-size: 18px;
+}
+
+.coup-inf-card.revealed {
+  background: #1a1a2a;
+  color: #999;
+  opacity: 0.6;
+}
+
+/* Action panels. min-height is LARGE so the panel occupies the same
+ * vertical footprint across every stage — declare (7 buttons + hint),
+ * challenge (2), counter (up to 5), reveal (2), exchange (up to 5), idle
+ * placeholder. Without this the panel shrinks when fewer buttons render
+ * and the entire board jumps. */
+.coup-action-panel {
+  background: #1a1a2e;
+  border: 1px solid #444;
+  border-radius: 12px;
+  padding: 16px;
+  min-height: 140px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+}
+
+.coup-action-panel.idle {
+  opacity: 0.75;
+}
+
+.coup-action-btn-spacer {
+  min-height: 56px;
+  visibility: hidden;
+}
+
+.coup-action-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.coup-action-btn:disabled:hover {
+  background: #2a2a4a;
+  border-color: #555;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.coup-panel-title {
+  font-size: 15px;
+  font-weight: bold;
+  color: #ddd;
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+.coup-action-btns {
+  display: flex;
+  /* row-gap > column-gap: the declare panel wraps 7 buttons onto two
+   * rows in narrow layouts, and a single 8px row gap let the row-2
+   * descriptions sit right up against row-1 button borders. */
+  gap: 14px 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.coup-action-btn {
+  background: #2a2a4a;
+  color: #ccc;
+  border: 2px solid #555;
+  border-radius: 10px;
+  padding: 12px 16px 14px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 80px;
+  min-height: 66px;
+}
+
+.coup-action-btn:hover {
+  background: #3a3a5a;
+  transform: translateY(-2px);
+}
+
+.coup-action-btn.safe {
+  border-color: #5a8;
+}
+
+.coup-action-btn.safe:hover {
+  border-color: #7ca;
+  box-shadow: 0 2px 8px rgba(85, 170, 136, 0.3);
+}
+
+.coup-action-btn.bluff {
+  border-color: #c8a;
+}
+
+.coup-action-btn.bluff:hover {
+  border-color: #eac;
+  box-shadow: 0 2px 8px rgba(200, 136, 170, 0.3);
+}
+
+.coup-action-btn.coup-act {
+  border-color: #e55;
+}
+
+.coup-action-btn.coup-act:hover {
+  border-color: #f77;
+  box-shadow: 0 2px 8px rgba(238, 85, 85, 0.3);
+}
+
+.coup-action-btn.challenge {
+  border-color: #e85;
+  color: #fa0;
+  font-weight: bold;
+}
+
+.coup-action-btn.challenge:hover {
+  border-color: #fa7;
+  box-shadow: 0 2px 8px rgba(238, 136, 85, 0.3);
+}
+
+.coup-action-btn.allow {
+  border-color: #585;
+}
+
+.coup-action-btn.allow:hover {
+  border-color: #7a7;
+}
+
+.coup-action-btn.block {
+  border-color: #85c;
+}
+
+.coup-action-btn.block:hover {
+  border-color: #a7e;
+  box-shadow: 0 2px 8px rgba(136, 85, 204, 0.3);
+}
+
+.coup-action-btn.card-choice {
+  border-width: 3px;
+  min-width: 100px;
+  font-weight: bold;
+}
+
+.coup-action-btn.card-choice:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 4px 12px rgba(200, 200, 255, 0.2);
+}
+
+.coup-action-btn.selected {
+  border-color: #fa0;
+  box-shadow: 0 0 12px rgba(255, 170, 0, 0.4);
+  background: #3a3a5a;
+}
+
+.coup-btn-label {
+  font-weight: bold;
+  font-size: 15px;
+}
+
+.coup-btn-desc {
+  font-size: 13px;
+  color: #bbb;
+}
+
+/* Hint stays in the flow (not display:none) even when empty so the panel
+ * doesn't resize between "target selection pending" and "no pending". */
+.coup-pending-hint {
+  color: #fa0;
+  font-size: 14px;
+  text-align: center;
+  margin-top: 10px;
+  min-height: 20px;
+  animation: coup-fade 1.5s ease-in-out infinite;
+}
+
+@keyframes coup-fade {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+/* Player area */
+.coup-my-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+}
+
+.coup-my-coins {
+  font-size: 22px;
+  font-weight: bold;
+}
+
+.coup-my-hand {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+}
+
+.coup-my-card {
+  width: 110px;
+  min-height: 80px;
+  border: 3px solid #555;
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: #1e1e3a;
+  transition: transform 0.2s;
+}
+
+.coup-my-card.revealed {
+  opacity: 0.4;
+  color: #888;
+  font-size: 14px;
+}
+
+/* Exchange-drawn cards (Ambassador). Slight lift + dashed outline reads
+ * as "just drawn from the deck, not yet in hand" so the player can tell
+ * them apart from their 2 real hand cards. Same clickable behavior as
+ * hand cards during the return stages. */
+.coup-my-card.drawn {
+  border-style: dashed;
+  transform: translateY(-4px);
+}
+
+/* Clickable during exchange stages. Pulse + pointer so the affordance
+ * reads without a separate button row. */
+.coup-my-card.returnable {
+  cursor: pointer;
+  animation: coup-card-pulse 1.2s ease-in-out infinite;
+}
+.coup-my-card.returnable:hover {
+  transform: translateY(-10px);
+  box-shadow: 0 6px 18px rgba(255, 170, 0, 0.35);
+}
+.coup-my-card.drawn.returnable:hover {
+  transform: translateY(-14px);
+}
+@keyframes coup-card-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 170, 0, 0.0); }
+  50%      { box-shadow: 0 0 0 3px rgba(255, 170, 0, 0.55); }
+}
+
+.coup-exchange-hint {
+  color: #fa0;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: center;
+  animation: coup-fade 1.5s ease-in-out infinite;
+}
+
+/* Flying card sprite for the Ambassador return_card animation. */
+.anim-flying-card.coup-card-fly {
+  border: 2px solid #555;
+  border-radius: 8px;
+  background: #2a2a4a;
+  color: #eee;
+  font-size: 14px;
+  font-weight: 700;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+
+.coup-mycard-name {
+  font-size: 18px;
+  font-weight: bold;
+  color: #eee;
+}
+
+.coup-dead-msg {
+  color: #f55;
+  font-size: 18px;
+  font-weight: bold;
+  text-align: center;
+  padding: 20px;
+}

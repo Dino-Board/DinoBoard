@@ -1,0 +1,14 @@
+{
+  "web_expert": {
+    "simulations": 5000,
+    "world_cap": 300
+  },
+  "web_casual": {
+    "simulations": 10,
+    "world_cap": 10
+  },
+  "analysis": {
+    "simulations": 5000,
+    "world_cap": 300
+  }
+}

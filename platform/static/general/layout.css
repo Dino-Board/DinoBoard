@@ -1,0 +1,608 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: Arial, sans-serif;
+  color: #111827;
+  background:
+    linear-gradient(45deg, #e7eef3 25%, transparent 25%) -20px 0/40px 40px,
+    linear-gradient(-45deg, #e7eef3 25%, transparent 25%) -20px 0/40px 40px,
+    linear-gradient(45deg, transparent 75%, #e7eef3 75%) -20px 0/40px 40px,
+    linear-gradient(-45deg, transparent 75%, #e7eef3 75%) -20px 0/40px 40px,
+    #edf3f7;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* When collapsed, drop the sidebar track entirely (single-column grid)
+ * rather than keeping a 0px track around. Chrome has been observed to
+ * render the stage with the wrong width when the grid template is
+ * `0 1fr` and the first item is display:none — "画面全没了" bug. The
+ * single-column form is unambiguous. */
+.layout.sidebar-collapsed {
+  grid-template-columns: 1fr;
+}
+
+.layout.sidebar-collapsed .sidebar {
+  display: none;
+}
+
+/* --- Sidebar --- */
+
+.sidebar {
+  background: #1f2937;
+  color: #e5e7eb;
+  padding: 12px;
+  overflow-y: auto;
+  max-height: 100vh;
+  position: relative;
+  z-index: 1;
+}
+
+.sidebar h1 {
+  margin: 8px 0 14px;
+  font-size: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sidebar h1 .lang-toggle {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border: 1px solid #94a3b8;
+  background: transparent;
+  color: #e5e7eb;
+  border-radius: 999px;
+  cursor: pointer;
+  line-height: 1.2;
+}
+
+.sidebar h1 .lang-toggle:hover {
+  background: #e5e7eb;
+  color: #1f2937;
+}
+
+.game-switcher-wrap {
+  margin: -6px 0 12px;
+  display: grid;
+  gap: 6px;
+}
+
+.game-switcher-wrap label {
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.game-switcher-wrap select {
+  width: 100%;
+  height: 34px;
+  background: #334155;
+  color: #f8fafc;
+  border: 1px solid #475569;
+  border-radius: 8px;
+  padding: 0 10px;
+}
+
+.card {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 10px;
+  margin-bottom: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.card h2 { margin: 0 0 2px; font-size: 18px; }
+.card label { display: block; margin: 4px 0; font-size: 14px; color: #cbd5e1; }
+
+.side-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.player-count-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.difficulty-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-top: 4px;
+}
+
+input, select, button {
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+  padding: 0 10px;
+  font-size: 14px;
+}
+
+button {
+  cursor: pointer;
+  background: #2563eb;
+  color: #fff;
+  border: none;
+}
+
+button:hover { opacity: 0.92; }
+button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.side-btn {
+  background: #334155;
+  color: #e2e8f0;
+}
+
+.side-btn.active {
+  background: #0ea5e9;
+  color: #fff;
+  box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.35);
+}
+
+#force-section {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+#force-section button {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  padding: 0 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.muted {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.side-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #cbd5e1;
+  cursor: pointer;
+  margin-top: 4px;
+  user-select: none;
+}
+
+.side-toggle input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  cursor: pointer;
+}
+
+/* --- Sidebar Toggle --- */
+
+.sidebar-toggle {
+  position: fixed;
+  top: 50%;
+  left: 340px;
+  transform: translateY(-50%);
+  z-index: 100;
+  width: 20px;
+  height: 48px;
+  background: #1f2937;
+  border: 1px solid #374151;
+  border-left: none;
+  border-radius: 0 8px 8px 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  font-size: 14px;
+  padding: 0;
+  transition: left 0.2s;
+}
+
+.sidebar-toggle:hover {
+  background: #374151;
+  color: #e2e8f0;
+}
+
+.layout.sidebar-collapsed + .sidebar-toggle,
+.sidebar-toggle.collapsed {
+  left: 0;
+}
+
+/* --- Board Stage --- */
+
+.board-stage {
+  overflow: auto;
+  height: 100vh;
+  display: flex;
+  justify-content: safe center;
+  align-items: safe center;
+  padding: 16px;
+}
+
+.board-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  transform-origin: top center;
+  margin: auto;
+}
+
+/* align-items: center so whichever of {game-board-col, info-col} is
+ * taller defines the table-area height, and the shorter side is
+ * vertically centered against it. For Azul this means: 4p's tall 3-row
+ * factory grid dominates and the info-col centers beside it; 2p's short
+ * 2-row factory grid centers beside the info-col content. */
+.table-area {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.game-board-col {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Info column sizes to its own content (info-panel + extensions + replay
+ * panel, all fixed/natural heights). No forced min-height — the previous
+ * `min-height: 640px` was there to prevent the replay panel from being
+ * clipped, but now the panel's .analysis-panel + .analysis-step-card +
+ * .analysis-list all have explicit heights and don't rely on ambient
+ * space. Wasted vertical space between the info column's content end
+ * and the player area is what we're trying to eliminate. */
+.info-col {
+  width: 340px;
+  flex: 0 0 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.player-area {
+  width: 100%;
+  max-width: 100%;
+}
+
+/* --- Zoom Controls --- */
+
+.zoom-controls {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #1f2937;
+  border: 1px solid #374151;
+  border-radius: 10px;
+  padding: 4px 8px;
+  z-index: 999;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.zoom-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  background: #374151;
+  color: #f3f4f6;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.zoom-btn:hover {
+  background: #4b5563;
+}
+
+.zoom-value {
+  font-size: 12px;
+  color: #d1d5db;
+  min-width: 36px;
+  text-align: center;
+}
+
+/* --- Info Panel --- */
+
+.info-panel {
+  display: grid;
+  gap: 4px;
+  flex: 0 0 auto;  /* natural height, never shrink — 5 pills always visible */
+}
+
+.info-pill {
+  border-radius: 6px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  padding: 4px 8px;
+  color: #111827;
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.info-extensions {
+  display: grid;
+  gap: 4px;
+  flex: 0 0 auto;  /* natural height */
+}
+
+.info-extension {
+  background: #f0f7ff;
+  border-color: #bfdbfe;
+}
+
+/* --- Replay / Analysis --- */
+
+.analysis-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* Natural height — the panel is compact (buttons + fixed current-frame
+   * card + fixed list height) so it doesn't need to fill remaining
+   * info-col space. */
+  flex: 0 0 auto;
+}
+
+.analysis-panel[hidden] {
+  display: none;
+}
+
+/* Title removed from DOM — the panel is recognizable by context. Keep
+ * the class in case a game re-adds it, but size it to zero when empty. */
+.analysis-title {
+  display: none;
+}
+
+.analysis-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.replay-btn {
+  height: 28px;
+  font-size: 12px;
+  padding: 0 8px;
+  background: #334155;
+  color: #e2e8f0;
+  border-radius: 6px;
+  width: 100%;
+}
+
+.replay-btn:disabled {
+  opacity: 0.5;
+}
+
+/* Current-frame card and list items share the same dimensions so the
+ * "pinned current" at top looks identical in size to the rows below.
+ * Always 3 lines (帧数-玩家-行动 / 胜率-掉点 / AI 推荐)，missing
+ * stats/suggest slots render as "—" rather than being omitted, so
+ * every card is exactly the same height. */
+.analysis-step-card {
+  background: #eff6ff;
+  border: 1px solid #2563eb;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1.3;
+  color: #0f172a;
+  white-space: pre-line;
+  height: 58px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+/* List shows ~2 items at a time; longer replays scroll within this
+ * fixed window. Height = 2×58 + 4 gap = 120. */
+.analysis-list {
+  flex: 0 0 auto;
+  height: 120px;
+  overflow-y: auto;
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 transparent;
+}
+
+.analysis-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.analysis-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.analysis-list::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 3px;
+}
+
+.analysis-list::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+/* Same dimensions as .analysis-step-card so the pinned current frame
+ * and the scrollable list entries look identical. */
+.analysis-item {
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1.3;
+  cursor: pointer;
+  display: grid;
+  gap: 1px;
+  height: 58px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.analysis-item:hover { background: #f0f4f8; }
+.analysis-item.current { border-color: #2563eb; background: #eff6ff; }
+.analysis-item.warn { border-left: 3px solid #f59e0b; }
+.analysis-item.blunder { border-left: 3px solid #ef4444; }
+
+/* --- Modal --- */
+
+.general-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40000;
+  background: rgba(2, 6, 23, 0.58);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.general-modal-backdrop.hidden { display: none; }
+
+.general-modal-panel {
+  width: min(420px, 94vw);
+  background: #f8fbff;
+  border: 1px solid #c9deef;
+  border-radius: 12px;
+  box-shadow: 0 14px 38px rgba(15, 23, 42, 0.35);
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.general-modal-title {
+  font-size: 20px;
+  font-weight: 800;
+  color: #0f3554;
+}
+
+.general-modal-text {
+  font-size: 16px;
+  color: #0f172a;
+  line-height: 1.5;
+}
+
+.general-modal-ok-btn {
+  justify-self: end;
+  min-width: 92px;
+  height: 38px;
+  border-radius: 10px;
+  border: none;
+  background: #2563eb;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.general-modal-ok-btn:hover { opacity: 0.93; }
+
+/* --- Not started placeholder --- */
+
+.not-started-placeholder {
+  color: #94a3b8;
+  font-size: 20px;
+  font-weight: 700;
+  text-align: center;
+  padding: 80px 40px;
+}
+
+/* --- Responsive --- */
+
+/* Narrow laptops — shrink the sidebar, keep the toggle visible on the
+ * left edge. Never stack vertically: on a phone the sidebar-on-top layout
+ * buries the board content below a full-height nav the user has to
+ * scroll through, and on tablets it just wastes vertical space. The
+ * toggle handle makes it collapsible so the full screen is always
+ * reachable. */
+@media (max-width: 1200px) {
+  .layout { grid-template-columns: 280px 1fr; }
+  .sidebar-toggle { left: 280px; }
+}
+
+@media (max-width: 900px) {
+  .table-area { flex-direction: column; }
+  .info-col {
+    width: 100%;
+    flex: 0 0 auto;
+    min-width: 0;
+    min-height: 0;
+    max-height: 400px;
+  }
+}
+
+/* Phone: sidebar overlays the board instead of stealing grid space.
+ * Without this, a 240px sidebar on a 375px phone leaves only 135px for
+ * the board. Collapsing it by default lets users tap the toggle handle
+ * to slide it in/out. Also: info panel moves above the board, replay UI
+ * is hidden, board-stage padding tightens — see BG-007. */
+@media (max-width: 720px) {
+  .layout { grid-template-columns: 1fr; }
+  .layout:not(.sidebar-collapsed) .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 260px;
+    height: 100vh;
+    z-index: 500;
+    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.35);
+  }
+  .sidebar-toggle { left: 260px; }
+  .layout.sidebar-collapsed ~ .sidebar-toggle,
+  .sidebar-toggle.collapsed { left: 0; }
+
+  .board-stage { padding: 8px; }
+
+  /* Info pills go above the board on phone. order overrides DOM order
+   * (boardCol, infoCol) without touching layout.js. */
+  .table-area {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .info-col {
+    width: 100%;
+    flex: 0 0 auto;
+    max-height: none;
+    order: 0;
+  }
+  .game-board-col {
+    order: 1;
+    width: 100%;
+  }
+
+  /* Replay panel + sidebar replay entries + game-over "查看录像" button
+   * — all hidden on phone (BG-007). The data-mobile-hide hook lets us
+   * pin extra entries from JS without touching this media query. */
+  .analysis-panel,
+  [data-mobile-hide] {
+    display: none !important;
+  }
+
+  .zoom-controls { bottom: 8px; right: 8px; padding: 2px 6px; }
+  .zoom-btn { width: 24px; height: 24px; font-size: 14px; }
+}

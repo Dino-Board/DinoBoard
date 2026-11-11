@@ -1,0 +1,27 @@
+{
+  "game_id": "azul",
+  "display_name": "\u82b1\u7816\u7269\u8bed",
+  "display_name_en": "Azul",
+  "players": {
+    "min": 2,
+    "max": 4
+  },
+  "max_game_plies": 160,
+  "variants": {
+    "azul": {
+      "feature_dim": 163,
+      "action_space": 180,
+      "num_players": 2
+    },
+    "azul_3p": {
+      "feature_dim": 235,
+      "action_space": 240,
+      "num_players": 3
+    },
+    "azul_4p": {
+      "feature_dim": 307,
+      "action_space": 300,
+      "num_players": 4
+    }
+  }
+}

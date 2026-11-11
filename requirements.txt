@@ -1,0 +1,15 @@
+fastapi>=0.100
+uvicorn[standard]>=0.20
+pybind11>=2.10
+
+# Inference (web / API / eval / training selfplay all read ONNX)
+onnxruntime>=1.16
+
+# Training only — torch.onnx.export needs the `onnx` package internally,
+# and torch+numpy are required for the training loop. Web-only deploys
+# can skip these.
+torch>=2.0
+numpy>=1.24
+onnx>=1.14
+# training.inference_precision = "fp16"
+onnxconverter-common>=1.14

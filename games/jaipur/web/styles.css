@@ -1,0 +1,110 @@
+/* Jaipur Web Styling */
+.jaipur-root { display: flex; flex-direction: column; gap: 14px; padding: 12px; }
+
+/* Player areas — fixed height so layout never shifts */
+.jaipur-player { padding: 10px 12px; border-radius: 10px; min-height: 96px; }
+.jaipur-player.self { background: #e3f2fd; border: 2px solid #2196F3; }
+.jaipur-player.opponent { background: #fce4ec; border: 2px solid #e91e63; }
+.jaipur-player.active-turn { box-shadow: 0 0 0 3px #ffb300, 0 0 12px rgba(255,179,0,0.5); }
+.jp-header { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; font-weight: 700; font-size: 14px; flex-wrap: wrap; }
+.jp-name { font-size: 15px; }
+.jp-stat { background: rgba(255,255,255,0.7); padding: 2px 8px; border-radius: 12px; font-size: 13px; }
+.jp-stat.bonus { color: #7b1fa2; }
+
+/* Hand: 7 fixed slots, placeholders for empties (no layout collapse) */
+.jaipur-hand { display: flex; gap: 6px; }
+.jp-card {
+  width: 64px; height: 80px; border-radius: 8px; border: 2px solid #bbb;
+  display: flex; align-items: center; justify-content: center;
+  background: #fff; font-size: 26px; cursor: default; user-select: none;
+  transition: transform 0.12s, box-shadow 0.12s;
+}
+.jp-card.empty-slot { background: transparent; border: 2px dashed #ccc; }
+.jp-card.back { background: #455a64; color: #cfd8dc; border-color: #263238; font-weight: 700; }
+.jp-card.giving { opacity: 0.45; border-color: #ff6b35; }
+.self .jp-card:not(.empty-slot):not(.back) { cursor: pointer; }
+.self .jp-card:not(.empty-slot):not(.back):hover { transform: translateY(-3px); box-shadow: 0 4px 10px rgba(0,0,0,0.18); }
+
+/* Market — same card size as hands for visual consistency */
+.jaipur-market { display: flex; gap: 10px; justify-content: center; padding: 12px; background: #fff8e1; border-radius: 10px; }
+/* Draw-pile counter to the left of the market */
+.jp-deck {
+  width: 64px; height: 80px; border-radius: 8px; border: 2px solid #5d4037;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #6d4c41, #4e342e); color: #ffe0b2;
+  margin-right: 6px; cursor: default; user-select: none;
+}
+.jp-deck-icon { font-size: 28px; line-height: 1; }
+.jp-deck-num { font-size: 20px; font-weight: 800; line-height: 1.1; color: #fff; }
+.jp-deck-label { font-size: 10px; opacity: 0.85; }
+.jp-market {
+  width: 64px; height: 80px; border-radius: 8px; border: 2px solid #ccc;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  cursor: pointer; background: #fff; font-size: 12px; transition: transform 0.12s, box-shadow 0.12s;
+}
+.jp-market:hover { transform: translateY(-3px); box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+.jp-market.empty { background: #eee; border-style: dashed; cursor: default; }
+.jp-market.empty:hover { transform: none; box-shadow: none; }
+.jp-market.selected { border-color: #ff6b35; box-shadow: 0 0 10px rgba(255,107,53,0.55); background: #fff3e0; }
+.jp-market .icon { font-size: 26px; }
+.jp-market .label { margin-top: 2px; font-weight: 600; color: #333; }
+.jp-market .hint { font-size: 9px; font-weight: 400; color: #2e7d32; }
+.jp-market .count { font-size: 12px; font-weight: 700; color: #333; }
+.jp-market .take-mark { font-size: 10px; font-weight: 700; color: #ff6b35; }
+.jp-market.clickable { cursor: pointer; }
+.jp-market.clickable:hover { transform: translateY(-3px); box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+.jp-card.revealed { box-shadow: 0 0 0 2px #ffb300; }
+.jp-card.clickable { cursor: pointer; }
+.jp-card.clickable:hover { transform: translateY(-3px); box-shadow: 0 4px 10px rgba(0,0,0,0.18); }
+
+/* Good type accent (left border) */
+.good-diamond { border-left: 4px solid #2196F3; }
+.good-gold { border-left: 4px solid #FFD700; }
+.good-silver { border-left: 4px solid #9E9E9E; }
+.good-cloth { border-left: 4px solid #9C27B0; }
+.good-spice { border-left: 4px solid #FF5722; }
+.good-leather { border-left: 4px solid #795548; }
+.good-camel { border-left: 4px solid #8BC34A; }
+
+/* Token piles */
+.jaipur-tokens { display: flex; gap: 8px; flex-wrap: wrap; padding: 8px; background: #fafafa; border-radius: 8px; justify-content: center; }
+.jp-token { text-align: center; padding: 6px 10px; border-radius: 6px; background: #fff; border: 1px solid #eee; min-width: 56px; }
+.jp-token.bonus { background: #f3e5f5; border-color: #ce93d8; }
+.jp-token .val { font-weight: 700; font-size: 18px; color: #2e7d32; }
+.jp-token .rem { font-size: 11px; color: #666; }
+
+/* Exchange phase indicator */
+.jaipur-ex-phase { text-align: center; font-weight: 700; color: #e65100; background: #fff3e0; padding: 8px; border-radius: 8px; font-size: 14px; }
+
+/* Actions */
+.jaipur-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; padding: 8px; }
+.jaipur-actions .act {
+  padding: 9px 16px; border-radius: 6px; border: 1px solid #bbb; cursor: pointer;
+  font-size: 13px; font-weight: 600; background: #fff; color: #333; min-height: 44px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.jaipur-actions .act:hover:not(:disabled) { background: #e3f2fd; border-color: #2196F3; }
+.jaipur-actions .act:disabled { opacity: 0.35; cursor: not-allowed; }
+.jaipur-actions .act.primary { background: #2196F3; color: #fff; border-color: #1976D2; }
+.jaipur-actions .act.primary:hover:not(:disabled) { background: #1976D2; }
+.jaipur-actions .act.danger { background: #fff; color: #d32f2f; border-color: #d32f2f; }
+.jaipur-actions .act.sell { color: #fff; border-color: #388E3C; }
+.jaipur-actions .act.sell.good-diamond { background: #1976D2; }
+.jaipur-actions .act.sell.good-gold { background: #F9A825; }
+.jaipur-actions .act.sell.good-silver { background: #757575; }
+.jaipur-actions .act.sell.good-cloth { background: #8E24AA; }
+.jaipur-actions .act.sell.good-spice { background: #E64A19; }
+.jaipur-actions .act.sell.good-leather { background: #6D4C41; }
+.camel-display { align-self: center; font-size: 18px; font-weight: 700; padding: 0 12px; }
+.camel-display .range { font-size: 12px; color: #888; font-weight: 400; }
+
+/* Result banner */
+.jaipur-result { text-align: center; font-size: 18px; font-weight: 800; padding: 14px; background: #f5f5f5; border-radius: 8px; }
+
+/* Flying animation sprites — same size as cards for a clean swap look */
+.jp-fly {
+  display: flex; align-items: center; justify-content: center;
+  width: 64px; height: 80px; border-radius: 8px; background: #fff;
+  border: 2px solid #ccc; font-size: 26px; z-index: 10001;
+}
+.jp-fly.good-camel { background: #f1f8e9; }

@@ -1,0 +1,84 @@
+{
+  "_doc": "world_cap caps the AI session distinct draw-RNG seeds per decision. K = clamp(world_cap, 1, simulations) world seeds x M = ceil(simulations/K) sims per seed. world_cap=0 means uncapped. For Carcassonne (fully-public bag with do_action_fast draws), capping prevents every sim from being its own deterministic line. rule_mcts_web (heuristic difficulty in web UI) stays at sim=20000 / world_cap=0 - long thinking time per move, every sim its own seed. All other rule_mcts_* entries (tests, arena, eval) match training selfplay (mcts.selfplay): sim=2000 / world_cap=200.",
+  "named": {
+    "rule": {
+      "type": "rule"
+    },
+    "rule_mcts": {
+      "type": "mcts_pv",
+      "simulations": 2000,
+      "c_puct": 1.4,
+      "world_cap": 200
+    },
+    "rule_mcts_web": {
+      "type": "mcts_pv",
+      "simulations": 20000,
+      "c_puct": 1.4,
+      "world_cap": 0
+    },
+    "rule_mcts_base": {
+      "type": "mcts_pv",
+      "simulations": 2000,
+      "c_puct": 1.4,
+      "world_cap": 200
+    },
+    "rule_mcts_sharp_pv_soft": {
+      "type": "mcts_pv",
+      "simulations": 2000,
+      "c_puct": 1.4,
+      "world_cap": 200
+    },
+    "rule_mcts_sharp_cloister_soft_pv": {
+      "type": "mcts_pv",
+      "simulations": 2000,
+      "c_puct": 1.4,
+      "world_cap": 200
+    },
+    "rule_mcts_sharp_reserve_soft_pv": {
+      "type": "mcts_pv",
+      "simulations": 2000,
+      "c_puct": 1.4,
+      "world_cap": 200
+    },
+    "rule_mcts_sharp_cloister_reserve_soft_pv": {
+      "type": "mcts_pv",
+      "simulations": 2000,
+      "c_puct": 1.4,
+      "world_cap": 200
+    },
+    "rule_mcts_sharefix": {
+      "type": "mcts_pv",
+      "simulations": 2000,
+      "c_puct": 1.4,
+      "world_cap": 200
+    },
+    "rule_mcts_sharp_open_edge": {
+      "type": "mcts_pv",
+      "simulations": 2000,
+      "c_puct": 1.4,
+      "world_cap": 200
+    },
+    "rule_mcts_sharp_cloistercomplete": {
+      "type": "mcts_pv",
+      "simulations": 2000,
+      "c_puct": 1.4,
+      "world_cap": 200
+    },
+    "rule_mcts_sharp_farmpotential": {
+      "type": "mcts_pv",
+      "simulations": 2000,
+      "c_puct": 1.4,
+      "world_cap": 200
+    }
+  },
+  "selectors": {
+    "eval_vs_heuristic": {
+      "name": "rule_mcts",
+      "temperature": 0.0
+    },
+    "web": {
+      "name": "rule_mcts_web",
+      "temperature": 0.0
+    }
+  }
+}

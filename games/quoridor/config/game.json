@@ -1,0 +1,17 @@
+{
+  "game_id": "quoridor",
+  "display_name": "\u6b65\u6b65\u4e3a\u8425",
+  "display_name_en": "Quoridor",
+  "players": {
+    "min": 2,
+    "max": 2
+  },
+  "max_game_plies": 160,
+  "variants": {
+    "quoridor": {
+      "feature_dim": 295,
+      "action_space": 209,
+      "num_players": 2
+    }
+  }
+}

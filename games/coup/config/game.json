@@ -1,0 +1,33 @@
+{
+  "game_id": "coup",
+  "display_name": "\u653f\u53d8",
+  "display_name_en": "Coup",
+  "players": {
+    "min": 2,
+    "max": 4
+  },
+  "max_game_plies": 100,
+  "variants": {
+    "coup": {
+      "feature_dim": 143,
+      "action_space": 32,
+      "num_players": 2,
+      "belief_feature_dim": 34,
+      "belief_logit_count": 20
+    },
+    "coup_3p": {
+      "feature_dim": 191,
+      "action_space": 32,
+      "num_players": 3,
+      "belief_feature_dim": 62,
+      "belief_logit_count": 40
+    },
+    "coup_4p": {
+      "feature_dim": 239,
+      "action_space": 32,
+      "num_players": 4,
+      "belief_feature_dim": 90,
+      "belief_logit_count": 60
+    }
+  }
+}

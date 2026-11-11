@@ -1,0 +1,403 @@
+/* ============================================================
+ * Maskmen — Web frontend stylesheet.
+ *
+ * Layout (top → bottom):
+ *   .mm-root
+ *     .mm-status         (current line: "Last play: red ×2" or "Round opener")
+ *     .mm-strength       (6×6 strength closure — small wrestler chips with arrows)
+ *     .mm-opponents      (face-down hand counts per opponent)
+ *     .mm-self           (own hand: 6 type-stacks with counts; click to select)
+ *     .mm-controls       (size picker 1/2/3 + Play + Pass)
+ *
+ * Each "wrestler type" is a colored mask icon (six fixed colors).
+ * ============================================================ */
+
+.board-stage { align-items: flex-start !important; }
+.board-content { margin-top: 24px !important; margin-bottom: auto !important; }
+
+.mm-root {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
+  padding: 4px 12px;
+  width: min(700px, 96vw);
+  margin: 0 auto;
+}
+
+/* ----- Wrestler chip (shared) ----- */
+/* 6 colors, chosen for colorblind-friendly + high contrast. */
+.mm-mask {
+  --c: #888;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--c);
+  border: 2px solid rgba(0,0,0,0.18);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 800;
+  font-size: 18px;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.45);
+  user-select: none;
+  flex: none;
+  position: relative;
+}
+.mm-mask-t0 { --c: #ef4444; }
+.mm-mask-t1 { --c: #f59e0b; }
+.mm-mask-t2 { --c: #16a34a; }
+.mm-mask-t3 { --c: #06b6d4; }
+.mm-mask-t4 { --c: #6366f1; }
+.mm-mask-t5 { --c: #db2777; }
+.mm-mask-small { width: 30px; height: 30px; font-size: 13px; border-width: 1px; }
+.mm-mask-tiny  { width: 22px; height: 22px; font-size: 11px; border-width: 1px; }
+
+/* ----- Status / last-play plate ----- */
+.mm-status {
+  width: 100%;
+  min-height: 72px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fff7ed 0%, #ffedd5 100%);
+  border: 1px solid #fdba74;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+}
+.mm-status-label {
+  font-size: 12px;
+  color: #9a3412;
+  letter-spacing: 0.05em;
+}
+.mm-status-line {
+  font-size: 18px;
+  font-weight: 700;
+  color: #7c2d12;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.mm-status-line .mm-mask { width: 38px; height: 38px; font-size: 16px; }
+.mm-status-line .mm-times { color: #9a3412; font-weight: 600; }
+.mm-status-empty .mm-status-line { font-size: 16px; color: #9a3412; font-weight: 500; }
+
+/* ----- Strength graph ----- */
+.mm-chain {
+  width: 100%;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fff;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mm-chain-title {
+  font-size: 12px;
+  color: #6b7280;
+  letter-spacing: 0.05em;
+}
+.mm-chain-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 56px;
+}
+.mm-chain-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f9fafb;
+  min-width: 44px;
+}
+.mm-chain-seat {
+  font-size: 10px;
+  color: #6b7280;
+  font-weight: 600;
+}
+.mm-chain-size {
+  font-size: 12px;
+  color: #1f2937;
+  font-weight: 700;
+}
+.mm-chain-arrow {
+  color: #9ca3af;
+  font-weight: 700;
+}
+.mm-chain-empty {
+  font-size: 13px;
+  color: #9ca3af;
+  font-style: italic;
+}
+
+.mm-strength {
+  width: 100%;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fafafa;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mm-strength-title {
+  font-size: 12px;
+  color: #6b7280;
+  letter-spacing: 0.05em;
+}
+.mm-strength-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  justify-content: center;
+}
+.mm-strength-svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+.mm-strength-arrow {
+  color: #6b7280;
+  font-size: 14px;
+  font-weight: 700;
+  margin: 0 2px;
+}
+.mm-strength-empty {
+  color: #9ca3af;
+  font-size: 13px;
+  font-style: italic;
+}
+
+/* ----- Opponents row ----- */
+.mm-opponents {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mm-opp {
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
+  background: #f9fafb;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+}
+.mm-opp-current {
+  border-color: #2563eb;
+  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.4);
+  background: #eff6ff;
+}
+.mm-opp-passed {
+  opacity: 0.55;
+  background: repeating-linear-gradient(45deg, #f3f4f6 0 8px, #e5e7eb 8px 16px);
+}
+.mm-opp-tag {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  min-width: 96px;
+}
+.mm-opp-current .mm-opp-tag::after { content: ' ●'; color: #2563eb; }
+.mm-opp-pass-pill {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: #6b7280;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+.mm-opp-cards {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.mm-card-back {
+  width: 24px;
+  height: 34px;
+  border-radius: 4px;
+  background: #4b5563;
+  border: 1px solid #374151;
+  color: #f9fafb;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+.mm-opp-count {
+  margin-left: auto;
+  font-size: 18px;
+  color: #1f2937;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* ----- Self area: 6 type stacks ----- */
+.mm-self {
+  width: 100%;
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
+  padding: 14px 12px 12px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mm-self-current {
+  border-color: #2563eb;
+  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.45);
+}
+.mm-self-tag {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.mm-self-stacks {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+  align-items: end;
+}
+.mm-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 4px 6px;
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background: #f9fafb;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, transform 0.12s;
+  min-height: 110px;
+  justify-content: flex-end;
+}
+.mm-stack[data-empty="1"] {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.mm-stack[data-illegal="1"] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.mm-stack[data-disabled="1"] {
+  cursor: not-allowed;
+}
+.mm-stack:not([data-disabled="1"]):not([data-empty="1"]):not([data-illegal="1"]):hover {
+  background: #eff6ff;
+  border-color: #93c5fd;
+  transform: translateY(-1px);
+}
+.mm-stack[data-selected="1"] {
+  background: #dbeafe;
+  border-color: #2563eb;
+}
+.mm-stack-count {
+  font-size: 13px;
+  font-weight: 700;
+  color: #374151;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 1px 6px;
+  min-width: 22px;
+  text-align: center;
+}
+.mm-stack-relation {
+  font-size: 10px;
+  color: #9ca3af;
+  letter-spacing: 0.05em;
+  min-height: 12px;
+}
+.mm-stack-relation.weaker { color: #b91c1c; }
+.mm-stack-relation.stronger { color: #16a34a; }
+.mm-stack-relation.same { color: #6b7280; }
+.mm-stack-relation.legal {
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.mm-self-hint {
+  font-size: 11px;
+  font-weight: 500;
+  color: #6b7280;
+  margin-left: 8px;
+}
+
+/* ----- Controls ----- */
+.mm-controls {
+  width: 100%;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: #fafafa;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mm-controls-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.mm-btn {
+  height: 44px;
+  padding: 0 18px;
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f2937;
+}
+.mm-btn-primary {
+  background: #2563eb;
+  border-color: #1d4ed8;
+  color: #fff;
+}
+.mm-btn-primary:hover:not(:disabled) { background: #1d4ed8; }
+.mm-btn-danger {
+  background: #dc2626;
+  border-color: #b91c1c;
+  color: #fff;
+}
+.mm-btn-danger:hover:not(:disabled) { background: #b91c1c; }
+.mm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.mm-status-line {
+  font-size: 13px;
+  color: #6b7280;
+  min-height: 18px;
+}
+.mm-status-line.legal { color: #15803d; font-weight: 600; }
+.mm-status-line.illegal { color: #b91c1c; font-weight: 600; }
+.mm-status-line.spectator { color: #6b7280; font-style: italic; }
+
+@media (max-width: 640px) {
+  .mm-mask { width: 36px; height: 36px; font-size: 16px; }
+  .mm-stack { min-height: 96px; }
+  .mm-self-stacks { grid-template-columns: repeat(6, 1fr); gap: 5px; }
+}

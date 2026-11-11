@@ -1,0 +1,10 @@
+---
+description: Create or modify Claude Code skills — official format, directory structure, SKILL.md + reference.md pattern, three-mirror sync
+globs:
+  - ".claude/skills/**"
+  - ".agents/skills/**"
+  - ".cursor/rules/*.mdc"
+alwaysApply: false
+---
+
+When adding a new skill or modifying an existing one. See `write-skill-reference` for the format spec and conventions, including the requirement to mirror every change to all three locations (`.claude/skills/`, `.agents/skills/`, `.cursor/rules/`).

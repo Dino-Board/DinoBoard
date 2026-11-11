@@ -1,0 +1,428 @@
+/* ===========================
+ * 6 nimmt! styles
+ *
+ * Spatial layout:
+ *   .sn-board-root holds the 4 fixed-height table rows + apply queue.
+ *   .sn-players holds 2-4 seat blocks; each seat reserves a fixed hand row.
+ * Containers never shrink when contents shrink — slots stay in place
+ * even when empty.
+ * =========================== */
+
+.sn-board-root {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  background: #fafafb;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.sn-table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sn-row {
+  display: grid;
+  grid-template-columns: 60px 1fr 80px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  min-height: 70px;
+  box-sizing: border-box;
+}
+
+.sn-row-label {
+  font-size: 13px;
+  color: #6b7280;
+  font-weight: 600;
+}
+
+.sn-row-slots {
+  display: grid;
+  grid-template-columns: repeat(5, 60px);
+  gap: 6px;
+  justify-content: start;
+}
+
+.sn-slot {
+  width: 60px;
+  height: 84px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: #f1f5f9;
+  border: 1px dashed #cbd5e1;
+  box-sizing: border-box;
+}
+
+.sn-slot.empty {
+  background: #f8fafc;
+}
+
+.sn-row-heads {
+  font-size: 13px;
+  color: #b91c1c;
+  font-weight: 700;
+  text-align: right;
+}
+
+.sn-row-full {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.sn-row-eat-target {
+  cursor: pointer;
+  outline: 2px solid #f59e0b;
+  outline-offset: 1px;
+}
+
+.sn-row-eat-target:hover {
+  background: #fffbeb;
+}
+
+.sn-row-eat-flash {
+  animation: snEatFlash 0.6s ease;
+}
+
+@keyframes snEatFlash {
+  0%   { background: #fef3c7; outline: 3px solid #f59e0b; }
+  100% { background: #ffffff; outline: 0 solid transparent; }
+}
+
+/* ----------- Cards ----------- */
+
+.sn-card {
+  width: 60px;
+  height: 84px;
+  position: relative;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #ffffff 0%, #f3f4f6 100%);
+  border: 1px solid #94a3b8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 22px;
+  color: #1f2937;
+  box-sizing: border-box;
+  user-select: none;
+  font-family: 'Helvetica Neue', system-ui, sans-serif;
+}
+
+.sn-card.sn-card-empty {
+  background: transparent;
+  border: 1px dashed #cbd5e1;
+  color: transparent;
+  box-shadow: none;
+}
+
+.sn-card-num {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.sn-card-heads {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.sn-heads-1 { background: #f1f5f9; color: #475569; }
+.sn-heads-2 { background: #fef3c7; color: #b45309; }
+.sn-heads-3 { background: #fde68a; color: #b45309; }
+.sn-heads-5 { background: #fecaca; color: #991b1b; }
+.sn-heads-7 { background: #fda4af; color: #881337; }
+
+.sn-card-btn {
+  cursor: pointer;
+  padding: 0;
+  font-family: inherit;
+}
+
+.sn-card-legal {
+  outline: 2px solid #3b82f6;
+  outline-offset: 1px;
+}
+
+.sn-card-legal:hover {
+  background: #dbeafe;
+  transform: translateY(-2px);
+  transition: transform 120ms ease;
+}
+
+.sn-card-dimmed {
+  opacity: 0.55;
+}
+
+.sn-card-back {
+  background: repeating-linear-gradient(
+    45deg,
+    #1e3a8a 0,
+    #1e3a8a 6px,
+    #1e40af 6px,
+    #1e40af 12px
+  );
+  border-color: #1e3a8a;
+  color: transparent;
+}
+
+.sn-card-mini {
+  width: 32px;
+  height: 44px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.sn-card-mini .sn-card-num {
+  font-size: 13px;
+}
+
+.sn-card-mini .sn-card-heads {
+  font-size: 8px;
+  bottom: 1px;
+  right: 1px;
+  padding: 0 2px;
+}
+
+.sn-card-flying {
+  pointer-events: none;
+}
+
+/* ----------- Apply queue ----------- */
+
+.sn-apply-queue {
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  min-height: 100px;
+  align-items: center;
+  justify-content: center;
+}
+
+.sn-apply-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  opacity: 0.65;
+}
+
+.sn-apply-slot.done {
+  opacity: 0.35;
+}
+
+.sn-apply-slot.active {
+  opacity: 1;
+  outline: 2px solid #f59e0b;
+  outline-offset: 2px;
+  border-radius: 8px;
+  padding: 2px;
+}
+
+.sn-apply-tag {
+  font-size: 11px;
+  color: #475569;
+  font-weight: 600;
+}
+
+/* ----------- Players area ----------- */
+
+.sn-players {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  background: #ffffff;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.sn-players-multi {
+  flex-direction: column;
+}
+
+.sn-seat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fbfdff;
+  min-height: 110px;
+  box-sizing: border-box;
+}
+
+.sn-seat.active-turn {
+  background: #ecfdf5;
+  border-color: #10b981;
+  box-shadow: 0 0 0 1px rgba(16,185,129,0.4);
+}
+
+.sn-seat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.sn-seat-title {
+  font-weight: 700;
+  font-size: 14px;
+  color: #1f2937;
+}
+
+.sn-commit-tag {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.sn-commit-tag.sn-committed {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.sn-hand {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 84px;
+  align-items: center;
+}
+
+.sn-hand-empty {
+  color: #9ca3af;
+  font-size: 14px;
+  padding: 0 6px;
+}
+
+.sn-small-prompt {
+  font-size: 13px;
+  color: #b45309;
+  background: #fffbeb;
+  border: 1px dashed #f59e0b;
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.sn-table-empty {
+  opacity: 0.6;
+}
+
+/* ----------- Commit area (above the table) ----------- */
+
+.sn-commit-area {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+}
+
+.sn-commit-area-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+}
+
+.sn-commit-slots {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  min-height: 110px;
+}
+
+.sn-commit-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  min-width: 68px;
+  min-height: 102px;
+  box-sizing: border-box;
+}
+
+.sn-commit-slot.empty {
+  background: #f8fafc;
+  border-style: dashed;
+}
+
+.sn-commit-slot.face-down {
+  background: #eef2ff;
+  border-color: #6366f1;
+}
+
+.sn-commit-slot.applied {
+  opacity: 0.4;
+}
+
+.sn-commit-tag-mini {
+  font-size: 11px;
+  font-weight: 600;
+  color: #334155;
+  letter-spacing: 0.02em;
+}
+
+/* ----------- Bullhead pile (under each hand) ----------- */
+
+.sn-pile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  margin-top: 6px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  min-height: 60px;
+}
+
+.sn-pile-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #92400e;
+}
+
+.sn-pile-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  min-height: 40px;
+}
+
+.sn-pile-empty {
+  color: #b45309;
+  font-size: 13px;
+  font-style: italic;
+  padding: 0 4px;
+}

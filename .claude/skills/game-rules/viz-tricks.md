@@ -1,0 +1,133 @@
+# Viz Tricks — Precision Reveals That Raise AI Strength
+
+Rules are the **sole** game-side viz writer. How precisely rules maintain viz
+directly determines how much information the AI can lawfully see — and that
+information is what MCTS/encoder decisions are made on. Reveal too little and
+the AI is information-starved; reveal too much and you leak truth (a hard
+violation). This page catalogs the precise-reveal patterns, using **Love
+Letter** (`games/loveletter/`) as the worked example.
+
+## The core principle
+
+`viz` is not monotonic. When a slot's **content changes**, the reveal state
+tied to the old content is stale and must be dropped (`reset_to_base`).
+Reveals are scoped to exactly who the rules say may see — `reveal_slot_to`
+for a private peek, `reveal_slot` for a public flip, `swap_slot_owned` when
+content moves between owners. Getting these right is not cosmetic: each
+correct reveal is usable information the AI would otherwise have to guess.
+
+## Helper inventory
+
+| Helper | Effect | Use when |
+|--------|--------|----------|
+| `reveal_slot(state, name, idx)` | set slot viz to all-1 (everyone sees) | a card becomes public knowledge |
+| `reveal_slot_to(state, name, idx, viewer)` | set slot viz=1 for `viewer` only | a private peek (Priest) |
+| `reset_to_base(state, name, schema, idx)` | restore slot viz to schema base | slot content changed; old reveals are stale |
+| `swap_slot_owned(state, name, a, b)` | swap two owners' slots; viz travels with content | a trade/swap (King) |
+
+## Worked example: Love Letter
+
+`hand[p]` is `owner_only_first_axis` at base (each player sees only their own
+hand). Rules narrow or widen this per effect.
+
+### Priest — targeted private peek
+
+```cpp
+case kPriest:
+  if (... d.alive[target]) {
+    viz::reveal_slot_to(state, "hand", {target}, me);  // only actor learns target's cid
+  }
+```
+
+Only the acting player (`me`) gains viz=1 on `target`'s hand. The third
+perspective and the target learn nothing. This is the single biggest strength
+lever in the game: a Priest gives the actor a private read on an opponent's
+card that no one else has, and the framework's per-perspective masking carries
+it correctly into that seat's MCTS root. Writing this as `reveal_slot`
+(everyone sees) would leak; writing nothing would starve the actor.
+
+### Baron — elimination duel, three reveal regimes
+
+```cpp
+case kBaron:
+  if (my_card < their_card) {            // actor loses
+    viz::reveal_slot(state, "hand", {me});          // loser's hand -> public
+    viz::reveal_slot_to(state, "hand", {target}, me); // loser sees winner's hand (pre-death)
+    eliminate_player(state, d, me);
+  } else if (their_card < my_card) {       // target loses
+    viz::reveal_slot(state, "hand", {target});
+    viz::reveal_slot_to(state, "hand", {me}, target);
+    eliminate_player(state, d, target);
+  } else {                                // tie
+    viz::reveal_slot_to(state, "hand", {me}, target);     // each learns the other's
+    viz::reveal_slot_to(state, "hand", {target}, me);     // third perspective stays viz=0
+  }
+```
+
+Three branches, three different reveal scopes — each matches exactly what the
+rules entitle each seat to know. The "loser sees winner's hand before
+elimination" detail (`reveal_slot_to` to the loser) is deliberate: it keeps
+the selfplay encoder's pre-death view accurate so the value target isn't
+trained on an information-asymmetric snapshot.
+
+### King — swap, viz travels with content
+
+```cpp
+case kKing:
+  std::swap(d.hand[me], d.hand[target]);
+  viz::swap_slot_owned(state, "hand", me, target);
+```
+
+`swap_slot_owned` swaps both the content and the viz rows together: each owner
+now sees their **new** card (the other's old hand), and any prior reveal on a
+cid travels with that cid to its new owner. Do **not** manually `reset_to_base`
++ `reveal_slot_to` here — `swap_slot_owned` is the atomic primitive that keeps
+viz consistent with content across the swap.
+
+### Play / draw — reset on content change
+
+```cpp
+if (played_from_hand) {
+  d.hand[me] = d.drawn_card;                       // content changed
+  viz::reset_to_base(state, "hand", schema(), {me}); // drop Priest/King reveals on the OLD cid
+}
+```
+
+When a hand slot's content changes (draw replaces the played card), any
+in-round reveals on the **old** cid (from a prior Priest peek or King swap)
+are stale. `reset_to_base` restores owner-only, so the new card is private
+again. Same pattern on Prince-forced redraw (`reset_to_base` before the new
+draw). This is why viz is not an accumulator: reveals are tied to content,
+and content changes invalidate them.
+
+## Why this raises AI strength (concretely)
+
+- **Priest peek without `reveal_slot_to`** → the actor's session has viz=0 on
+  the target's hand, so `randomize_unseen` samples it from belief; the actor
+  decides as if ignorant of a card it legally knows. The peek's whole value
+  is lost.
+- **Baron loser-not-seeing-winner** → the value target for the losing seat is
+  trained on a snapshot that omits a card the seat did see (post-duel); the
+  gradient is noisier. The `reveal_slot_to` to the loser fixes the encoder's
+  pre-death view.
+- **Forgetting `reset_to_base` on redraw** → a stale reveal from an earlier
+  Priest/King lingers on the new card's slot, leaking it to a seat that
+  should not see it. Silent truth leak, structural-invariant violation.
+
+## Invariants
+
+- **Rules are the only viz writer.** No game code outside `do_action_fast` /
+  `do_action_deterministic` should touch `viz_`. (Enforced by
+  `test_rules_sole_viz_writer`.)
+- **Viz follows content, not history.** Any slot whose content changes must
+  `reset_to_base` (or `swap_slot_owned`) — reveals are not cumulative.
+- **Reveal scope must match the rulebook exactly.** `reveal_slot_to(viewer)`
+  for private peeks, `reveal_slot` for public flips. A reveal that is too wide
+  leaks truth; too narrow starves the AI. Both are bugs.
+- **Private reveals are per-perspective-correct by construction.** The
+  framework's masked clone + per-perspective hash/encoder carry a
+  `reveal_slot_to` peek only into the viewer's session — you do not need to
+  gate it further. The strength gain comes from declaring the reveal at all,
+  with the right scope.
+- `protected_flags` (Handmaid immunity) gates *whether* an effect fires, not
+  viz — keep them separate. A protected target is skipped before any reveal.

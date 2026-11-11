@@ -1,0 +1,249 @@
+# Training Hyperparameter Guide
+
+How to pick training hyperparameters by game type. All values go in config files under `games/<id>/config/`.
+
+---
+
+## Game Type Classification
+
+| Type | Examples | Key properties |
+|------|----------|---------------|
+| Deterministic, perfect info | tictactoe, quoridor | No randomness, no hidden state, tail-solvable |
+| Physical randomness, partial hidden | azul, splendor | Deck draws, face-down reserves |
+| Bluff / mixed strategy | coup, liarsdice, loveletter | Requires approximate mixed strategies; learned belief net is used only when the game registers belief features/labels, while opponent pool is often more important for avoiding strategy collapse |
+| Simultaneous action | 6nimmit | All players commit before reveal; see `games/6nimmit/` for the canonical implementation |
+
+---
+
+## c_puct (mcts.json baseline)
+
+| Game type | Recommended | Rationale |
+|-----------|-------------|-----------|
+| Deterministic, deep (quoridor) | 1.4-1.6 | Standard; balanced explore/exploit |
+| Hidden-info, moderate branching (splendor) | 1.4-1.8 | Slightly higher to explore diverse determinizations |
+| Bluff-heavy (coup, liarsdice, 6nimmit) | 1.6-2.0 | Higher exploration needed to probe bluff/challenge space; current configs use 2.0 |
+| Wide action space, low hidden info | 1.4-1.6 | Standard; world_cap helps more than c_puct tuning |
+
+---
+
+## opponent_selection (mcts.json baseline)
+
+| Value | When to use |
+|-------|-------------|
+| "puct" | Default. Deterministic games, games with moderate hidden info |
+| "prior" | Bluff-heavy hidden-info games (loveletter, coup, 6nimmit, liarsdice). Mitigates ISMCTS strategy fusion / opponent omniscience at non-root opponent nodes. |
+
+Set in mcts.json baseline ONLY. All profiles inherit it. Never override per-profile.
+
+---
+
+## world_cap (mcts.json baseline)
+
+| Setting | When |
+|---------|------|
+| 0 (default) | Most games. Every sim samples its own world. |
+| 4-150 | Hidden-info / very wide action spaces (6nimmit, liarsdice: 150). Amortizes determinization cost: K worlds x M sims/world. |
+
+Higher world_cap = more sims per world = deeper per-world search but less world diversity.
+
+---
+
+## tail_solve (mcts.json baseline + profile override)
+
+| Field | Typical values | Notes |
+|-------|---------------|-------|
+| tail_solve_enabled | false (baseline), true (eval/web_expert) | Requires C++ TailSolveTrigger registered in GameBundle |
+| tail_solve_depth_limit | 6-10 | Deeper = stronger endgame but slower |
+| tail_solve_node_budget | 100K-1M | Node cap for alpha-beta search |
+| tail_solve_auxiliary_weight | 0.0-0.01 | Blend aux score into value; 0 = pure win/loss |
+
+Only for games that can implement `do_action_deterministic` cleanly. Games with heavy randomness (loveletter, coup, liarsdice) have too much stochasticity to freeze into a deterministic search — not worth implementing.
+
+---
+
+## Network Architecture (train.json::network)
+
+### Width by game complexity
+
+| Game complexity | Width | Depth (layers) | Residual | block_size |
+|----------------|-------|----------------|----------|------------|
+| Simple (tictactoe) | 128 | 4 | false | 2 |
+| Medium (loveletter) | 256 | 4 | false | 2 |
+| Complex (splendor, quoridor) | 512 | 12 | true | 2 |
+| Very complex (coup w/ belief) | 256 | 12 | true | 2 |
+
+### Rules of thumb
+- Residual connections essential for depth >= 6; `block_size: 2` (pairs of layers per residual block) is standard.
+- On desktop hardware (e.g. 9950X3D), going from 256 to 512 width has negligible throughput loss — prefer 512 when hardware allows.
+- Activation: always "relu" (no benefit from alternatives in this architecture).
+
+### Token transformer (`network.type: "token_transformer"`)
+
+A set transformer over entity tokens (cards, nobles, players, bank...) instead
+of one flat MLP input. Each slot gets a per-type projection plus an entity-id
+embedding and **no positional embedding**, so interchangeable slots (cards
+within a tier) are treated symmetrically; entity-bound actions (buy / reserve
+a specific card) are scored by a pointer head on that card's token. The ONNX
+input stays the flat feature vector, so the C++ inference path is unchanged.
+
+When to use: state is a set of entities with per-entity actions — card
+markets (Splendor) or a board's placed pieces and candidate cells
+(Carcassonne). For small fixed states the MLP is simpler and as good.
+Actions whose target has no fixed slot (a board cell, whose token moves as
+the set changes) use **anchors**: each token carries an anchor id unique in
+the state, and `anchor_action` binds (anchor, pointer head) to an action
+(mirror `CarcassonneTokenEncoder`). Collections without a natural cap (an Ark
+Nova hand) use a **variable-length** layout (`variable_tokens`, mirror
+`ArknovaTokenEncoder`): one token per entity present, token type in column 3,
+anchor or global bindings only, `feature_dim` 0; batches are padded to
+`padded_token_count` of their longest encoding (no TensorRT).
+
+How to enable for a game:
+1. Write a token encoder whose `token_layout()` returns a `TokenLayout`
+   (contract on the struct in `engine/core/feature_encoder.h`) and register
+   it as a separate variant id (mirror `splendor_tok`). The base game keeps
+   its MLP encoder, so old checkpoints stay valid.
+2. Put the network in a separate train file passed with `--train-config`
+   (mirror `games/splendor/config/train_transformer*.json`; fields: game-config).
+
+Sizing: the Splendor recipe is `d_model 128, num_layers 4, num_heads 4,
+ffn_dim 256` (about 0.6M parameters), small enough that selfplay is bound by
+evaluator latency (see [performance.md](performance.md) before growing it).
+Long token sets (carcassonne_tok: up to ~160) are attention-bound: `attention: "fused"`;
+grids use `token_positions` + `relative_position_radius` (`carcassonne_tok`, `harmonies_tok`).
+
+---
+
+## Training Steps by Game Emergence
+
+| Game | Typical steps | Episodes/step | When skill emerges |
+|------|--------------|---------------|-------------------|
+| tictactoe | 1000 | 50 | ~200 steps |
+| loveletter | 4000 | 100 | ~1000 steps |
+| quoridor | 10000 | 100 | ~3000 steps |
+| splendor | 20000 | 100 | ~5000 steps |
+| coup | 10000 | 100 | ~2000 steps |
+
+"Emergence" = a new play style or strategy pattern appears in selfplay (e.g. Coup starts bluffing, Quoridor starts using walls offensively). Judge by watching replays, not by loss curves.
+
+---
+
+## Learning Rate
+
+### By network size and game complexity
+
+| Config | lr | Examples |
+|--------|-----|---------|
+| Small network (2-4 layers, no residual) | 3e-4 ~ 5e-4 | tictactoe (5e-4), loveletter (3e-4) |
+| Large network, public/light hidden | 2e-4 ~ 3e-4 | quoridor (3e-4), azul (3e-4), splendor (2e-4) |
+| Large network, bluff/mixed strategy | 1e-4 ~ 1.5e-4 | coup (1.5e-4), 6nimmit (1.5e-4), liarsdice (1e-4) |
+
+Bluff games need lower lr because value signal is noisier (opponent behavior varies across determinizations).
+
+### lr_schedule
+Always use cosine schedule: `{ "type": "cosine", "lr_min": <lr/50 to lr/20> }`
+
+Example: `lr=2e-4, lr_min=4e-6` (50x decay).
+
+---
+
+## Batch Size and Replay
+
+Target **replay ratio ~1-2**: `ratio = batch_size * train_batches_per_step / (episodes_per_step * avg_plies)`. Adjust batch_size and train_batches_per_step to hit this range.
+
+| Field | Typical | Notes |
+|-------|---------|-------|
+| batch_size | 256-1024 | Larger = smoother gradients but slower per-step |
+| train_batches_per_step | 4-6 | Together with batch_size controls replay ratio |
+| replay_buffer_size | 20000-400000 | Size by how many steps of data to retain: `buffer = episodes_per_step * avg_plies * N_steps`. More steps = more diversity but older samples. |
+
+### Replay buffer and mixed-strategy oscillation
+
+For bluff / mixed-strategy games (Coup, Liar's Dice), replay buffer size directly affects strategy oscillation. The buffer acts as an inertial damper: gradient direction reflects the average over all samples in the buffer, not just the latest step. When the buffer is small, it turns over fast and the network chases recent trends. When large, old samples from both sides of the equilibrium coexist in the buffer and their gradients partially cancel, stabilizing the strategy.
+
+**Empirical observation**: the oscillation period is roughly 2x the number of steps the buffer holds. With the default buffer (~50 steps of data), Coup's bluff rate oscillates with a period of ~100 steps. Increasing to 200 steps of data (buffer=400,000 for Coup) roughly doubles the period and reduces the amplitude.
+
+For bluff games, prefer a large buffer (150-200 steps of data) over the default. The tradeoff is that the network trains on older data, but for mixed-strategy convergence the stabilization effect outweighs the staleness cost.
+
+---
+
+## Dirichlet Root Noise (train.json::mcts.selfplay ONLY)
+
+| Field | Purpose | Typical values |
+|-------|---------|---------------|
+| dirichlet_alpha | Noise concentration. Lower = more uniform, higher = more peaked. | 0.167 (quoridor), 0.33 (splendor), 1.0-1.2 (short games) |
+| dirichlet_epsilon | Noise weight (0=no noise, 1=all noise). | 0.25 (standard) |
+| dirichlet_on_first_n_plies | -1 = whole game. | -1 for most; explicit value to restrict noise to opening |
+
+### alpha by action space
+- Rule of thumb: `alpha ~ 10 / action_space_size`
+- tictactoe (9 actions): ~1.0
+- quoridor (~130 actions): ~0.08-0.17
+- splendor (70 actions): ~0.15-0.33
+- coup (~20 actions): ~0.5-1.2
+- loveletter (~10 actions): ~1.0
+
+---
+
+## temperature_schedule (train.json::mcts.selfplay)
+
+```json
+"temperature_schedule": {
+  "enabled": true,
+  "initial": 1.0,
+  "final": 0.1,
+  "decay_plies": 60
+}
+```
+
+- Start at 1.0 for exploration in opening.
+- Decay to 0.1 for exploitation in midgame/endgame.
+- `decay_plies`: game-dependent. ~40% of max_game_plies is a good starting point.
+- Bluff games (coup): consider `enabled: false` with flat `temperature: 1.0` -- exploration throughout is important.
+
+---
+
+## Heuristic Guidance (train.json::heuristic_guidance)
+
+| Field | Description |
+|-------|-------------|
+| name | Key into heuristic.json::named |
+| hold_steps | Steps at full guidance ratio before decay starts |
+| steps | **Absolute** step at which the ratio reaches 0 (linear decay from `hold_steps` to `steps`; must be > `hold_steps`). E.g. hold 100 / steps 1000 = 100 held + 900 decaying |
+| initial_ratio | 1.0 = 100% heuristic actions. 0.5 = 50/50. Default: **1.0**. `0.0` with `steps: 0` disables guidance. |
+| temperature | Heuristic action temperature. Default: **1.0** for games requiring mixed strategies (bluff/hidden-info), **0.0** (greedy) otherwise. |
+| until_win_rate | Hold until the eval win rate reaches a threshold, then decay (`steps: 0`; schema in `game-config/reference.md`). One 100-game eval is ±10%: raise `eval_games`. |
+
+Guidance duration by heuristic strength:
+- Strong heuristic (PV model from previous training run, or strong rule heuristic): `hold_steps: 1000, steps: 2000, initial_ratio: 1.0`
+- Medium heuristic (basic rule heuristic): `hold_steps: 100, steps: 200, initial_ratio: 1.0`
+
+---
+
+## Opponent Pool (train.json::training)
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| opponent_pool_enabled | false | Self-play vs past checkpoints |
+| opponent_pool_self_ratio | 0.5 | Fraction of games vs current model |
+
+Enable for bluff/deception games (coup, liarsdice) where playing only against self leads to exploitable strategies. The pool prevents strategy collapse.
+
+`selfplay_concurrency.opponent_pool_max_distinct`: max distinct ONNX models loaded for concurrent pool play (memory bound; 3 is typical).
+
+---
+
+## Belief Network (belief.json)
+
+Default recommendation: **match the PV network architecture** (same width, depth, residual, block_size). The belief net is smaller in input/output dims but benefits from the same capacity.
+
+| Field | Recommendation |
+|-------|---------------|
+| architecture | Same hidden_layers as PV network (e.g. 12x256 if PV is 12x256) |
+| residual / block_size | Same as PV network |
+| training.loss | "ce" for categorical outputs (Coup), "bce" for per-face marginals (6nimmit) |
+
+Belief logit temperature is framework-fixed at `1.0` and must not appear in
+`belief.json`; loaders reject it. Belief net trains alongside PV net — one SGD
+step per selfplay step, using belief samples emitted by the same episodes. No
+separate training run needed.

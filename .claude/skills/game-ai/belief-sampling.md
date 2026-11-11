@@ -1,0 +1,163 @@
+# Belief Sampling — Three Precision Tiers
+
+How to choose the sampling precision for `randomize_unseen` when a game has
+hidden per-player holdings. This page covers the **choice and the net-output
+shape**; the `randomize_unseen` interface contract (unseen-pool formula,
+byte-equal public hash, called once at MCTS world entry) is in
+[tracker.md](tracker.md) — read that first.
+
+The right tier is dictated by **what the game's mechanic depends on** and by
+**what the belief net can output soundly**. Worked examples: **Coup** (exact
+presence), **Maskmen** (expected counts), **Liar's Dice** (joint
+distribution).
+
+Every hidden-info game with a belief net follows the same three-stage
+pipeline. The three tiers differ in stages 1 and 2:
+
+```
+[1] belief net output  →  [2] posterior shaping  →  [3] randomize_unseen sampling
+```
+
+## How to choose the tier
+
+Ask what the game's legality/outcome depends on about an opponent's hidden
+holding:
+
+- **Does a specific card type's *presence* decide the result?** (bluff games
+  where a challenge hinges on "does this role exist") → **exact presence**.
+  The holding is small and discrete; the net can output a distribution over
+  complete configurations directly. → Coup.
+- **Does only the *expected count per type* matter, not who holds what?**
+  (trick-taking where strength is aggregate) → **expected counts**. The net
+  outputs per-type expectations; a matrix is harmonized so row/column
+  constraints hold. → Maskmen.
+- **Does the *joint composition* matter (a full hand configuration)?** (dice
+  poker where a bid's plausibility depends on the whole set of faces) →
+  **joint distribution**. The net outputs per-face marginals; IPF lifts them
+  to a joint over enumerated configurations, which is then sampled whole. →
+  Liar's Dice.
+
+Picking too coarse a tier loses signal (Maskmen-level expectation where Coup-
+level presence is needed → the AI can't tell a bluff from a real claim).
+Picking too fine a tier wastes capacity and makes the net harder to train
+(Liar's-Dice 252-way joint output where 36 marginal logits + IPF suffice).
+
+## Tier 1 — Exact presence (Coup)
+
+The net outputs a distribution over **complete discrete configurations** per
+opponent. No shaping — softmax is the posterior; sampling is categorical.
+
+```
+[1] net: per-opp two softmax branches
+      [0..14] = 15 two-card multisets   (kBeliefBranch2)
+      [15..19] = 5 single-card heads    (kBeliefBranch1)
+[2] none — softmax(/T) per branch is the posterior pi_hand_
+[3] randomize_unseen: pick the branch matching the opp's alive count,
+    sample one multiset, write it into the opp's influence slots
+```
+
+Coup is a bluff game: a challenge's outcome is decided by **whether a
+specific role exists** in the claimed player's hand. The holding is tiny (1-2
+influence cards), so all complete configurations are enumerable (15 two-card
+multisets + 5 singletons). The net can soundly output a categorical over them
+directly — no marginal/joint gap to bridge, so no IPF. The alive-count branch
+split (two-card vs single-card) reflects that a player with one influence left
+is on a different support than one with two.
+
+- `prepare_for_root` (coup_net_adapter.cpp): `softmax_branch` per opp, caches
+  `pi_hand_`.
+- `randomize_unseen`: `sample_branch` over the feasible multisets for the
+  opp's alive count.
+
+## Tier 2 — Expected counts (Maskmen)
+
+The net outputs **per-type expected counts** per opponent; a matrix is
+harmonized by IPF at *sampling time* so row sums (each opp's hand size) and
+column caps (each type's remaining total) both hold; then cards are drawn one
+at a time from a weighted urn.
+
+```
+[1] net: per-opp per-type expected count  ((N-1) × kTypeCount logits)
+      clamped to [1e-6, kCardsPerType]   →  pi_expected_
+[2] IPF at sampling time (randomize_unseen):
+      build (N-1) × kTypeCount expectation matrix M from pi_expected_
+      (uniform fallback: opp_total × col_target_t / total_unseen)
+      iterate: row-scale to opp hand sizes, column-scale to type caps
+      (30 iters, tol 1e-5)  →  harmonized M
+[3] weighted urn: draw (opp,type) with weight M[i][t] * cap_left[t],
+    decrement, repeat until all opp hands filled
+```
+
+Maskmen is a trick-taking-strength game: what matters is the **aggregate
+expected strength per type**, not which specific seat holds which card. The
+net cannot soundly output a joint over all possible deals (combinatorially
+huge), but it can output per-type expectations. IPF reconciles those
+expectations with the hard constraints (each opp holds a known number of
+cards; each type has a known remaining cap after subtracting own + played).
+The output is a continuous expectation matrix, sampled by a weighted urn —
+expectations, not exact deals, is the honest target.
+
+- `prepare_for_root` (maskmen_net_adapter.cpp): clamp logits → `pi_expected_`.
+- `randomize_unseen`: IPF (row/col rescale, 30 iters) then weighted urn.
+
+## Tier 3 — Joint distribution (Liar's Dice)
+
+The net outputs **per-face marginal distributions** (each face's count
+histogram); IPF at *posterior time* lifts them to a **joint over enumerated
+complete configurations**; sampling picks one whole configuration.
+
+```
+[1] net: per-opp 6 faces × 6 count-bins = 36 logits
+      per-face 6-way softmax(/T)  →  q_f[c] = P(n_f = c)   (marginals)
+[2] IPF at posterior time (prepare_for_root):
+      joint π[k] over 252 enumerated Σ=5 outcomes
+      init: π[k] = ∏_f q_f[n_f^(k)]   (renormalized)
+      iterate: for each face f, rescale π so its marginal in dim f == q_f
+      (10 iters, tol 1e-4)  →  pi_outcome_  (252-way joint)
+[3] randomize_unseen: per opp, sample one of 252 outcomes from pi_outcome_,
+    write the whole face-count vector into dice_count[opp]
+```
+
+Liar's Dice bids are evaluated against the **joint composition** of an
+opponent's dice — "there are at least N fives total" depends on the whole
+configuration, not any single face's marginal. The net cannot output a 252-way
+joint directly and train well, but it can output 6 independent per-face
+marginals. The catch: the 6 marginals are not jointly consistent (their
+product, renormalized onto the Σ=5 simplex, has marginals that drift away
+from the net's outputs because of the Σ constraint). **IPF fixes exactly
+this**: it iteratively rescales the joint until every per-face marginal
+matches the net's output, recovering a consistent joint. Then sampling draws
+a whole configuration — the joint, not any marginal, is the sampling target.
+
+- `prepare_for_root` (liarsdice_net_adapter.cpp): per-face softmax → IPF
+  over `kOutcomeCount` outcomes → `pi_outcome_`.
+- `randomize_unseen`: categorical sample from `pi_outcome_`, write whole
+  `Outcome`.
+- `outcome_index.cpp`: the 252-outcome enumeration + index (`index_to_outcome`).
+
+## The two IPFs are not the same
+
+Both Maskmen and Liar's Dice use IPF, but at **different stages for different
+purposes** — do not conflate them:
+
+| | Maskmen (Tier 2) | Liar's Dice (Tier 3) |
+|---|---|---|
+| Stage | sampling (`randomize_unseen`) | posterior (`prepare_for_root`) |
+| What IPF harmonizes | an **expectation matrix** (row = opp hand size, col = type cap) | a **joint distribution's marginals** (each face's count histogram) |
+| Output | continuous expectations (sampled by urn) | 252 probabilities (sampled categorically) |
+| Sampling unit | one card at a time (weighted urn) | one whole configuration (categorical) |
+| Why IPF | reconcile net's per-type expectations with hard count constraints | reconcile net's per-face marginals into a Σ-consistent joint |
+
+## Tier-selection invariant
+
+- The belief net's output shape is a **deliberate choice tied to the tier**:
+  complete-configuration categorical (Tier 1), per-type expectation (Tier 2),
+  or per-face marginal (Tier 3). Mismatching shape to tier = unsound
+  posterior.
+- IPF (either kind) must converge-guard: cap iterations, check for
+  non-finite / non-positive sums, and fall back rather than emit a corrupted
+  posterior. A diverged IPF silently biases every world the search samples.
+- When no belief model is installed (`extractor`/`evaluator` null), every tier
+  falls back to a uniform / multiset-derived sampler — never crash
+  (`pi_valid_ = false`). See tracker.md "randomize_unseen contract" for the
+  fallback's byte-equal-hash requirement.

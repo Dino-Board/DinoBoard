@@ -1,0 +1,66 @@
+{
+  "network": {
+    "type": "mlp",
+    "hidden_layers": [
+      256,
+      256,
+      256,
+      256,
+      256,
+      256,
+      256,
+      256,
+      256,
+      256,
+      256,
+      256
+    ],
+    "activation": "relu",
+    "residual": true,
+    "block_size": 2
+  },
+  "training": {
+    "episodes_per_step": 100,
+    "batch_size": 1024,
+    "train_batches_per_step": 6,
+    "learning_rate": 0.0003,
+    "lr_schedule": {
+      "type": "cosine",
+      "lr_min": 1e-05
+    },
+    "steps": 20000,
+    "eval_benchmarks": [
+      "heuristic_free"
+    ]
+  },
+  "mcts": {
+    "selfplay": {
+      "dirichlet_alpha": 0.33,
+      "dirichlet_epsilon": 0.25,
+      "simulations": 2000,
+      "temperature": 1.0,
+      "temperature_schedule": {
+        "enabled": true,
+        "initial": 1.0,
+        "final": 0.1,
+        "decay_plies": 60
+      }
+    },
+    "eval": {
+      "tail_solve_enabled": true,
+      "simulations": 400
+    }
+  },
+  "heuristic_guidance": {
+    "name": "pv_512x4",
+    "hold_steps": 1000,
+    "steps": 2000,
+    "initial_ratio": 1.0,
+    "temperature": 0.0
+  },
+  "runtime": {
+    "eval_every": 100,
+    "eval_games": 100,
+    "save_every": 100
+  }
+}

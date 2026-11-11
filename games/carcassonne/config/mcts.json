@@ -1,0 +1,7 @@
+{
+  "simulations": 1000,
+  "world_cap": 0,
+  "c_puct": 1.6,
+  "temperature": 0.0,
+  "opponent_selection": "puct"
+}

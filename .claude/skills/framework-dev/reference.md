@@ -1,0 +1,167 @@
+# Framework Development Reference
+
+## 1. Understand the Algorithm First
+
+Read `ALGORITHM_OVERVIEW.md` before changing anything. Key concepts:
+
+**ISMCTS over DAG**: each MCTS simulation samples a complete world at the root (via `tracker->randomize_unseen`), then descends through the DAG using PUCT selection. Nodes are keyed by `state_hash_for_perspective(current_player)` — same information set from different paths shares a node. UCT2 corrects multi-parent exploration bias. `step_count` in hash guarantees acyclicity.
+
+**GT/AI physical separation**: ground truth advances the game and broadcasts public snapshots. AI sessions only see the message stream — there is physically no interface to obtain truth. The belief tracker's `init` and `observe_public_event` take `AnyMap`, not `IGameState*`. The encoder reads a masked clone where viz=0 slots are placeholder. This is structural, not contractual.
+
+**Three RNGs, none shared**: `gt_rng` (GT runner, full game), `session_rng` (per AI session), `sim_rng` (sim-local, stack variable). None derived from another. RNG is NOT on state, NOT in hash, NOT on the wire.
+
+---
+
+## 2. Safety Red Lines
+
+### ABSOLUTE: No silent degradation
+
+**Every error must surface immediately.** This is the #1 rule of this codebase.
+
+- **NEVER** write `catch (...) { return false; }` — re-throw with context
+- **NEVER** write fallback logic that makes a broken system "still run"
+- **NEVER** return a default value that makes the caller think it succeeded
+- **NEVER** `dict.get(key, default)` in Python — use `dict["key"]`; missing key = bug, not default
+- **NEVER** swallow an exception, log it, and continue
+
+The rationale: BUG-011 — a silent `return false` in evaluate() caused weeks of training on uniform-random policy with no one noticing. Every metric looked "normal" because the system degraded silently.
+
+### ABSOLUTE: AI cannot read truth
+
+- `IBeliefTracker::init` / `observe_public_event` signatures do NOT take `IGameState*` — never add one
+- `IFeatureEncoder::encode_features` takes `const IGameState& masked_state` — viz=0 slots are already placeholder
+- `randomize_unseen` is the WRITE side (filling viz=0), not a read into truth
+- MCTS root state is always the AI session state, never truth
+- Session viz=0 slots are unread bytes — hash uses `kHiddenHashSentinel`, encoder uses `kPlaceholder`
+
+### ABSOLUTE: do_action_fast does NOT support undo
+
+- No `undo_stack.push_back()` in `do_action_fast_impl`
+- No viz snapshot in `do_action_fast_impl`
+- Undo is ONLY for `do_action_deterministic_impl` (tail solver path)
+- If you find yourself adding undo preparation to fast path, stop — that's the bug
+
+### ABSOLUTE: Value head is N-dimensional
+
+- Output `[batch, num_players]`, never scalar
+- `values[0]` = acting player, perspective-relative
+- `value_len < num_players` throws — no scalar-2p fallback
+
+### CRITICAL: GIL release
+
+- Any pybind11 binding doing meaningful C++ work MUST wrap in `py::gil_scoped_release`
+- Without it, ThreadPoolExecutor offloading is a no-op and the web UI freezes per move
+
+### CRITICAL: New params must flow end-to-end — verify, don't assume
+
+When you add a knob (config field, profile field, function parameter, kwarg), every layer in the chain has its own default. A missing forward at any layer silently falls back to that layer's default — NEVER errors out. The user sees a config setting, the actual run uses something else, and metrics look "fine." This is the silent-degradation pattern at the API-glue level.
+
+**Past examples this codebase ate**:
+- `top_k`: `mcts_profile._BASE_DICT["top_k"]=0` was set, but `platform/ai_service/sessions.py::decide()` never forwarded `top_k` to `get_ai_action()`, and the C++ binding's `py::arg("top_k") = 3` default ate it. `web.json::web_expert.top_k=3` happened to match by coincidence; if the user had set 5, the web would still use 3 silently.
+- Belief temperature: a temperature param existed in the config but the binding signature stripped it before reaching the C++ evaluator. Belief distributions were too sharp/flat; MCTS world sampling was biased; bluff games (liarsdice especially) trained on a corrupted prior for weeks.
+
+**Mandatory check whenever you add or rename a param**:
+
+1. **Walk the chain manually** — config file → profile loader → Python caller(s) → pybind11 binding signature → C++ function param → C++ struct field → consumer (MCTS / evaluator / search). At every hop verify the param name appears, no `**kwargs` swallowing it, no default eating it.
+2. **`grep -rn '<param_name>' .` and read every hit.** A hit count of 1 (config only) means the param goes nowhere.
+3. **Make defaults match across layers.** If Python `_BASE_DICT["x"]=0` is the source of truth, the C++ `py::arg("x") = 0` default must agree. Mismatched defaults = layer that gets skipped silently uses the wrong value.
+4. **Prefer explicit unwrap over kwargs forwarding.** `kwargs = dict(...); fn(**kwargs)` hides which fields actually exist. Spell out every field at the binding boundary so a missing one is a syntax error, not a silent fallback.
+5. **Write a one-liner test that proves it flows.** Set the param to a sentinel value at the top, stub the bottom, assert the sentinel arrives. Without this test, the silent-fallback bug is invisible.
+
+---
+
+## 3. Framework Code Map
+
+| Directory | Contents | Hot path? |
+|-----------|----------|-----------|
+| `engine/search/net_mcts.cpp` | MCTS search — PUCT, DAG, UCT2, root determinization | **Hottest** — millions of calls per training step |
+| `engine/search/tail_solver.cpp` | Alpha-beta endgame solver | Hot when enabled |
+| `engine/core/game_interfaces.h` | IGameState, IGameRules base classes | Interfaces only |
+| `engine/core/game_registry.h` | GameBundle, type aliases, install_event_protocol | Registration |
+| `engine/core/schema_hash.h` | state_hash_for_perspective, make_masked_state | Hot — called per MCTS step |
+| `engine/core/masked_state.h` | make_masked_state (clone + mask hidden slots) | Hot — called per MCTS step |
+| `engine/core/feature_encoder.h` | IFeatureEncoder base | Interface |
+| `engine/core/belief_tracker.h` | IBeliefTracker base | Interface |
+| `engine/core/viz_runtime.h` | reveal_slot, reveal_slot_to, reset_to_base, apply_full_slice | Called by rules |
+| `engine/runtime/selfplay_runner.cpp` | Per-seat session state, public-event protocol, episode loop | Medium hot |
+| `engine/runtime/arena_runner.cpp` | Same for arena matches | Medium hot |
+| `engine/infer/batched_policy_value_evaluator.h` | Thread-safe batched ONNX inference | Hot when concurrent |
+| `engine/infer/evaluator_pool.h` | Multi-model dedup for opponent pool | Medium |
+| `bindings/py_engine.cpp` | pybind11 bindings — all Python↔C++ calls | Entry points |
+
+---
+
+## 4. Performance Hot Paths (from audit)
+
+When optimizing, these are the measured bottlenecks:
+
+1. ~~**make_masked_state every descent step**~~ — **FIXED**: descent now hashes the live state directly; only materializes masked clone on DAG cache miss (for the encoder).
+
+2. ~~**validate_action every descent step**~~ — **FIXED**: now behind `--safe-mode` flag (default off).
+
+3. ~~**Splendor apply_action_copy double legal check**~~ — **FIXED**: redundant check removed.
+
+4. **sim tracker clone before-state for event diff** — every sim step clones state just so the event extractor can diff before/after. Future optimization: typed events from rules directly.
+
+5. **Per-field schema hash small allocations** — `hash_field_bulk` overrides exist for 6nimmit, should be added for other large games (azul, splendor, coup).
+
+6. ~~**node_index no reserve**~~ — **FIXED**: now reserves `max(512, simulations * 2)`.
+
+7. ~~**root_edge_values maintained on training path**~~ — **NOT WORTH IT**: only N floats per backup-to-root (one per sim), and `root_values` is consumed by web win-rate display for all profiles. Complexity cost exceeds savings.
+
+8. **Batched evaluator per-leaf allocations** — features/legal_mask/request/input/logits have multiple small allocations per leaf eval.
+
+---
+
+## 5. Testing After Framework Changes
+
+```bash
+# Build
+python3 setup.py build_ext --inplace
+
+# Full test suite (mandatory — framework changes affect ALL games)
+python3 scripts/run_tests.py -j 8
+
+# Safe-mode validation (catches hash/schema bugs — validates DAG edges at every descent step)
+python3 scripts/eval_model.py --game 6nimmit \
+  --model games/6nimmit/model/6nimmit_2p.onnx \
+  --opponent heuristic --games 20 --workers 1 \
+  --output /tmp/safe --no-save --safe-mode
+
+# Multi-game smoke test
+for g in tictactoe quoridor azul splendor loveletter coup 6nimmit liarsdice; do
+  python3 scripts/eval_model.py --game $g \
+    --model games/$g/model/${g}_2p.onnx \
+    --opponent heuristic --games 5 --workers 1 \
+    --output /tmp/smoke --no-save
+done
+```
+
+---
+
+## 6. Invariants to Preserve
+
+These are enforced by CI tests. Breaking any one = immediate test failure:
+
+| Invariant | Test |
+|-----------|------|
+| Rules are the sole game-side viz writer | `test_rules_sole_viz_writer` |
+| Public hash excludes internal RNG | `test_public_hash_excludes_internal_rng` |
+| Encoder output bit-equal when opponent private changes | `test_encoder_respects_hash_scope` |
+| Public snapshot round-trips cleanly | `test_public_snapshot_round_trip` |
+| Tracker perspective-invariant | `test_tracker_perspective_invariance` |
+| DAG acyclic via step_count | `test_dag_reuse` |
+| do/undo perfect inverse | `test_do_undo_restores_state_dict` |
+| Framework carrier tests on [quoridor, azul, loveletter] | `FRAMEWORK_GAMES` in conftest.py |
+| Capability-driven tests auto-enroll via manifest.json | `games_with_capability()` |
+
+---
+
+## 7. Common Mistakes When Changing Framework
+
+- **Adding a field to IGameState that affects search but isn't in schema** — hash won't see it, DAG silently weakens. Every field that affects legal_actions or game outcome must be a schema slot.
+- **Reading truth in a path that should only see masked state** — the four pillars (tracker no IGameState*, encoder takes masked_state, hash uses sentinel, session doesn't freshen viz=0) exist to prevent this. Don't add new code paths that bypass them.
+- **Changing hash scope without updating encoder scope** — hash and encoder must read the same set of viz=1 slots. Misalignment = DAG nodes that share a hash but encode differently = silent training corruption.
+- **Adding undo logic to do_action_fast** — fast path is for MCTS/selfplay/web, called millions of times. Undo is only for tail solver's do_action_deterministic.
+- **Holding GIL during MCTS** — web UI freezes. Every pybind11 binding with significant C++ work needs `py::gil_scoped_release`.
+- **Assuming RNG is on state** — it's not. Three independent RNGs held by callers. State has `step_count_` and `viz_` as framework fields, nothing else.

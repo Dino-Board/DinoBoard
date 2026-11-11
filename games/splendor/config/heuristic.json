@@ -1,0 +1,24 @@
+{
+  "named": {
+    "rule_v1": {
+      "type": "rule"
+    },
+    "pv_512x4": {
+      "type": "mcts_pv",
+      "model_path": "games/splendor/model/splendor_2p.onnx",
+      "simulations": 1000,
+      "c_puct": 1.6,
+      "leaf_batch_size": 8
+    }
+  },
+  "selectors": {
+    "eval_vs_heuristic": {
+      "name": "pv_512x4",
+      "temperature": 0.0
+    },
+    "web": {
+      "name": "rule_v1",
+      "temperature": 0.0
+    }
+  }
+}

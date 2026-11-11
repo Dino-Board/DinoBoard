@@ -1,0 +1,228 @@
+---
+description: Diagnose training issues — symptom-to-cause checklist, concurrent inference setup, config principles, param-flow verification, known BUGs
+globs:
+  - "games/**/config/train.json"
+  - "training/**/*.py"
+alwaysApply: false
+---
+
+# Training Diagnostics
+
+Symptom-to-cause checklist, concurrent inference setup, config principles, and known training BUGs.
+
+---
+
+## Diagnostic Checklist
+
+| # | Symptom | Likely Cause | Fix |
+|---|---------|-------------|-----|
+| 1 | Self-play loss not decreasing | Normal -- opponent also improves | Not a bug. Monitor eval win-rate instead. |
+| 2 | Eval win-rate drops after initially rising | Learning rate too high causing catastrophic forgetting | Reduce lr or use cosine schedule with lower lr_min |
+| 3 | Training loss NaN | Learning rate too high, or batch_size too small | Halve lr; ensure batch_size >= 256 |
+| 4 | Gating never accepts new model | Threshold too aggressive for game variance | Lower gating_accept_win_rate; increase eval_games for tighter CI |
+| 5 | Gating always accepts (best = latest) | Threshold too loose, or eval too short | Increase eval_games; verify eval simulations match selfplay |
+| 6 | ONNX export fails | Feature dim mismatch between Python model and C++ encoder | Run `game_metadata(game_id)` to get correct dims from C++ |
+| 7 | Selfplay episodes very slow | Missing selfplay_concurrency, or GIL not released | Enable selfplay_concurrency; verify pybind11 wrappers release GIL |
+| 8 | "Unknown game" error at startup | Game not in manifest.json or not compiled | Check games/manifest.json `enabled: true`; rebuild with `python3 setup.py build_ext --inplace` |
+| 9 | Value head outputs wrong shape | num_players mismatch | Verify game.json variants match C++ state's num_players |
+| 10 | "Tuned a config knob, no effect on training/eval" | Param defined in config/profile but never forwarded through one of the layers (CLI → pipeline → worker → binding → C++). Each layer's own default silently absorbs the missing arg. | See [Always verify param-flow](#always-verify-param-flow) below. `grep -rn '<param>'` and walk the chain before assuming the change took effect. |
+
+---
+
+## Learning Rate Symptoms
+
+### Too high
+- Loss spikes / NaN early in training
+- Eval win-rate oscillates or drops after initial rise
+- Model "forgets" previously learned patterns
+
+### Too low
+- Win-rate improves very slowly (flat for hundreds of steps)
+- Self-play games look random even after many steps
+- No difference between early and late checkpoints
+
+### Sweet spot indicators
+- Smooth loss decrease (policy loss + value loss)
+- Eval win-rate steadily climbs vs heuristic
+- Policy entropy decreases gradually (not collapsing to 0)
+
+---
+
+## Batched Concurrent Inference
+
+### Architecture
+Without concurrency: each self-play game runs MCTS sequentially, one neural-net eval per sim.
+With concurrency: multiple games run on threads; NN evals are batched and dispatched together.
+
+Speedup: 3-10x depending on batch fill rate and model size.
+
+### Config (train.json::training.selfplay_concurrency)
+
+```json
+"selfplay_concurrency": {
+  "enabled": true,
+  "evaluator": {
+    "batch_size": 100,
+    "batch_timeout_us": 30,
+    "max_queue_size": 256,
+    "intra_op_num_threads": 1,
+    "providers": []
+  }
+}
+```
+
+| Field | Tuning guidance |
+|-------|----------------|
+| batch_size | Match to episodes_per_step or lower. Higher = better GPU utilization but higher latency. |
+| batch_timeout_us | Microseconds to wait for batch fill. 30 is aggressive (good for many concurrent games). Raise to 100-500 if few games. |
+| max_queue_size | 256 is safe. Raise if you see "queue full" warnings. |
+| intra_op_num_threads | 1 for CPU inference (ONNX default parallelism per op). Raise for large models. |
+| providers | Empty = CPU. Add "CUDAExecutionProvider" for GPU. |
+
+### CLI flags
+```bash
+# Standard training
+python3 -m training.cli --game splendor --output runs/splendor_run --workers 4
+
+# With GPU provider
+python3 -m training.cli --game splendor --output runs/splendor_run --workers 100 --providers cuda,cpu
+```
+
+### Opponent pool with concurrency
+```json
+"selfplay_concurrency": {
+  "enabled": true,
+  "opponent_pool_max_distinct": 3,
+  "evaluator": { ... }
+}
+```
+`opponent_pool_max_distinct`: max ONNX models loaded simultaneously. Each model gets its own inference batch queue. Memory usage scales linearly.
+
+### Batched Inference Internals
+
+**BatchedBeliefEvaluator**: mirrors `BatchedPolicyValueEvaluator` but for belief
+net inference. Configured via the same `selfplay_concurrency.evaluator` block.
+Automatically instantiated when `belief_model_path` is set and
+`selfplay_concurrency.enabled` is true. Shares the batch-timeout / queue-size
+knobs with the PV evaluator.
+
+**EvaluatorPool**: manages multiple `BatchedPolicyValueEvaluator` instances (one
+per distinct model path). `get_or_create(model_path)` deduplicates so concurrent
+arena and opponent-pool games that reference the same checkpoint share a single
+GPU/ONNX session. Used internally by the selfplay runner and arena runner.
+
+**Hot-swap**: `MctsPVHeuristic::replace_evaluator(new_ptr)` swaps the underlying
+evaluator pointer without re-creating the heuristic object. Used during training
+when a new model checkpoint is exported to ONNX — the pipeline hot-swaps the
+evaluator rather than tearing down and re-loading the full ONNX session from
+scratch. The old evaluator is released after all in-flight sims drain.
+
+---
+
+## Config Principles
+
+### Explicit real-knob rule
+Every required config block/key must be present and explicit. MCTS profiles do
+start from `_BASE_DICT` defaults, but profile files reject unknown fields and
+loaders reject legacy/decorative knobs. This prevents silent misconfiguration
+where you think a field is active but no runtime path consumes it.
+
+### Banned legacy keys
+These keys in `train.json::training` cause hard ValueError:
+- `heuristic_guidance_name` (use top-level `heuristic_guidance.name`)
+- `heuristic_guidance_ratio` (use `heuristic_guidance.initial_ratio`)
+- `heuristic_guidance_steps` (use `heuristic_guidance.steps`)
+- `heuristic_temperature` (use `heuristic_guidance.temperature`)
+
+### Independent selectors
+Three separate heuristic selectors exist, each picks independently:
+1. `train.json::heuristic_guidance.name` -- training-time guidance schedule
+2. `heuristic.json::selectors.eval_vs_heuristic.name` -- eval baseline opponent
+3. `heuristic.json::selectors.web.name` -- web "heuristic" difficulty opponent
+
+Changing one does NOT affect the others.
+
+### Profile field validation
+Unknown fields in mcts.json, train.json::mcts.*, or web.json profiles raise ValueError with the field name and allowed set. This catches typos immediately.
+
+---
+
+## Always verify param-flow
+
+When tuning anything (training cfg, MCTS knob, profile field, web setting), **don't assume your config change took effect — verify the param actually reaches the C++ kernel that uses it.** Every glue layer has its own default; a missing forward at any hop silently falls back to that default. The config file says X, the run uses Y, no error, no warning.
+
+**The five-layer chain (typical training knob)**:
+```
+games/<id>/config/<file>.json
+  ↓ training/mcts_profile.py::resolve_profile()       (profile loader)
+  ↓ training/pipeline.py                              (selfplay/eval/gating dispatch)
+  ↓ pybind11 binding (bindings/py_engine.cpp)        (each Python kwarg mapped to a C++ param)
+  ↓ engine/runtime/*_runner.cpp                       (per-episode SelfplayConfig / ArenaPlayerConfig)
+  ↓ engine/search/net_mcts.cpp                        (the loop that actually reads the value)
+```
+
+Every web knob has the same shape but ends at `platform/{ai,game}_service/sessions.py → get_ai_action()` instead of selfplay_runner.
+
+**Mandatory checks when tuning or adding a knob**:
+
+1. `grep -rn '<param_name>' .` — every layer above must show a hit. If you only see the config and the C++ struct field, the middle is dead.
+2. **Diff defaults across layers**. If `_BASE_DICT["x"]=0` but `py::arg("x")=3` and `SelfplayConfig::x=3`, anyone who skips a layer gets the wrong value. Make defaults agree.
+3. **Avoid kwargs forwarding at glue boundaries.** `kwargs = dict(...); fn(**kwargs)` is exactly where new params silently get dropped — the dict literal lists what flows; a missing key is invisible. Spell every field at the binding call site.
+4. **Test by setting a sentinel, not the production value.** Set the param to a deliberately weird value in config; if the run behaves identically to the default, the param isn't reaching the kernel.
+5. **For web specifically**: web has TWO entry points (`platform/ai_service/sessions.py`, `platform/game_service/sessions.py`) plus the analysis precompute path in `platform/game_service/pipeline.py`. All three need updating when a profile field becomes relevant to web — one missed file = one silently-wrong path.
+
+**Past examples of this bug class**:
+- **`top_k`**: `_BASE_DICT["top_k"]=0` was correct; `web.json::web_expert.top_k=3` was correct; but `_resolve_strength()` in `ai_service/sessions.py` didn't read `profile.top_k`, and `decide()` didn't forward it to `get_ai_action()`. C++ binding's `py::arg("top_k") = 3` filled in. The web happened to behave correctly only because the binding default matched coup/liarsdice's `web_expert.top_k=3` by coincidence. If anyone had set 5, the web would've used 3 silently. Other 6 games' `web.json` had no `top_k` set, so they ran on the binding's default 3 — not the `_BASE_DICT` 0 the user thought.
+- **Belief network temperature**: temperature config existed at the profile level but was dropped before reaching the C++ belief evaluator. Belief distributions came out at temperature 1.0 always, regardless of config. World sampling in MCTS drew from a biased prior. Bluff games (especially liar's dice) trained on corrupted hidden-state distributions for weeks; v_loss looked fine because the bias was self-consistent.
+
+Both bugs were invisible to every test, every metric, and every loss curve. Only end-to-end gameplay degradation eventually surfaced them. **Check param-flow during the tuning task, not after a multi-week regression**.
+
+---
+
+## Known Training BUGs
+
+### BUG-002: Value head scalar regression
+**Symptom**: 2p game trains fine, 3p/4p game value head outputs garbage.
+**Cause**: Value head outputting scalar instead of N-dim vector.
+**Fix**: Value head must output num_players dimensions. Training targets use `z_values` (per-player vector), not scalar `z`.
+
+### BUG-003: evaluate() returning false silently
+**Symptom**: Training appears to run but eval never improves.
+**Cause**: ONNX evaluation failure caught and returned as false, caller continued with garbage values.
+**Fix**: evaluate() must throw on failure. `catch(...){return false}` is banned.
+
+### BUG-006: Feature dim mismatch
+**Symptom**: ONNX model loads but produces wrong outputs.
+**Cause**: Python model created with hardcoded feature_dim that didn't match C++ encoder.
+**Fix**: Always use `game_metadata(game_id)["feature_dim"]` from C++.
+
+### BUG-015: Dirichlet applied during eval
+**Symptom**: Eval results noisy and unreliable.
+**Cause**: Eval profile accidentally inherited non-zero dirichlet from a shared config.
+**Fix**: Dirichlet defaults to 0/0/0 in baseline. Only selfplay profile sets non-zero.
+
+### BUG-016: Stale replay buffer
+**Symptom**: Training loss decreases but model plays badly.
+**Cause**: replay_buffer_size too large relative to episodes_per_step; model trains on very old data.
+**Fix**: replay_buffer_size should hold ~10-20 steps worth of data.
+
+### BUG-018: Temperature in eval
+**Symptom**: Eval games look random.
+**Cause**: eval profile inherited temperature=1.0 from baseline.
+**Fix**: Baseline temperature defaults to 0.0; eval profile should not override.
+
+### BUG-019: Opponent pool memory leak
+**Symptom**: Training process OOM after many steps.
+**Cause**: Old ONNX models not unloaded when rotated out of opponent pool.
+**Fix**: selfplay_concurrency.opponent_pool_max_distinct caps loaded models.
+
+### BUG-038: GIL contention in concurrent selfplay
+**Symptom**: Concurrent selfplay no faster than sequential.
+**Cause**: pybind11 binding for MCTS not releasing GIL; ThreadPoolExecutor workers all block on GIL.
+**Fix**: Wrap C++ work in `py::gil_scoped_release` in the pybind11 binding.
+
+### DEC-001: Self-play loss not decreasing
+**Decision**: Documented as normal behavior. Self-play loss is not a training quality signal because the opponent improves at the same rate. Eval win-rate vs fixed baseline is the correct metric.
+
+### DEC-002: Gating threshold auto-scaling
+**Decision**: Gating threshold scales with num_players: `threshold = 1/N + z * sqrt((1/N)(1-1/N)/eval_games)`, with `z=1.0` ("one standard error above the null"). Anchor: 2p @ 100 games → 0.55. Sample values at 100 games: 2p=0.5500, 3p=0.3805, 4p=0.2933. 3p/4p look closer to baseline because Bernoulli variance `p(1-p)` is smaller off-center; same statistical bar, smaller absolute margin. Override per game by setting `gating_accept_win_rate` in train.json.

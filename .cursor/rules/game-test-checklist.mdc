@@ -1,0 +1,99 @@
+---
+description: "11-step game acceptance test checklist — what to test, which functions"
+globs:
+  - "tests/**"
+alwaysApply: false
+---
+
+# 11-Step Game Acceptance Test Checklist
+
+## Quick start
+
+1. Copy the nearest existing `tests/<game>/test_checklist.py`
+2. Change `GAME = "<your_game>"` (or `GAME = "<your_game>_2p"` for variants)
+3. Adapt game-specific assertions (public keys, rule invariants)
+4. Run: `pytest tests/<game>/ -v`
+5. All green = game is ready for framework integration
+
+## Checklist table
+
+| Step | Test name / function                           | What it verifies                                          |
+|------|------------------------------------------------|-----------------------------------------------------------|
+| 1    | test_registry_and_config_consistency           | Game registered in manifest.json, `dinoboard_engine.available_games()` includes it, game.json + train.json parse without error |
+| 2    | test_game_session_basic                        | GameSession creates, get_state_dict works, get_legal_actions non-empty at start, apply_action doesn't crash |
+| 3    | test_do_undo_consistency                       | MCTS/search leaves public `GameSession` state unchanged; direct C++ do/undo is not exposed through the Python session API |
+| 4    | test_feature_encoding                          | Encoder produces correct feature_dim, no NaN/Inf, output changes when state changes (BUG-007 regression) |
+| 5    | test_selfplay_sample_integrity                 | run_short_selfplay returns valid episode with samples, z_values present and zero-sum |
+| 6    | test_onnx_roundtrip                            | Export random model to ONNX, load it back, inference matches PyTorch output |
+| 7    | test_training_tensor_validation                | Training tensors (features, policy, value) have correct shapes, no NaN, policy sums to ~1 |
+| 8    | test_optional_components                       | If game registers heuristics/tail_solver/adjudicator/stats_extractor, each runs without crash |
+| 9    | test_multiplayer_variants                      | For games with N>2 variants: each variant creates, plays, terminates correctly |
+| 10   | test_ai_api_separation                         | API session driven by observations only produces same belief/public-state/legal-actions as selfplay (uses assert_api_belief_matches_selfplay) |
+| 11   | test_rule_invariants                           | Game-specific invariants hold at every ply of random episodes (uses run_random_episode_states) |
+
+## Step details
+
+### Step 1: Registry and config
+Verifies manifest.json entry exists with correct id, capabilities declared,
+game.json and train.json load. Uses `load_game_config(GAME)` from conftest.
+
+### Step 2: GameSession basic
+Creates GameSession with seed, empty model_path, use_filter=False. Checks
+state_dict has expected top-level keys, legal_actions is a non-empty list,
+apply_action with a legal action doesn't raise.
+
+### Step 3: Do/undo consistency
+The Python `GameSession` API does not expose `do_action_deterministic` or
+`undo_action` directly. Framework coverage therefore checks the observable
+contract: running MCTS/search must not mutate `state_dict`, legal actions, or
+encoded features, and repeated deterministic searches should produce identical
+results.
+
+### Step 4: Feature encoding (BUG-007 regression)
+BUG-007: encoder returned all-zeros for some states because a field was
+uninitialized. Test drives random states, encodes each, asserts no all-zero
+vectors and no NaN/Inf values. Uses `dinoboard_engine.encode_state()`.
+
+### Step 5: Selfplay sample integrity
+Uses `run_short_selfplay(GAME)` from conftest. Checks episode has `samples`,
+each sample has `features`, `policy`, `z_values`. z_values must satisfy
+zero-sum (sum approximately 0).
+
+### Step 6: ONNX roundtrip
+Uses `get_test_model(GAME)` to export, then loads via engine and runs inference.
+Compares ONNX output to PyTorch output for the same input tensor.
+
+### Step 7: Training tensor validation
+Loads a selfplay episode, extracts training tensors, checks shapes match
+config (feature_dim, action_space, num_players). Policy vector sums to ~1.
+
+### Step 8: Optional components
+Sub-steps per component:
+- **Heuristics**: each named heuristic in heuristic.json runs `pick()` without crash
+- **Tail solver**: `solve()` returns a valid TailSolveResult on a near-terminal state
+- **Adjudicator**: returns -1 on non-terminal, valid player on terminal
+- **Stats extractor**: returns a dict of string->double after a full episode
+
+### Step 9: Multiplayer variants
+Parametrize over variant ids (e.g. base `"azul"` for 2p, plus `"azul_3p"` and `"azul_4p"`).
+Each variant creates, runs random actions to termination, checks winner
+is in range [0, num_players).
+
+### Step 10: AI API separation
+For hidden-info games with public_event_extractor. Uses the conftest helper:
+```python
+assert_api_belief_matches_selfplay(
+    GAME, public_keys=["field1", "field2", ...],
+    perspective=0, seed_gt=42, seed_ai=9999,
+)
+```
+Three-layer assertion: belief matches, public state matches, legal actions match.
+
+### Step 11: Rule invariants
+Game-specific. Uses `run_random_episode_states(GAME)`:
+```python
+for state in run_random_episode_states(GAME, seed=s):
+    assert_my_invariants(state)
+```
+Examples: piece counts conserved, score non-negative, board dimensions valid,
+no player has negative resources, etc.

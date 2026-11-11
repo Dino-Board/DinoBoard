@@ -1,0 +1,125 @@
+---
+description: "Tail solving in stochastic games — freeze randomness, stochastic_tail_solve_safe (Splendor, Azul)"
+globs:
+  - "games/**/*_rules.*"
+alwaysApply: false
+---
+
+# Tail Solving in Stochastic Games — Pure Game-Side Recipe
+
+How to wire an alpha-beta endgame solver (`AlphaBetaTailSolver`) into a game
+with physical randomness, so the solver never "peeks" at hidden chance
+outcomes and produces a proven-win strategy that is only correct against one
+realization. Worked examples: **Splendor** and **Azul**.
+
+## The hazard
+
+The tail solver expands the game tree assuming each branch is **deterministic**
+— it does alpha-beta, which is only sound if a chosen action leads to a fixed
+successor. If `do_action_deterministic` advances the game by drawing from a
+hidden deck / bag, the solver sees the *true* draw (it runs on truth during
+selfplay) and finds a "win" that depends on that specific card. That win
+poisons the training sample: the policy target encodes a strategy that only
+works because the solver cheated the random. This is the
+`belief_tracker + tail_solver` unsafe combination the framework guards
+(`create_game` throws unless `stochastic_tail_solve_safe = true`).
+
+## The fix: freeze randomness into a draw-terminal
+
+`do_action_deterministic_impl` is the solver's action API (separate from
+`do_action_fast`, supports undo). The recipe: **any action that would trigger
+a hidden/physical random draw is made to produce a draw-terminal
+(`winner = -1`) instead of executing the draw.** The alpha-beta search then
+hits a terminal leaf at that branch and never descends into randomness. The
+solver only reasons over the deterministic portion of the endgame.
+
+This is a proof obligation: you set `stochastic_tail_solve_safe = true` only
+after verifying `do_action_deterministic` never consumes a hidden chance
+outcome. The flag is opt-in acknowledgment, not a switch that makes it safe.
+
+### Registration
+
+```cpp
+b.tail_solver = std::make_unique<board_ai::search::AlphaBetaTailSolver>();
+b.stochastic_tail_solve_safe = true;   // PROOF: do_action_deterministic freezes draws
+
+b.tail_solve_trigger = [](const IGameState& state, int /*ply*/) -> bool {
+  // Return true only when the remaining subgame is small AND deterministic.
+  // ...
+};
+
+b.auxiliary_scorer = [](const IGameState& state, int player,
+                        int depth_remaining) -> float {
+  // Tiebreak among proven wins. Solver multiplies by auxiliary_weight
+  // (typ. 0.01) so the bonus stays << 1.0 and never lifts a non-terminal
+  // cutoff into proven-win range.
+  // ...
+};
+```
+
+### do_action_deterministic_impl
+
+Override to (a) support undo (push `UndoToken`), and (b) freeze randomness:
+
+```cpp
+UndoToken do_action_deterministic_impl(IGameState& state, ActionId a) const override {
+  // ... normal deterministic advance ...
+  // When the action would trigger a hidden/random draw:
+  //   force a draw-terminal (winner = -1) and return WITHOUT drawing.
+  // The tail solver hits a terminal here instead of consuming the draw.
+}
+```
+
+## Worked examples
+
+### Splendor — hidden deck, freeze the refill
+
+Splendor has a hidden deck + belief tracker. `do_action_deterministic` sets
+`forced_draw_override = -2` so replenishing the visible tableau tier **skips
+drawing from the hidden deck** — the branch terminates as a draw rather than
+peeking the next card. Trigger: any player has ≥10 prestige (the endgame is
+near-deterministic once no more deck draws decide the outcome).
+Auxiliary scorer: `depth_remaining + 0.1 * normalized_margin` — prefer faster
+wins, tiebreak on bigger prestige margin (normaliser 15 = win threshold).
+
+### Azul — public bag, freeze the round refill
+
+Azul has **no tracker** (the bag is `all_public`), but it still has **physical
+randomness** (drawing tiles from the bag). The hazard is the same: the solver
+would see the true bag draw. `do_action_deterministic` forces a draw-terminal
+(`winner = -1`) whenever an action would trigger a round-end factory refill —
+the only source of physical randomness. The solver therefore never descends
+into a draw, even though Azul has no hidden information.
+
+> Note: `stochastic_tail_solve_safe` is not "hidden-info only." Any game whose
+> `do_action_deterministic` would consume a random outcome — public bag
+> (Azul) or hidden deck (Splendor) alike — must freeze it. The flag guards
+> *randomness*, not just *hiddenness*.
+
+Azul trigger: ≥4 tiles in some pattern-line row AND ≥2 factories empty —
+"round nearly resolved, wall placement imminent," a small deterministic
+subgame. Auxiliary scorer: pure margin (`my − max_opp`) / 100, **no speed
+bonus** — Azul endgame scoring rewards finishing patterns that correlate with
+longer-game outcomes, so preferring faster wins would trade away points.
+(`depth_remaining` unused.)
+
+## Invariants
+
+- `stochastic_tail_solve_safe = true` is a **proof obligation**, set only
+  after `do_action_deterministic` is verified to never consume a hidden or
+  random outcome. The framework cannot verify this for you — it is
+  game-logic-dependent.
+- `do_action_deterministic_impl` must support undo (`UndoToken` push) — it
+  is the ONLY path the tail solver walks. `do_action_fast_impl` must NOT push
+  undo (hot path; see `state.md`).
+- `tail_solve_trigger` must fire only when the remaining subgame is both
+  **small** (solver budget) and **deterministic** (no draws left that the
+  freeze can't reach). A trigger that fires mid-randomness wastes solver
+  effort on draw-terminals.
+- The auxiliary scorer's contribution must stay `< 1.0` after
+  `auxiliary_weight` so it tiebreaks among proven wins without ever turning a
+  non-terminal cutoff into a fake proven win. Match the normaliser to the
+  game's natural score span.
+- Freezing a draw to a terminal means the solver **cannot** reason past that
+  point for that branch — that is the price of safety. Accept it; the trigger
+  ensures you only solve where it rarely matters.

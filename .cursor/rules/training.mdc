@@ -1,0 +1,15 @@
+---
+description: Tune training hyperparameters and diagnose training issues
+globs:
+  - "games/**/config/train.json"
+  - "games/**/config/mcts.json"
+alwaysApply: false
+---
+
+# Training Tuning & Diagnostics
+
+Read the rule matching your current task:
+
+- **Launch / resume / stop a run** (GPU env setup, `gpu_env.sh`, nohup launch, monitoring, clean stop): see `training-launch`
+- **Hyperparameter selection** (c_puct, network depth/width, lr, Dirichlet, opponent pool by game type): see `training-hyperparams`
+- **Diagnose issues** (symptom-to-cause checklist, concurrent inference setup, known BUGs): see `training-diagnostics`

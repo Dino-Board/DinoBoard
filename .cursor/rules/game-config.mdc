@@ -1,0 +1,8 @@
+---
+description: Configure game JSON files — game.json, mcts.json, train.json, web.json, heuristic.json, belief.json
+globs:
+  - "games/**/config/*.json"
+alwaysApply: false
+---
+Full field reference for all game configuration files. Profile resolution: _BASE_DICT -> mcts.json baseline -> profile delta.
+See game-config-reference for the complete field tables.

@@ -1,0 +1,137 @@
+# Enumerated State + Transition Table — Pure Game-Side Recipe
+
+How to model a slot whose state is a **combination of discrete elements** when
+the **legal combinations are finite and far fewer than the full product
+space**. Enumerate every legal combination as a type, and express mutation as
+a `[current_type][operation] -> new_type` lookup table. Worked example:
+**Harmonies** (`games/harmonies/`) — 13 tower types.
+
+## When this recipe fits
+
+A slot's content is built by stacking/combining pieces, and the rules impose
+constraints that make most combinations illegal. The naive model stores the
+full internal structure (e.g. `layers[hex][3]` = three color slots) and
+re-validates the stacking rules on every action. That is wasteful and
+error-prone: the constraints live in scattered `if` branches, the state is
+larger than it needs to be, and hash/encoder must encode the full
+combination.
+
+If the **set of reachable combinations is small and closed**, replace it with
+a type enum + a transition table:
+
+- Harmonies: a hex holds up to 3 stacked color tokens, but stacking rules
+  (water can't be topped, red only at layer 0/1, single-layer leaves can't be
+  stacked, …) collapse the 6³ = 216 raw combinations down to **13 legal tower
+  types**. State stores one `tower_type` byte per hex, not three color bytes.
+
+The signal you should use this recipe: you find yourself writing "what can go
+on top of what" as a nested switch, and the answer space is small and stable.
+
+## The pattern: type enum + transition table + derived height
+
+### Type enum (enumerate every legal combination)
+
+```cpp
+// kTowerTypes = 13:
+//   0 = empty
+//   1..6 = single-layer (Blue/Gray/Brown/Green/Yellow/Red)
+//   7 = house2 (Red on Red), 8 = wood2, 9 = tree2, 10 = mountain2
+//   11 = tree3, 12 = mountain3
+constexpr int kTowerTypes = 13;
+```
+
+Every legal stack is exactly one type. There is no "partial/undefined" type —
+either a combination is one of the 13, or it is illegal and unreachable.
+
+### Transition table (the entire mutation + legality logic)
+
+```cpp
+// kTowerTransition[tower_type][color-1] -> new tower_type, or -1 if illegal.
+// Stacking restrictions are BAKED INTO the table: any +Red that would land
+// at layer 2 is -1, water (type 1) has all -1, etc.
+const std::array<std::array<std::int8_t, kColors>, kTowerTypes> kTowerTransition = {{
+    {{ 1,  2,  3,  4,  5,  6}},   // 0 empty: any color -> single
+    {{-1,-1,-1,-1,-1,-1}},        // 1 Blue (water): no stacking
+    {{-1,10,-1,-1,-1, 7}},        // 2 Gray: +Gray->mountain2, +Red->house
+    {{-1,-1, 8, 9,-1, 7}},        // 3 Brown: +Brown->wood2, +Green->tree2, +Red->house
+    // ... rows for every type
+}};
+```
+
+The table is the single source of truth for both **mutation** and
+**legality** — they are the same lookup. This is the core win over the
+"store layers + validate" model: constraints cannot drift into a separate
+validator that disagrees with the mutation path.
+
+### Derived quantities come from the type, never stored separately
+
+```cpp
+// tower_height: 0 for type 0, 1 for 1..6, 2 for 7..10, 3 for 11..12.
+// Derived from tower_type — NOT a separate field.
+static int tower_height(int tower_type);
+```
+
+Height, top color, "is this a house", "can it hold an animal" — all derived
+from `tower_type`. Storing them as separate state fields invites
+inconsistency (a `height` field that disagrees with `tower_type` after a
+transition). Derive on read.
+
+## Why this beats storing the full structure
+
+| Concern | Store `layers[3]` + validate | Enumerate types + table |
+|---------|------------------------------|-------------------------|
+| State size per slot | 3 color bytes | 1 type byte |
+| Legality check | nested `if` over stacking rules | `table[tt][color] >= 0` (O(1)) |
+| Mutation | write + re-validate | `tt = table[tt][color]` (one line) |
+| Constraint location | scattered across rules `if`s | baked into the table, one place |
+| Hash/encoder | must encode 3-byte combination | encode the type (13-way) directly |
+| "Forgot a constraint" risk | high (a missing `if` branch) | none (an illegal entry is just -1) |
+
+The last row is the real safety argument: a stacking rule forgotten as an
+`if` is a silent legality bug. A stacking rule forgotten in the table is a
+`-1` (correctly illegal) or an explicit entry — either way the table is the
+complete, auditable spec of "what can become what."
+
+## How rules consume it (Harmonies)
+
+- **apply_place_token** (harmonies_rules.cpp): `new_tt = kTowerTransition[tt][color]`;
+  write `tower_type[hex] = new_tt`. One line, no validation branch.
+- **legal_actions**: `if (kTowerTransition[tt][color_idx] < 0) continue;` —
+  skip illegal placements while enumerating.
+- **scoring**: derived from `tower_type` (top color, house adjacency) and
+  `has_animal`, never from a stored layer array.
+
+## When NOT to use this
+
+- The combination space is **small and nearly full** (most combinations
+  legal). Then the type enum is just a renaming of the product space with no
+  compression; store the structure directly.
+- The legal set is **open or very large** (e.g. a bag of arbitrarily many
+  distinct tokens). Enumerate-and-table does not scale; use a count-based
+  model (see `bag-draw.md`).
+- The "operation" axis is **not discrete/finite** (continuous amounts). The
+  table is `[type][discrete_op]`; a continuous input needs a function, not a
+  table.
+
+## Invariants
+
+- **The type set is closed.** Every table entry is either a defined type or
+  `-1`. A transition that lands on an undefined type is a bug — the table
+  must cover every (type, op) cell. Audit by checking no entry is an
+  out-of-range positive.
+- **Legality == table lookup.** Do not add a second legality check that
+  duplicates the table; it will drift. The single source is
+  `table[tt][op] >= 0`.
+- **Derived quantities derive from the type.** Height, top-color,
+  full-ness, score-relevant flags — all functions of `tower_type`. No
+  parallel stored field that can disagree.
+- **The table is the constraint spec.** When you add a new stacking rule,
+  update the table (set the now-illegal entries to `-1`) — not a separate
+  validator. A constraint not in the table does not exist.
+- **Schema slot is the type, not the structure.** `tower_type` is the
+  `all_public` schema field; the "three layers" never appear as schema
+  fields. Hash/encoder/snapshot all consume the type.
+- **Adding a combination = adding a type + table rows**, not loosening a
+  validator. New type gets a new enum value, a row in the table (with its
+  legal successors), and a `tower_height`/scoring case. Keep the type count
+  documented (the `kTowerTypes = 13` comment enumerates them).

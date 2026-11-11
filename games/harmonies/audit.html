@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Harmonies 动物卡数据审核 v2</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", sans-serif; margin: 0; padding: 20px; background: #f5f5f7; }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  .legend { background: white; padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; line-height: 1.7; }
+  .legend code { background: #eef; padding: 1px 5px; border-radius: 3px; }
+  .legend .swatch { display: inline-block; width: 14px; height: 14px; vertical-align: middle; border-radius: 3px; margin: 0 3px 0 10px; border: 1px solid #999; }
+  .controls { margin-bottom: 16px; }
+  .controls button, .controls label { margin-right: 10px; font-size: 14px; }
+  .card { display: grid; grid-template-columns: 420px 1fr; gap: 16px; background: white;
+          border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  .card.flagged { background: #fff4f4; }
+  .card h2 { margin: 0 0 8px; font-size: 16px; }
+  .meta { font-size: 13px; color: #555; margin-bottom: 8px; line-height: 1.5; }
+  .meta .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; color: white; font-size: 11px; margin-right: 6px; }
+  .pill.blue { background: #3a7fc9; }
+  .pill.gray { background: #888; }
+  .pill.green { background: #5a8a3a; }
+  .pill.yellow { background: #d4a017; }
+  .pill.red { background: #c0392b; }
+  .pattern-svg { background: #fafafa; border: 1px solid #eee; border-radius: 4px; display: block; }
+  .photo { max-width: 100%; max-height: 480px; border-radius: 4px; cursor: zoom-in; }
+  .right { display: flex; flex-direction: column; align-items: center; }
+  .note { margin-top: 8px; width: 100%; min-height: 50px; border: 1px solid #ddd; border-radius: 4px;
+          padding: 6px; font-size: 13px; box-sizing: border-box; resize: vertical; }
+  .pos-label { font-size: 14px; font-weight: bold; fill: #c0392b; text-anchor: middle; }
+  .term-label { font-size: 13px; font-weight: bold; text-anchor: middle; }
+  .term-bg-rect { stroke: #333; stroke-width: 1; }
+  .empty-hex { fill: #fff; stroke: #ccc; stroke-width: 1; stroke-dasharray: 3,2; }
+  .anchor-ring { fill: none; stroke: #ff8c00; stroke-width: 3; }
+</style>
+</head>
+<body>
+<h1>Harmonies 32 张动物卡 — 数据审核 v2</h1>
+
+<div class="legend">
+  <strong>术语速查</strong>（写在格子中央）：
+  <code>水</code>=蓝一层
+  <code>田</code>=黄一层
+  <code>树1</code>=绿一层
+  <code>树2</code>=木+绿
+  <code>树3</code>=木+木+绿
+  <code>山1</code>=灰一层
+  <code>山2</code>=灰二层
+  <code>山3</code>=灰三层
+  <code>房</code>={木/灰/黄}+红
+  <br>
+  <strong>颜色</strong>：
+  <span class="swatch" style="background:#3a7fc9"></span>Blue 蓝/水
+  <span class="swatch" style="background:#888"></span>Gray 灰/山
+  <span class="swatch" style="background:#8b5a2b"></span>Brown 木
+  <span class="swatch" style="background:#5a8a3a"></span>Green 绿/树
+  <span class="swatch" style="background:#e8c547"></span>Yellow 黄/田
+  <span class="swatch" style="background:#c0392b"></span>Red 红/房顶
+  <br>
+  <strong>位置编号</strong>（红色数字）：中心 = <code>0</code>；顺时针：<code>1</code>=正上, <code>2</code>=右上, <code>3</code>=右下, <code>4</code>=正下, <code>5</code>=左下, <code>6</code>=左上。
+  <strong>橙色"动"方块</strong>=动物立方放置点（anchor）。<strong>虚线格</strong>=该位置无要求。
+  <br>
+  <strong>纠错格式建议</strong>：<code>#12 位置3 应为 山2</code> / <code>#5 anchor 应为 位置1</code> / <code>#7 位置0 是房 不是 树2</code>
+</div>
+
+<div class="controls">
+  <label><input type="checkbox" id="flagFilter"> 只显示已标记疑似错误</label>
+  <button onclick="saveNotes()">导出审核备注（下载 JSON）</button>
+  <button onclick="clearAllNotes()" style="color:#c00">清空所有备注</button>
+  <span style="color:#888;font-size:12px;margin-left:10px;">备注自动存在浏览器 localStorage</span>
+</div>
+
+<div id="cards"></div>
+
+<script>
+const COLOR_MAP = {
+  Blue: '#3a7fc9', Gray: '#888', Brown: '#8b5a2b',
+  Green: '#5a8a3a', Yellow: '#e8c547', Red: '#c0392b'
+};
+
+// position id (0=center, 1=N clockwise to 6=NW) -> axial (q, r) for pointy-top hex
+// Using flat-top axial: q is column-ish, r is row-ish
+// We'll display flat-top hexes. Positions:
+//   1 = N (top)
+//   2 = NE
+//   3 = SE
+//   4 = S (bottom)
+//   5 = SW
+//   6 = NW
+// For pointy-top axial (which is easier for N/S neighbors):
+//   N = (0,-1), NE = (1,-1), SE = (1,0), S = (0,1), SW = (-1,1), NW = (-1,0)
+const POS_TO_OFFSET = {
+  0: [0, 0],
+  1: [0, -1], 2: [1, -1], 3: [1, 0],
+  4: [0, 1],  5: [-1, 1], 6: [-1, 0]
+};
+const OFFSET_TO_POS = {};
+Object.entries(POS_TO_OFFSET).forEach(([p,[q,r]]) => { OFFSET_TO_POS[`${q},${r}`] = p; });
+
+// pointy-top hex: width = sqrt(3)*size, height = 2*size
+function hexToPixel(q, r, size) {
+  const x = size * Math.sqrt(3) * (q + r/2);
+  const y = size * 3/2 * r;
+  return [x, y];
+}
+function hexPoints(cx, cy, size) {
+  const pts = [];
+  for (let i = 0; i < 6; i++) {
+    const a = Math.PI/3 * i + Math.PI/6; // pointy-top: start at top
+    pts.push([cx + size * Math.cos(a), cy + size * Math.sin(a)]);
+  }
+  return pts.map(p => p.join(',')).join(' ');
+}
+
+// Classify levels[] into a term: 水/田/树1/树2/树3/山1/山2/山3/房/其他
+function classifyTerm(levels) {
+  const L = levels.map(l => l === null ? null : (Array.isArray(l) ? l.slice().sort().join('|') : l));
+  const isHouse = Array.isArray(levels[0]) &&
+    levels[0].length === 3 && ['Brown','Gray','Red'].every(c => levels[0].includes(c)) &&
+    levels[1] === 'Red' && levels[2] === null;
+  if (isHouse) return {label: '房', colors: ['#c0392b'], detail: '{木/灰/红}+红'};
+  if (L[0]==='Blue' && L[1]===null && L[2]===null) return {label:'水', colors:['#3a7fc9']};
+  if (L[0]==='Yellow' && L[1]===null && L[2]===null) return {label:'田', colors:['#e8c547']};
+  if (L[0]==='Green' && L[1]===null && L[2]===null) return {label:'树1', colors:['#5a8a3a']};
+  if (L[0]==='Brown' && L[1]==='Green' && L[2]===null) return {label:'树2', colors:['#8b5a2b','#5a8a3a']};
+  if (L[0]==='Brown' && L[1]==='Brown' && L[2]==='Green') return {label:'树3', colors:['#8b5a2b','#8b5a2b','#5a8a3a']};
+  if (L[0]==='Gray' && L[1]===null && L[2]===null) return {label:'山1', colors:['#888']};
+  if (L[0]==='Gray' && L[1]==='Gray' && L[2]===null) return {label:'山2', colors:['#888','#888']};
+  if (L[0]==='Gray' && L[1]==='Gray' && L[2]==='Gray') return {label:'山3', colors:['#888','#888','#888']};
+  // fallback: show raw colors
+  const cols = levels.filter(l=>l!==null).map(l => Array.isArray(l) ? l.map(c=>COLOR_MAP[c]) : [COLOR_MAP[l]]);
+  return {label:'?', colors: cols.flat(), detail: JSON.stringify(levels)};
+}
+
+function renderFlower(pattern, anchorIdx) {
+  const size = 40;
+  // build a map offset->piece
+  const pieceMap = {};
+  pattern.forEach((p, idx) => {
+    pieceMap[`${p.offset[0]},${p.offset[1]}`] = {piece: p, idx};
+  });
+
+  // viewbox: render all 7 positions even if empty
+  const positions = Object.entries(POS_TO_OFFSET).map(([pos, [q,r]]) => {
+    const [x, y] = hexToPixel(q, r, size);
+    return {pos: +pos, q, r, x, y};
+  });
+  const xs = positions.map(p=>p.x), ys = positions.map(p=>p.y);
+  const minX = Math.min(...xs) - size - 4, maxX = Math.max(...xs) + size + 4;
+  const minY = Math.min(...ys) - size - 4, maxY = Math.max(...ys) + size + 4;
+  const w = maxX - minX, h = maxY - minY;
+
+  let svg = `<svg class="pattern-svg" width="${w}" height="${h}" viewBox="${minX} ${minY} ${w} ${h}">`;
+  positions.forEach(({pos, q, r, x, y}) => {
+    const key = `${q},${r}`;
+    const entry = pieceMap[key];
+    if (!entry) {
+      // empty placeholder
+      svg += `<polygon points="${hexPoints(x, y, size)}" class="empty-hex"/>`;
+      svg += `<text class="pos-label" x="${x}" y="${y+5}">${pos}</text>`;
+    } else {
+      const term = classifyTerm(entry.piece.levels);
+      // background hex with stripes by colors (vertical)
+      const n = term.colors.length || 1;
+      const innerW = size * 1.5, innerH = size * 1.7;
+      const startX = x - innerW/2;
+      svg += `<polygon points="${hexPoints(x, y, size)}" fill="#fff" stroke="#333" stroke-width="1.5"/>`;
+      // stripes inside (clipped visually by hex outline being above — we draw stripes then hex outline)
+      // Simpler: draw a centered rect divided into n vertical bands
+      const bandW = innerW / n;
+      term.colors.forEach((c, ci) => {
+        svg += `<rect x="${startX + ci*bandW}" y="${y - innerH/2}" width="${bandW}" height="${innerH}" fill="${c}" opacity="0.85"/>`;
+      });
+      // hex outline on top (border + makes corners look hex-like)
+      svg += `<polygon points="${hexPoints(x, y, size)}" fill="none" stroke="#222" stroke-width="2"/>`;
+      // anchor: bright orange cube marker on top-left
+      if (entry.idx === anchorIdx) {
+        const cx2 = x - size*0.55, cy2 = y - size*0.55, s = 14;
+        svg += `<rect x="${cx2 - s/2}" y="${cy2 - s/2}" width="${s}" height="${s}" fill="#ff8c00" stroke="#000" stroke-width="1.5" transform="rotate(15 ${cx2} ${cy2})"/>`;
+        svg += `<text x="${cx2}" y="${cy2+4}" text-anchor="middle" font-size="10" font-weight="bold" fill="white">动</text>`;
+      }
+      // term label centered
+      svg += `<text class="term-label" x="${x}" y="${y+5}" fill="white" stroke="black" stroke-width="0.5" paint-order="stroke">${term.label}</text>`;
+      // position label in top-right
+      svg += `<text class="pos-label" x="${x + size*0.7}" y="${y - size*0.55}">${pos}</text>`;
+    }
+  });
+  svg += '</svg>';
+  return svg;
+}
+
+function fmtPatternText(pattern, anchorIdx) {
+  return pattern.map((p, idx) => {
+    const posKey = `${p.offset[0]},${p.offset[1]}`;
+    const pos = OFFSET_TO_POS[posKey] !== undefined ? OFFSET_TO_POS[posKey] : posKey;
+    const term = classifyTerm(p.levels);
+    const a = idx === anchorIdx ? ' [anchor]' : '';
+    return `位置${pos}=${term.label}${a}`;
+  }).join('  ');
+}
+
+let allCards = [];
+let notes = JSON.parse(localStorage.getItem('harmonies_audit_notes') || '{}');
+
+async function load() {
+  const res = await fetch('animal_cards.json');
+  const data = await res.json();
+  allCards = data.cards;
+  render();
+}
+
+function render() {
+  const onlyFlagged = document.getElementById('flagFilter').checked;
+  const container = document.getElementById('cards');
+  container.innerHTML = '';
+  allCards.forEach(c => {
+    const n = notes[c.id] || {flagged: false, text: ''};
+    if (onlyFlagged && !n.flagged) return;
+    const div = document.createElement('div');
+    div.className = 'card' + (n.flagged ? ' flagged' : '');
+    div.innerHTML = `
+      <div>
+        <h2>#${c.id} ${c.animal} / ${c.animal_zh}
+          <span class="pill ${c.habitat}">${c.habitat}</span>
+        </h2>
+        <div class="meta">
+          Scores: [${c.scores.join(', ')}] · ${fmtPatternText(c.pattern, c.anchor_index)}
+        </div>
+        ${renderFlower(c.pattern, c.anchor_index)}
+        <div style="margin-top:8px;">
+          <label><input type="checkbox" ${n.flagged ? 'checked' : ''} onchange="toggleFlag(${c.id}, this.checked)"> 标记为疑似错误</label>
+        </div>
+        <textarea class="note" placeholder="例：位置3 应为 山2；anchor 应为 位置1；位置0 是房 不是 树2" oninput="updateNote(${c.id}, this.value)">${n.text}</textarea>
+      </div>
+      <div class="right">
+        <img class="photo" src="参考项目/${c.photo}" onclick="window.open(this.src)" alt="${c.animal}">
+        <div style="font-size:11px;color:#999;margin-top:4px;">${c.photo}</div>
+      </div>
+    `;
+    container.appendChild(div);
+  });
+}
+
+function toggleFlag(id, v) {
+  notes[id] = notes[id] || {flagged: false, text: ''};
+  notes[id].flagged = v;
+  localStorage.setItem('harmonies_audit_notes', JSON.stringify(notes));
+  render();
+}
+function updateNote(id, v) {
+  notes[id] = notes[id] || {flagged: false, text: ''};
+  notes[id].text = v;
+  localStorage.setItem('harmonies_audit_notes', JSON.stringify(notes));
+}
+function saveNotes() {
+  const blob = new Blob([JSON.stringify(notes, null, 2)], {type: 'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'harmonies_audit_notes.json';
+  a.click();
+}
+function clearAllNotes() {
+  if (!confirm('确认清空所有审核备注？')) return;
+  notes = {};
+  localStorage.removeItem('harmonies_audit_notes');
+  render();
+}
+document.getElementById('flagFilter').addEventListener('change', render);
+load();
+</script>
+</body>
+</html>

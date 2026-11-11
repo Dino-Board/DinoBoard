@@ -1,0 +1,81 @@
+{
+  "network": {
+    "type": "mlp",
+    "hidden_layers": [
+      256,
+      256,
+      256,
+      256,
+      256,
+      256,
+      256,
+      256,
+      256,
+      256,
+      256,
+      256
+    ],
+    "activation": "relu",
+    "residual": true,
+    "block_size": 2
+  },
+  "training": {
+    "episodes_per_step": 100,
+    "batch_size": 512,
+    "train_batches_per_step": 2,
+    "learning_rate": 0.0001,
+    "lr_schedule": {
+      "type": "cosine",
+      "lr_min": 3e-06
+    },
+    "steps": 10000,
+    "opponent_pool_enabled": true,
+    "opponent_pool_self_ratio": 0.5,
+    "eval_benchmarks": [
+      "heuristic_free"
+    ],
+    "selfplay_concurrency": {
+      "enabled": true,
+      "leaf_batch_size": 1,
+      "opponent_pool_max_distinct": 10,
+      "evaluator": {
+        "batch_size": 100,
+        "batch_timeout_us": 30,
+        "max_queue_size": 256,
+        "intra_op_num_threads": 1,
+        "num_inference_threads": 1,
+        "providers": []
+      }
+    }
+  },
+  "mcts": {
+    "selfplay": {
+      "dirichlet_alpha": 1.0,
+      "dirichlet_epsilon": 0.25,
+      "simulations": 1000,
+      "temperature": 1.0,
+      "temperature_schedule": {
+        "enabled": false,
+        "initial": 1.0,
+        "final": 1.0,
+        "decay_plies": 5
+      }
+    },
+    "eval": {
+      "temperature": 1.0,
+      "simulations": 1000
+    }
+  },
+  "heuristic_guidance": {
+    "name": "rule_v1",
+    "hold_steps": 100,
+    "steps": 200,
+    "initial_ratio": 1.0,
+    "temperature": 0.5
+  },
+  "runtime": {
+    "eval_every": 100,
+    "eval_games": 100,
+    "save_every": 10
+  }
+}

@@ -1,0 +1,6 @@
+---
+description: AI onboarding — codebase overview, hard rules, ISMCTS properties, task routing, failure modes, non-goals
+alwaysApply: false
+---
+Start here for any non-trivial task. Covers what this codebase is, hard rules, ISMCTS properties not to break, task routing to other skills, and framework non-goals.
+See onboarding-reference for the full onboarding guide.

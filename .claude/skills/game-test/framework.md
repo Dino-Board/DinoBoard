@@ -1,0 +1,131 @@
+# Framework Test Architecture Reference
+
+## Two-layer design
+
+```
+tests/
+  framework/           # Layer 1: structural invariants on fixed carrier
+    test_ai_api_separation.py
+    test_encode_state.py
+    test_dag_reuse.py
+    test_public_hash_excludes_internal_rng.py
+    test_encoder_respects_hash_scope.py
+    test_public_snapshot_round_trip.py
+    ...                # ~60 test files
+  <game>/              # Layer 2: per-game acceptance checklist
+    test_checklist.py  # 11-step checklist (see game-test-checklist skill)
+```
+
+**Layer 1 (framework/)**: Tests structural invariants the framework guarantees.
+Parametrized over either the fixed carrier or manifest capabilities. Never embeds
+rules, constants, or assertions for a specific game outside the carrier set.
+
+**Layer 2 (per-game/)**: Each game owns its own `test_checklist.py` with
+game-specific assertions. Framework tests auto-cover new games based on
+declared capabilities; per-game tests are the game author's responsibility.
+
+## Fixed three-game carrier
+
+```python
+# tests/conftest.py
+FRAMEWORK_GAMES = ["quoridor", "azul", "loveletter"]
+```
+
+Coverage by design:
+- **quoridor**: deterministic, fully-public, 2-player, tail solver
+- **azul**: public with physical randomness, 2-4 player
+- **loveletter**: asymmetric hidden info, tracker, 2-4 player, elimination
+
+Derived sublists:
+```python
+FRAMEWORK_HIDDEN_INFO_GAMES = ["loveletter"]
+FRAMEWORK_MULTIPLAYER_GAMES = ["azul", "loveletter"]
+FRAMEWORK_TAIL_SOLVER_GAMES = ["quoridor"]
+```
+
+Tests that use `FRAMEWORK_GAMES` intentionally do NOT run on every enabled game.
+Adding a game does NOT require touching this list.
+
+## Manifest-driven capability helpers
+
+```python
+# tests/conftest.py
+def enabled_games() -> list[str]
+def games_with_capability(*caps: str) -> list[str]
+def hidden_info_games() -> list[str]        # shorthand for ("hidden_info",)
+def games_with_snapshot() -> list[str]      # shorthand for ("snapshot",)
+def games_with_tracker() -> list[str]       # shorthand for ("tracker",)
+def framework_whitelist_games() -> list[str]
+```
+
+All read `games/manifest.json`. Per-entry schema:
+```json
+{
+  "id": "loveletter",
+  "enabled": true,
+  "framework_whitelist": true,
+  "capabilities": ["hidden_info", "snapshot", "tracker"],
+  "sources": ["loveletter_state.cpp", "loveletter_rules.cpp", "..."]
+}
+```
+
+Capability-keyed framework tests (e.g. `test_public_hash_excludes_internal_rng`)
+call `games_with_capability("hidden_info", "snapshot")` and self-extend when a
+new game declares those capabilities.
+
+## Key conftest helpers
+
+### run_random_episode_states
+
+```python
+def run_random_episode_states(
+    game_id: str, *, seed: int = 42, max_plies: int = 200
+) -> Generator[dict, None, None]
+```
+
+Drives a game by uniform-random legal actions, yields state_dict at every ply
+(including initial and terminal). Used by per-game rule-invariant tests.
+
+### run_short_selfplay / run_short_heuristic
+
+```python
+def run_short_selfplay(game_id, seed=42, **kwargs) -> dict
+def run_short_heuristic(game_id, seed=42, temperature=1.0) -> dict
+```
+
+Quick selfplay/heuristic episodes for test assertions. `run_short_selfplay`
+defaults to simulations=10, max_game_plies=50.
+
+### assert_api_belief_matches_selfplay
+
+```python
+def assert_api_belief_matches_selfplay(
+    game_id, public_keys, *, perspective=0,
+    seed_gt=42, seed_ai=9999, plies=80, simulations=20
+) -> None
+```
+
+Three-layer equivalence assertion: belief tracker matches, public state fields
+match, legal-action sets match on perspective-player turns. Used by per-game
+checklists for games with public_event_extractor.
+
+### get_test_model / load_game_config
+
+```python
+def get_test_model(game_id) -> str        # cached random ONNX model path
+def load_game_config(game_id) -> dict     # game.json + C++ metadata
+```
+
+## How adding a game auto-enrolls in tests
+
+1. Add entry to `games/manifest.json` with `enabled: true` and capabilities
+2. Capability-keyed framework tests automatically pick it up via
+   `games_with_capability()`
+3. Write `tests/<game>/test_checklist.py` using the 11-step pattern
+4. Framework carrier (`FRAMEWORK_GAMES`) is NOT changed -- it stays at 3 games
+
+Tests that use per-game checker dicts (e.g. `test_tracker_consistent_with_truth._CHECKERS`,
+`test_ismcts_samples_respect_tracker._CHECKERS`) require manual enrollment:
+add a checker function and register it in the dict. These are tests where
+capability-based parametrization is not yet appropriate because the assertion
+logic is game-specific.

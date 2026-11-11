@@ -1,0 +1,22 @@
+{
+  "named": {
+    "simple_max": {
+      "type": "rule"
+    },
+    "rule_mcts_v1": {
+      "type": "mcts_pv",
+      "simulations": 5000,
+      "c_puct": 1.4
+    }
+  },
+  "selectors": {
+    "eval_vs_heuristic": {
+      "name": "rule_mcts_v1",
+      "temperature": 0.2
+    },
+    "web": {
+      "name": "rule_mcts_v1",
+      "temperature": 0.0
+    }
+  }
+}

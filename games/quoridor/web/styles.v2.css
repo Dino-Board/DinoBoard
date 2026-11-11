@@ -1,0 +1,234 @@
+.quoridor-board-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.quoridor-board-grid {
+  /* 17 = 9 cells + 8 wall slots. Target ~42px cells → 17*28 + wall slots
+   * ≈ 476px grid. Cell = 3 slots wide in the `.board-cell` sense, so the
+   * effective "cell" (what the user perceives) is 3*slot ≈ 84px at the
+   * 28px figure. Previous 28px cap made the board feel cramped — bump
+   * the default to 34px and the viewport-bounded fallback widens along
+   * with it.
+   *
+   * Subpixel drift on mobile is handled downstream by expressing
+   * grid-aligned widths as percentages of the parent (`%` resolves
+   * against the rendered, floored track width). Wrapping `--slot` itself
+   * in `floor()` was an earlier attempt — but `floor(min(...))` triggered
+   * a parser fallback in some browsers that resolved `--slot` to 0 and
+   * collapsed the whole 17×17 grid into a line. Keep `--slot` as a plain
+   * `min()` and rely on `%` downstream. */
+  /* Reserve: sidebar 340 + info-col 340 + board-stage padding (32) +
+   * table-area gap (16) + board-grid padding (28) = 756. */
+  --slot: min(34px, calc((100vh - 120px) / 17), calc((100vw - 756px) / 17));
+  padding: 14px;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  background: #ffffff;
+  display: grid;
+  grid-template-columns: repeat(17, var(--slot));
+  grid-template-rows: repeat(17, var(--slot));
+  gap: 0;
+  width: max-content;
+  position: relative;
+  isolation: isolate;
+}
+
+.board-cell {
+  width: 100%;
+  height: 100%;
+  border-radius: 8px;
+  background: #f5f7fb;
+  cursor: default;
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.board-cell.legal {
+  /* Draw the legal-move dot directly in the cell's background via a
+   * radial gradient centered on the cell's padding box. This bypasses
+   * any flex/absolute/::after centering, which on some mobile browsers
+   * (notably Chinese Chromium webviews in desktop mode) picked up a
+   * vertical bias from the <button>'s UA line-height metrics and pushed
+   * the dot off-center. A background gradient is painted at the exact
+   * geometric midpoint of the box and cannot drift. */
+  background-color: rgba(59, 130, 246, 0.12);
+  background-image: radial-gradient(
+    circle,
+    rgba(59, 130, 246, 0.45) 0,
+    rgba(59, 130, 246, 0.45) 6px,
+    transparent 6.5px
+  );
+  background-repeat: no-repeat;
+  background-position: center center;
+  outline: 1px solid rgba(59, 130, 246, 0.35);
+  cursor: pointer;
+}
+
+.board-cell.legal:hover {
+  background-color: rgba(59, 130, 246, 0.22);
+  outline: 2px solid #3b82f6;
+}
+
+.pawn {
+  width: calc(var(--slot) * 0.82);
+  height: calc(var(--slot) * 0.82);
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: calc(var(--slot) * 0.45);
+  font-weight: 700;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  z-index: 5;
+}
+
+/* Quoridor-specific flying pawn: force circular shape. Without this the
+ * animate.js flyer inherits the default `.anim-flying-token` rule but
+ * gets overridden by inline width/height from fromRect — the 50%
+ * border-radius still makes a circle on square boxes, but if fromRect
+ * is non-square (rare but possible under box-sizing changes) the sprite
+ * looked rectangular. Pin to a forced aspect here. */
+.anim-flying-token.pawn-flying {
+  border-radius: 999px !important;
+  aspect-ratio: 1 / 1;
+}
+
+.pawn.p0 { background: #1f2937; }
+.pawn.p1 { background: #b91c1c; }
+
+.edge-slot {
+  border: none;
+  padding: 0;
+  background: transparent;
+  cursor: default;
+  position: relative;
+  overflow: visible;
+  z-index: 1;
+}
+
+.edge-slot::after {
+  content: "";
+  display: block;
+  border-radius: 999px;
+  background: transparent;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+}
+
+/* Size the wall-pill in percentages of the parent slot so the shape is
+ * consistent across viewports. Earlier revisions used `height: 8px` fixed,
+ * which on mobile — where a slot is 17-19px instead of 34px — collapsed
+ * the pill's aspect ratio to almost 1:1 (looked like a dot instead of
+ * a long pill). Both axes scale with slot now, so desktop and mobile
+ * render the same proportions. */
+.edge-slot.edge-h::after {
+  width: 85%;
+  height: 30%;
+}
+
+.edge-slot.edge-v::after {
+  width: 30%;
+  height: 85%;
+}
+
+.edge-slot.legal { cursor: pointer; }
+.edge-slot.legal::after { background: rgba(59, 130, 246, 0.2); outline: 1px solid rgba(59, 130, 246, 0.4); }
+.edge-slot.legal:hover::after { background: rgba(59, 130, 246, 0.45); outline: 2px solid #3b82f6; }
+.edge-slot.wall-on::after { background: #0f172a; outline: none; }
+.edge-slot.wall-on.wall-p0::after { background: #1d4ed8; }
+.edge-slot.wall-on.wall-p1::after { background: #b91c1c; }
+.edge-slot.wall-anchor { z-index: 30; }
+.edge-slot.edge-disabled::after { background: #f3f4f6; }
+
+/* Wall anchors visually span 3 grid tracks (cell + edge + cell). Using
+ * `calc(var(--slot) * 3 - 8px)` looks correct on desktop where --slot is an
+ * integer pixel, but on mobile the viewport-derived --slot is a fractional
+ * value (e.g. 19.7px on a 375px viewport) while CSS Grid floors each rendered
+ * track to whole device pixels. The 0.x px drift accumulates across 3 tracks
+ * and visibly offsets the wall from its grid line.
+ *
+ * Percentages on absolutely-positioned pseudo-elements resolve against the
+ * parent's rendered padding box, which is the actual floored track width — so
+ * `300%` is exactly 3 rendered tracks regardless of subpixel rounding.
+ *
+ * Rule of thumb: any size meant to align with grid lines must be expressed as
+ * `%` or via `grid-column: span N`, NEVER as `calc(var(--slot) * N - …)`. */
+.edge-slot.edge-h.wall-anchor::after {
+  left: 4px;
+  top: 50%;
+  width: calc(300% - 8px);
+  transform: translateY(-50%);
+}
+
+.edge-slot.edge-v.wall-anchor::after {
+  left: 50%;
+  top: 4px;
+  height: calc(300% - 8px);
+  transform: translateX(-50%);
+}
+
+.edge-slot.wall-tail::after {
+  background: transparent !important;
+  outline: none !important;
+}
+
+.board-cross {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #cbd5e1;
+  margin: auto;
+}
+
+.board-meta {
+  margin-top: 8px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+/* Wall placement animation */
+.wall-placed-anim::after {
+  background: #fbbf24 !important;
+  outline: 2px solid #f59e0b !important;
+}
+
+/* Match the general layout's collapse stages (see platform/static/general
+ * /layout.css). Subtract only the chrome that is actually stealing grid
+ * space at each stage, so the board neither overflows nor shrinks to a
+ * cramped 22px on phones where the full viewport is available.
+ *   <=1200px : sidebar shrinks to 280px, info-col still 280px
+ *   <=900px  : info-col stacks below the board → reclaim 280px
+ *   <=720px  : sidebar becomes an overlay → reclaim 280px more */
+@media (max-width: 1200px) {
+  .quoridor-board-grid {
+    /* Sidebar shrinks to 280, info-col stays 340, buffers same as above.
+     * 280 + 340 + 32 + 16 + 28 = 696. */
+    --slot: min(34px, calc((100vh - 120px) / 17), calc((100vw - 696px) / 17));
+  }
+}
+
+@media (max-width: 900px) {
+  .quoridor-board-grid {
+    /* info-col stacks below board, no longer eats horizontal space.
+     * Sidebar 280 + stage padding 32 + grid padding 28 = 340. */
+    --slot: min(34px, calc((100vw - 340px) / 17));
+  }
+}
+
+@media (max-width: 720px) {
+  .quoridor-board-grid {
+    /* Sidebar becomes overlay, full viewport available.
+     * Stage padding 32 + grid padding 16 (reduced) + 4 slack = 52. */
+    --slot: min(34px, calc((100vw - 52px) / 17));
+    padding: 8px;
+  }
+}

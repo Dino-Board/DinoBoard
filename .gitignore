@@ -1,0 +1,106 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.claude/*
+!.claude/skills/
+.claude/skills/push-both/
+.claude/skills/deploy-server/
+.agents/skills/deploy-server/
+.cursor/rules/deploy-server.mdc
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.venv/
+.venv-train*/
+venv/
+
+# Build
+build/
+dist/
+*.egg-info/
+CMakeFiles/
+CMakeCache.txt
+cmake-build-*/
+compile_commands.json
+*.o
+*.so
+*.dll
+*.lib
+*.a
+# Bundled ONNX Runtime libs (see third_party section below) must be committed.
+!third_party/onnxruntime-linux-x64-*/lib/*.so
+!third_party/onnxruntime-win-x64-*/lib/*.dll
+!third_party/onnxruntime-win-x64-*/lib/*.lib
+
+# Training outputs
+games/*/runs/
+games/*/model/random
+
+# Top-level training run artifacts (checkpoints, train.log, per-step ONNX
+# snapshots). Each run can be hundreds of MB to GB. The deployed
+# best_model.onnx under games/<id>/model/ IS committed so clones are
+# playable out of the box — but the full training history stays local.
+runs/
+
+# Random-fallback ONNX cache (stale: the random-model fallback was removed
+# but the cache files linger).
+games/.random_models/
+
+# ONNX Runtime (local dependency)
+# Mac bundle stays local (devs install via brew).
+# Linux x64 and Windows x64 bundles ARE committed so `git clone` is enough to
+# build on those platforms — avoids cloud-firewall interference and lets the
+# README's "one-line install" promise hold on stock Windows / Linux machines.
+third_party/onnxruntime-*/
+!third_party/onnxruntime-linux-x64-*/
+!third_party/onnxruntime-win-x64-*/
+third_party/onnxruntime-linux-x64-gpu-*/
+third_party/ort-gpu.tgz
+
+# Plans (private strategy docs)
+docs/plans/
+
+# Devlog (private daily notes)
+docs/devlog/
+
+# Ad-hoc scripts (local utility scripts)
+script/
+
+# Replay dumps (local debug artifacts — regenerate from selfplay / web)
+games/*/replay/
+
+# Secrets
+*.pem
+*.ppk
+.env
+
+# Logs
+*.log
+*.tmp
+
+# Ad-hoc dev artifacts (debugging screenshots, scratch notes).
+截图/
+screenshots/
+
+# Reference-only projects mounted for inspection (previous DinoBoard version,
+# Mosaic, etc.). Not part of the build or version control.
+参考项目/
+games/*/参考/
+
+# Benchmark snapshots — trained model checkpoints used as opponents for
+# future training runs. Archived outside of runs/ so subsequent trainings
+# don't overwrite them. Kept local (large, reproducible from train.log).
+benchmarks/
+
+# Local benchmark / smoke training artifacts
+tmp/
+
+# External-GT compiled binaries (built locally from .cpp; the source is in tree)
+games/*/external_ground_truth/*.out

@@ -1,0 +1,25 @@
+{
+  "named": {
+    "rule": {
+      "type": "rule"
+    },
+    "rule_mcts": {
+      "type": "mcts_pv",
+      "simulations": 1000,
+      "c_puct": 1.4
+    },
+    "rule_smart": {
+      "type": "rule"
+    }
+  },
+  "selectors": {
+    "eval_vs_heuristic": {
+      "name": "rule_mcts",
+      "temperature": 0.0
+    },
+    "web": {
+      "name": "rule_smart",
+      "temperature": 0.0
+    }
+  }
+}

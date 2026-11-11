@@ -1,0 +1,13 @@
+{
+  "web_expert": {
+    "simulations": 5000,
+    "temperature": 0.0
+  },
+  "web_casual": {
+    "simulations": 50,
+    "temperature": 0.5
+  },
+  "analysis": {
+    "simulations": 5000
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "architecture": [
+    512,
+    512,
+    512,
+    512
+  ],
+  "activation": "relu",
+  "batch_norm": true,
+  "residual": true,
+  "block_size": 2,
+  "training": {
+    "loss": "bce"
+  }
+}

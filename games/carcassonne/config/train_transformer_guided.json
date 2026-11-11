@@ -1,0 +1,80 @@
+{
+  "network": {
+    "type": "token_transformer",
+    "d_model": 128,
+    "num_layers": 4,
+    "num_heads": 4,
+    "ffn_dim": 256,
+    "attention": "fused",
+    "relative_position_radius": 6,
+    "anchor_embedding": false
+  },
+  "training": {
+    "steps": 5000,
+    "episodes_per_step": 400,
+    "batch_size": 1024,
+    "learning_rate": 0.0002,
+    "lr_schedule": {
+      "type": "cosine",
+      "lr_min": 4e-06
+    },
+    "grad_clip_norm": 1.0,
+    "weight_decay": 0.0001,
+    "train_batches_per_step": 28,
+    "replay_buffer_size": 300000,
+    "compact_replay": {
+      "features_dtype": "float16"
+    },
+    "playout_cap": {
+      "full_simulations": 800,
+      "fast_simulations": 150,
+      "full_search_prob": 0.25
+    },
+    "score_head": {
+      "loss_weight": 0.5,
+      "scale": 30.0
+    },
+    "opponent_policy_head": {
+      "loss_weight": 0.15
+    },
+    "ema": {
+      "decay": 0.99
+    },
+    "inference_precision": "fp16",
+    "eval_benchmarks": [
+      "heuristic_free"
+    ],
+    "selfplay_concurrency": {
+      "enabled": true,
+      "leaf_batch_size": 16,
+      "evaluator": {
+        "batch_size": 1024,
+        "batch_timeout_us": 30,
+        "max_queue_size": 8192,
+        "intra_op_num_threads": 1,
+        "num_inference_threads": 6,
+        "providers": []
+      }
+    }
+  },
+  "heuristic_guidance": {
+    "name": "rule",
+    "initial_ratio": 1.0,
+    "hold_steps": 50,
+    "steps": 0,
+    "temperature": 0.0,
+    "until_win_rate": {
+      "benchmark": "heuristic_free",
+      "threshold": 0.5,
+      "decay_steps": 400,
+      "max_hold_steps": 500
+    }
+  },
+  "runtime": {
+    "workers": 400,
+    "eval_every": 50,
+    "eval_games": 200,
+    "save_every": 25,
+    "seed": 20261110
+  }
+}

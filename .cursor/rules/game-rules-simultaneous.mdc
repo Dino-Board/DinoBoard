@@ -1,0 +1,155 @@
+---
+description: "Simultaneous actions — acts_mask + pending_commits + cursor scan (6 nimmt!)"
+globs:
+  - "games/**/*_state.*"
+  - "games/**/*_rules.*"
+alwaysApply: false
+---
+
+# Simultaneous Actions — Pure Game-Side Recipe
+
+How to implement simultaneous-action phases (every active seat commits in
+secret, then all reveal) **without any framework change**. The canonical
+worked example is **6 nimmt!** (`games/6nimmit/`) — read its `*_state.h`
+comments alongside this page.
+
+## Why a recipe exists
+
+Simultaneous play looks like it needs a framework primitive ("a phase where N
+players move at once"). It does not. Three schema slots + one
+`current_player()` override give exact simultaneous semantics, and the
+framework's existing per-perspective masking does the rest. The trick is a
+**sentinel placeholder** that makes "opponent has not committed yet" and
+"opponent committed but I cannot see it" physically indistinguishable in a
+session's state — so MCTS naturally treats the opponent's hidden commit as a
+decision node and the DAG auto-merges the information set. No chance node, no
+framework fork.
+
+## The three slots
+
+Declare these as schema fields. Each has one job:
+
+| Slot | Viz | Job |
+|------|-----|-----|
+| `acts_mask` | `all_public` | **Range** — which seats must commit this phase. Phase-constant: rules write it once at phase boundaries (all-true = simultaneous, single 1 = sequential, all-false = terminal). |
+| `pending_commits` | `owner_only_first_axis` | **Carrier + privacy** — each seat's own commit. Reset to business sentinel `0` = "not committed yet". |
+| `current_player_` | `all_public` | **Public cursor** — scan anchor. Rules advance it on every commit. |
+
+```cpp
+viz::declare_field(schema, "acts_mask",        viz::all_public({N}, N));
+viz::declare_field(schema, "pending_commits",  viz::owner_only_first_axis({N}, N));
+viz::declare_field(schema, "current_player",   viz::all_public({}, N));
+```
+
+### The sentinel convention (the crux)
+
+`pending_commits` resets to `0`, and `0` must be a value that **cannot be a
+real commit** (for 6 nimmt! cards 1..104, `0` = "not committed"). When a seat
+commits, `do_action_fast` writes the real value into its own slot:
+
+- **Owner** (viz=1): reads the real commit.
+- **Opponent** (viz=0): the masked clone sees the framework placeholder
+  (`INT8_MIN`); the **raw session state** retains the reset-time stale `0`.
+
+That stale `0` is the whole mechanism. "Opponent has not committed" and
+"opponent committed but I cannot see it" both read as `0` in the session —
+MCTS cannot tell them apart, so it treats the opponent's commit as a decision
+to be sampled, exactly as in a sequential hidden-info game.
+
+## The `current_player()` override — two-stage scan
+
+```cpp
+int current_player() const override {
+  const auto& d = data;
+  int cur = d.current_player;
+  // Stage 1: honor the public cursor if the seat it points at is still a
+  //          placeholder (not yet committed).
+  if (cur >= 0 && cur < NPlayers
+      && d.acts_mask[cur] && d.pending_commits[cur] == 0) {
+    return cur;
+  }
+  // Stage 2: otherwise scan the first acts_mask=1 seat still at placeholder.
+  for (int p = 0; p < NPlayers; ++p) {
+    if (d.acts_mask[p] && d.pending_commits[p] == 0) return p;
+  }
+  // Stage 3: all active seats committed -> phase-transition fallback.
+  return d.small_player;
+}
+```
+
+**Why two stages, not a pure scan.** After player 0 commits, the GT advances
+`current_player_` to 1 and ships it in the snapshot. Player 1's session
+receives `pending_commits = [0, 0]` (slot 0 is viz=0, left at stale `0`; slot
+1 is player 1's own, still `0`). A pure "first placeholder" scan would return
+`0`, disagreeing with the GT actor `1`. Stage 1 anchors on the **public
+cursor** so the session's root `current_player()` matches the GT's. Inside a
+sim, after player 1 commits the cursor advances to `0`; stage 1 then hits
+`0` at placeholder and returns it — sim walks into the opponent decision node
+naturally.
+
+## Rules responsibilities (`do_action_fast`)
+
+1. **Commit**: write the action's real value into `pending_commits[me]`,
+   advance `current_player_` to the next `acts_mask=1` seat still at
+   placeholder (or to the phase-transition actor when all are in).
+2. **Seal**: when no `acts_mask=1` seat remains at placeholder, all commits
+   are in. Call `viz::reveal_slot` on each `pending_commits[p]` (all viewers)
+   — **the simultaneous reveal IS the viz flip**, no separate apply-queue
+   field. Then resolve the round and rewrite `acts_mask` for the next phase.
+3. **Phase boundaries**: rewrite `acts_mask` once (single 1 for a sequential
+   phase, all-true for the next simultaneous phase, all-false at terminal).
+
+`acts_mask` is the only phase-state field; rules never mutate it mid-phase.
+`pending_commits` and `current_player_` are the only fields rules mutate
+during a simultaneous phase.
+
+## What the framework already gives you for free
+
+| Subsystem | Why it works unchanged |
+|-----------|------------------------|
+| MCTS descent | A simultaneous phase is just a run of perspective nodes (self commit → opp commit → reveal). Opponent commit nodes use `opponent_selection` (`prior`/`puct`) like any sequential game. |
+| Hash / DAG | `pending_commits` is owner-only, so for perspective `q ≠ p` it hashes as `kHiddenHashSentinel`. Different sampled opponent commits merge at the `q`-perspective node → the information set is automatic. `current_player_` is public, hashes normally. |
+| Encoder | Reads the masked clone; viz=0 slots are framework placeholders, handled by existing rules. |
+| Snapshot | `acts_mask` / `current_player_` are public → auto-serialized. `pending_commits` viz=0 → auto-omitted; after `reveal_slot` the viz flip makes it auto-included. |
+| Selfplay / API / Web | The runner's "take `current_player()` → route to that session → MCTS → action → `do_action_fast`" loop is unchanged. Each session's root `current_player()` aligns with the GT via the public cursor. |
+| `randomize_unseen` | Unchanged — it only samples hidden physical sources (hands). Commit slots are rules-maintained, out of its scope. |
+
+## Invariants
+
+- `acts_mask` is **phase-constant**. Rules write it only at phase boundaries,
+  never mid-phase. If you find yourself mutating it per-commit, the state
+  machine has leaked into the wrong slot.
+- `0` in `pending_commits` must be an **impossible real commit value**. If
+  your action encoding uses `0` as a legal commit, pick a different sentinel
+  (and adjust the `== 0` tests in the scan + the reset value).
+- `pending_commits` viz base is `owner_only_first_axis`; the simultaneous
+  reveal is **`viz::reveal_slot` (all viewers) at seal time**, not a value
+  rewrite. Do not "reveal" by copying values into a separate public field —
+  that breaks the information-set merge.
+- `current_player_` is the **only** public scan anchor. Do not add a second
+  cursor; the two-stage scan assumes exactly one.
+- Non-simultaneous games are untouched: they simply do not declare
+  `acts_mask`, and their existing `current_player()` stands.
+
+## Worked example: 6 nimmt!
+
+Each round every player secretly chooses a card, then all reveal in ascending
+order and place onto rows. Map directly:
+
+- `acts_mask` = all-true during the commit phase, single `1` at `small_player`
+  during the sequential SMALL/apply pause, all-false at terminal.
+- `pending_commits[p]` = the card player `p` chose (`1..104`; `0` = not yet).
+- `current_player_` = scan cursor; rules advance it per commit, reset at
+  round start.
+- `committed[]` is an **internal GT-only flag**, NOT a schema slot — it does
+  not enter hash/snapshot/wire. On a snapshot-driven session state (where
+  `do_action_fast` never runs) it stays at reset `0`; no session-side
+  consumer reads it. (See `state.md` "Key invariants": off-schema fields are
+  uninitialized in the session — `committed` is safe only because nothing on
+  the decision side reads it.)
+
+See `games/6nimmit/6nimmit_state.h` (slot comments + the `current_player()`
+override) and `games/6nimmit/6nimmit_rules.cpp` (commit / seal / phase
+rewrite) for the full implementation. The original design write-up lives at
+`docs/plans/archive/simultaneous_actions.md` (archived design history; this
+page is the canonical reference going forward).

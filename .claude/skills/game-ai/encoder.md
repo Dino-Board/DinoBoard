@@ -1,0 +1,159 @@
+# IFeatureEncoder Reference
+
+## Interface
+
+```cpp
+class IFeatureEncoder {
+ public:
+  virtual int action_space() const = 0;
+  virtual int feature_dim() const = 0;
+
+  // Override this. Input is a perspective-masked state:
+  // viz=0 slots already contain kPlaceholder sentinels.
+  virtual void encode_features(
+      const IGameState& masked_state,
+      int perspective_player,
+      const IBeliefTracker* tracker,
+      std::vector<float>* out) const = 0;
+
+  // Framework entry point -- materializes masked state, then calls encode_features.
+  // Games override encode_features, NOT this.
+  bool encode(const IGameState& state, int perspective_player,
+              const IBeliefTracker* tracker,
+              const std::vector<ActionId>& legal_actions,
+              std::vector<float>* features,
+              std::vector<float>* legal_mask) const;
+
+  // Skips masking when caller already has a masked state (MCTS reuse).
+  bool encode_with_masked(
+      const IGameState& masked_state, int perspective_player,
+      const IBeliefTracker* tracker,
+      const std::vector<ActionId>& legal_actions,
+      std::vector<float>* features,
+      std::vector<float>* legal_mask) const;
+};
+```
+
+## encode_features implementation pattern
+
+```cpp
+void MyGameEncoder::encode_features(
+    const IGameState& masked_state,
+    int perspective_player,
+    const IBeliefTracker* tracker,
+    std::vector<float>* out) const {
+  const auto& s = checked_cast<MyGameState>(masked_state);
+
+  // 1. Perspective rotation: encode "me" first, then opponents in seat order
+  for (int offset = 0; offset < N; ++offset) {
+    int abs_seat = (perspective_player + offset) % N;
+    // Encode per-player public features (scores, alive, etc.)
+    out->push_back(normalize(s.scores[abs_seat]));
+    out->push_back(s.alive[abs_seat] ? 1.0f : 0.0f);
+  }
+
+  // 2. Global public features
+  out->push_back(normalize(s.round));
+  out->push_back(normalize(s.deck_size));
+
+  // 3. Private features (viz=0 slots are kPlaceholder -- branch on it)
+  for (int offset = 0; offset < N; ++offset) {
+    int abs_seat = (perspective_player + offset) % N;
+    int8_t card = s.hand[abs_seat];
+    if (card == kPlaceholderInt8) {
+      // Hidden: encode as zeros (or a separate "unknown" encoding)
+      for (int c = 0; c < kCardTypes; ++c) out->push_back(0.0f);
+    } else {
+      // Visible: one-hot
+      for (int c = 0; c < kCardTypes; ++c)
+        out->push_back(card == (c + 1) ? 1.0f : 0.0f);
+    }
+  }
+
+  // 4. Tracker-derived features (optional, public-derived aggregates)
+  if (tracker) {
+    // e.g. claim history, multiset summaries
+    auto belief_info = tracker->serialize();
+    // encode belief aggregates...
+  }
+}
+```
+
+## Perspective rotation
+
+The network always sees features from "my" perspective:
+- `values[0]` = features about the acting player ("me")
+- `values[1]` = features about the next player in seat order
+- etc.
+
+Rotation formula: `abs_seat = (perspective_player + offset) % num_players`
+
+The ONNX evaluator rotates the N-dim value output back to absolute player ordering for MCTS backup.
+
+## Normalization
+
+Continuous values should be normalized to roughly [0, 1] or [-1, 1]:
+- Scores: `score / max_score`
+- Counts: `count / max_count`
+- Round/turn: `round / max_rounds`
+
+## Legal mask
+
+Handled automatically by the framework's `fill_legal_mask_impl`. The encoder does NOT produce the legal mask -- `encode` concatenates `encode_features` output with the legal mask.
+
+```cpp
+// Framework handles this:
+legal_mask->assign(action_space(), 0.0f);
+for (ActionId a : legal_actions) {
+  (*legal_mask)[a] = 1.0f;
+}
+```
+
+## MCTS runtime contract
+
+`net_mcts.cpp` expands a DAG node with two different state surfaces:
+
+- live `state` goes to `rules.legal_actions(state)` and terminal value.
+- perspective-masked `masked_state` goes to `evaluator.evaluate(...)`, then `encode_with_masked(...)`.
+
+During sim descent, MCTS materializes one masked clone per step and reuses it for
+both the DAG hash lookup and encoder input. This keeps hash scope and network
+input scope aligned. Therefore, any state that can affect the acting player's
+legal action set must be represented in that player's perspective hash scope;
+otherwise a reused DAG node may contain edges that are illegal in the current
+sampled world and MCTS will fail with a legal-action mismatch.
+
+## Information barrier
+
+The masked state is the structural barrier against information leakage:
+- `make_masked_state(state, schema, perspective)` clones + overwrites viz=0 slots with `kPlaceholder*`
+- Encoder reads the clone, never the original
+- No `is_visible_to` helper needed -- just check for placeholder values
+
+Sentinel values:
+- `kPlaceholderInt32` = `INT32_MIN`
+- `kPlaceholderInt8` = `INT8_MIN` (-128)
+- `kPlaceholderBool` = `false`
+
+For integer-like fields, placeholder values are outside the legal value range and
+can be used as an explicit "unknown" branch. For boolean fields, `false` is also
+a legitimate value; do not model a hidden three-state fact (true / false /
+unknown) as a hidden bool. Use an integer enum or an explicit unknown flag
+instead.
+
+## Known issues
+
+- **BUG-028**: encoder must NOT query `viz_` directly. Always branch on placeholder values from the masked state. The masked state is the single source of "what is hidden."
+
+- **BUG-037**: every piece of state that affects DAG node identity, encoder input, or legal-action scope must be represented in schema/hash scope. If the encoder reads off-schema state, hash and encoder disagree, causing silent DAG corruption. Pure hidden physical contents may stay off-schema only when they are never read by the encoder, cannot change same-hash legal actions, are resampled by `randomize_unseen`, and expose any public projection (count/size) through schema fields.
+
+## action_space / feature_dim
+
+Must return compile-time constants matching the network architecture:
+- `action_space()`: total number of possible actions (including illegal ones -- legal mask handles filtering)
+- `feature_dim()`: total length of the feature vector produced by `encode_features`
+
+Training reads these dimensions from engine metadata (`feature_dim` →
+`input_dim`, `action_space` → `policy_dim`) and exports ONNX with that shape.
+They must match the trained/exported model's input feature length and policy
+output length; `train.json::network` only chooses the hidden architecture.

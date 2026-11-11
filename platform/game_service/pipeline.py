@@ -1,0 +1,473 @@
+"""Async pipeline: precompute + analyze user move + AI thinking."""
+from __future__ import annotations
+
+import logging
+import time
+from concurrent.futures import ThreadPoolExecutor
+
+import dinoboard_engine as engine
+
+logger = logging.getLogger(__name__)
+
+from .sessions import (
+    history_hash,
+    pipeline_mark_done_empty,
+    pipeline_reset,
+    precompute_clear,
+)
+from .replay import build_analysis_dict, make_replay_frame, public_ai_stats
+from .visibility import actor_is_opaque
+from session_factory import SessionFactory
+
+import os
+
+# Pool size defaults to (cpu_count - 2), min 2, capped at 16 — leaves headroom
+# for uvicorn + system. Tunable via DINOBOARD_PIPELINE_WORKERS env var.
+_DEFAULT_WORKERS = max(2, min(16, (os.cpu_count() or 4) - 2))
+_PIPELINE_WORKERS = int(os.environ.get("DINOBOARD_PIPELINE_WORKERS", _DEFAULT_WORKERS))
+_PRECOMPUTE_WORKERS = int(os.environ.get("DINOBOARD_PRECOMPUTE_WORKERS", _PIPELINE_WORKERS))
+
+PIPELINE_EXECUTOR = ThreadPoolExecutor(max_workers=_PIPELINE_WORKERS, thread_name_prefix="pipeline")
+PRECOMPUTE_EXECUTOR = ThreadPoolExecutor(max_workers=_PRECOMPUTE_WORKERS, thread_name_prefix="precompute")
+
+
+def _human_wr_from_stats(stats: dict, human_player: int) -> float:
+    """Extract human player's win rate for the best action (absolute player ordering)."""
+    root_values = stats["root_values"]
+    if human_player >= len(root_values):
+        raise IndexError(
+            f"_human_wr_from_stats: human_player={human_player} out of range "
+            f"for root_values of length {len(root_values)}"
+        )
+    return (root_values[human_player] + 1) / 2
+
+
+def _human_wr_for_action(stats: dict, action_id: int, human_player: int) -> float | None:
+    """Extract human player's win rate for a specific action from action_values map.
+
+    Returns None only when the action isn't in the search tree at all. Analysis
+    callers run MCTS with cover_root_edges=True + ai_use_filter=False, so every
+    legal action is guaranteed at least one visit and a real value — None
+    should not occur on that path. Kept defensive for non-analysis callers.
+    """
+    action_values = stats["action_values"]
+    if action_id not in action_values:
+        return None
+    vals = action_values[action_id]
+    if human_player >= len(vals):
+        raise IndexError(
+            f"_human_wr_for_action: human_player={human_player} out of range "
+            f"for action_values[{action_id}] of length {len(vals)}"
+        )
+    return (vals[human_player] + 1) / 2
+
+
+def shutdown_executors() -> None:
+    PIPELINE_EXECUTOR.shutdown(wait=False, cancel_futures=True)
+    PRECOMPUTE_EXECUTOR.shutdown(wait=False, cancel_futures=True)
+
+
+# ─── Precompute ───
+
+
+def _precompute_worker(sess: dict, ply_index: int, expected_hash: str) -> None:
+    try:
+        action_history = list(sess["action_history"])
+        if sess["precompute"]["history_hash"] != expected_hash:
+            return
+
+        # Analysis path: ALWAYS unfiltered + cover_root_edges, regardless of
+        # whether AI live-play uses an action filter. Two reasons:
+        # (1) Without unfiltered, a legal-but-filtered human move (Quoridor)
+        #     never enters the tree and analysis silently reports drop=0%.
+        # (2) Without cover_root_edges, a legal action that PUCT never
+        #     happens to sample ends with visit_count==0 and action_values
+        #     defaults to q=0 → silent 50% win-rate readout. With coverage
+        #     every legal edge is visited at least once and gets a real q.
+        # Live AI play continues to use sess["ai_use_filter"] / no coverage.
+        gs = SessionFactory.from_session_dict(
+            sess, use_action_filter=False, history=action_history)
+        if gs.is_terminal:
+            return
+
+        analysis_sims = sess["analysis_simulations"]
+        analysis_world_cap = sess["analysis_world_cap"]
+        # Analysis: cover_root_edges + top_k=0 (no truncation) so every legal
+        # action gets a real visit and the action_values dict is dense.
+        # Drop-score / hint paths read q values from this dict — top_k>0 here
+        # would mute moves the user might pick.
+        result = gs.get_ai_action(analysis_sims, 0.0, cover_root_edges=True,
+                                  world_cap=analysis_world_cap,
+                                  top_k=0)
+
+        pc = sess["precompute"]
+        if pc["history_hash"] == expected_hash and pc["ply_index"] == ply_index:
+            pc["result"] = result
+    except Exception:
+        logger.exception("precompute_worker failed for %s", sess.get("actual_id", "?"))
+
+
+def schedule_precompute(sess: dict) -> None:
+    gs = sess["game_session"]
+    if gs.is_terminal:
+        return
+    if gs.current_player in sess["ai_players"]:
+        return
+    if not sess["model_path"]:
+        return
+
+    ply_index = len(sess["action_history"])
+    h = history_hash(sess["action_history"])
+    pc = sess["precompute"]
+
+    if pc["ply_index"] == ply_index and pc["history_hash"] == h:
+        return
+
+    pc["ply_index"] = ply_index
+    pc["history_hash"] = h
+    pc["result"] = None
+    PRECOMPUTE_EXECUTOR.submit(_precompute_worker, sess, ply_index, h)
+
+
+# ─── Pipeline ───
+
+
+def _cancelled(sess: dict) -> bool:
+    return sess["pipeline"]["phase"] == "done"
+
+
+def _build_isolated_gs(sess: dict) -> engine.GameSession:
+    """Isolated GameSession for AI search (honors the per-game action filter)."""
+    return SessionFactory.from_session_dict(
+        sess,
+        use_action_filter=sess["ai_use_filter"],
+        history=sess["action_history"],
+    )
+
+
+def _get_ai_move(gs: engine.GameSession, sess: dict) -> dict:
+    """Pick AI action using heuristic or MCTS depending on difficulty."""
+    if sess["difficulty"] == "heuristic":
+        result = gs.get_heuristic_action(
+            sess["heuristic_selector"],
+            sess["heuristic_temperature"],
+        )
+        if result and "action" in result:
+            return result
+    simulations = sess["simulations"]
+    world_cap = sess["world_cap"]
+    c_puct = sess["c_puct"]
+    temperature = sess["temperature"]
+    opp_sel = sess["opponent_selection"]
+    kwargs = dict(simulations=simulations, temperature=temperature,
+                  c_puct=c_puct, world_cap=world_cap,
+                  opponent_selection=opp_sel,
+                  top_k=sess["top_k"],
+                  fpu_reduction=sess["fpu_reduction"])
+    if sess.get("temperature_schedule_enabled"):
+        kwargs["temperature_initial"] = sess["temperature_initial"]
+        kwargs["temperature_final"] = sess["temperature_final"]
+        kwargs["temperature_decay_plies"] = sess["temperature_decay_plies"]
+    return gs.get_ai_action(**kwargs)
+
+
+def _analyze_user_move(sess: dict) -> dict | None:
+    """Drop-score analysis for the human's last move.
+
+    Does NOT run its own MCTS. Consumes the precompute result that was
+    already scheduled when the current human-to-play position was first
+    reached (after the previous AI move, game start, or undo). The same
+    precompute result also backs the "智能提示" (ai-hint) endpoint — one
+    MCTS per human-to-play state, reused for both purposes.
+
+    Flow: wait up to 8s for precompute to finish, then read the best
+    action's Q value (best_wr) and the human's chosen action's Q value
+    (actual_wr) from the cached `action_values` dict. Drop score is
+    (best_wr - actual_wr) * 100.
+
+    Fallback: if precompute never completed (unusual — cancelled or timed
+    out), run an inline MCTS as a backstop so the analysis still resolves.
+    This should be rare; the normal path is cache-hit.
+    """
+    action_history = list(sess["action_history"])
+    if not action_history:
+        return None
+
+    human_action_id = action_history[-1]
+    pre_move_history = action_history[:-1]
+    pre_move_hash = history_hash(pre_move_history)
+    human_player = sess["human_player"]
+
+    # Wait for precompute (which already ran MCTS on the pre-move position)
+    pc = sess["precompute"]
+    deadline = time.time() + 8.0
+    search_result = None
+    while time.time() < deadline:
+        if _cancelled(sess):
+            return None
+        if pc["history_hash"] == pre_move_hash and pc["result"] is not None:
+            search_result = pc["result"]
+            break
+        time.sleep(0.05)
+
+    if _cancelled(sess):
+        return None
+
+    # Fallback: inline MCTS if precompute missed. Mirrors the precompute
+    # config — unfiltered + cover_root_edges so action_values is dense.
+    if search_result is None:
+        gs_pre = SessionFactory.from_session_dict(
+            sess, use_action_filter=False, history=pre_move_history)
+        if gs_pre.is_terminal:
+            return None
+        analysis_sims = sess["analysis_simulations"]
+        analysis_world_cap = sess["analysis_world_cap"]
+        # Same rationale as the precompute path: analysis runs unfiltered
+        # and at top_k=0 so action_values covers every legal action.
+        search_result = gs_pre.get_ai_action(analysis_sims, 0.0,
+                                             cover_root_edges=True,
+                                             world_cap=analysis_world_cap,
+                                             top_k=0)
+
+    if _cancelled(sess):
+        return None
+
+    stats = search_result["stats"]
+    best_action = search_result["action"]
+    best_action_info = search_result["action_info"]
+    best_wr = _human_wr_from_stats(stats, human_player)
+
+    if human_action_id == best_action:
+        actual_wr = best_wr
+    else:
+        actual_wr = _human_wr_for_action(stats, human_action_id, human_player)
+        if actual_wr is None:
+            actual_wr = best_wr
+
+    return build_analysis_dict(best_wr, actual_wr, best_action, best_action_info)
+
+
+def _commit_ai_move(sess: dict, pipe: dict, ai_move: dict, acting_player: int,
+                    analysis: dict | None) -> None:
+    """Apply the AI move to session state. Holds pipeline_lock briefly.
+
+    Split out so the heavy compute (MCTS in _get_ai_move, analysis in
+    _analyze_user_move) can run without holding the lock. The lock is only
+    held during this short commit, so cancel_pipeline returns quickly even
+    when MCTS is mid-flight.
+    """
+    ai_action_id = ai_move["action"]
+    ai_action_info = ai_move["action_info"]
+    ai_stats = ai_move.get("stats")
+
+    # Everything below that reaches the browser (pipeline status, replay
+    # frames) carries what the human may SEE of the move, not the move
+    # itself: an action id can name something hidden (the face-down card
+    # of a 6 nimmt! commit, the character a Coup exchange returns), and the
+    # rules then report a stand-in via IGameRules::public_action. The real
+    # id stays server-side in action_history (step-back / session rebuild).
+    gs = sess["game_session"]
+    # The AI searched from ITS information set. When it holds cards the
+    # human cannot see, every number the search produced (win rates, visit
+    # counts, a tail-solve verdict) is a function of those cards, so none
+    # of it is shown during the game; the replay of the finished game gets
+    # it back (replay.full_replay_frames).
+    stats_private = actor_is_opaque(gs, sess["human_player"])
+    full_stats = ai_stats
+    trace = gs.apply_action_with_trace(ai_action_id, sess["human_player"])
+    sess["action_history"].append(ai_action_id)
+    shown_action_id = trace["action"]
+    if shown_action_id != ai_action_id:
+        ai_action_info = gs.get_action_info(shown_action_id)
+        ai_stats = public_ai_stats(ai_stats)
+    if stats_private:
+        ai_stats = None
+    ai_action_id = shown_action_id
+    ply = len(sess["action_history"])
+    if full_stats is not None:
+        sess.setdefault("ai_stats_full", {})[ply] = full_stats
+    sess["replay_frames"].append(
+        make_replay_frame(sess, ply, f"player_{acting_player}", ai_action_id, ai_action_info,
+                          ai_stats=ai_stats, analysis=None, events=trace["events"]))
+
+    if analysis and sess["replay_frames"]:
+        human_actor = f"player_{sess['human_player']}"
+        for frame in reversed(sess["replay_frames"][:-1]):
+            if frame["actor"] == human_actor:
+                frame["analysis"] = analysis
+                break
+
+    pipe["analysis"] = analysis
+    pipe["ai_action"] = ai_action_id
+    pipe["ai_action_info"] = ai_action_info
+    pipe["ai_stats"] = ai_stats
+    pipe["ai_events"] = trace["events"]
+
+
+def _pipeline_worker(sess: dict, session_id: str) -> None:
+    """Compute analysis + AI move outside the lock; commit atomically under lock.
+
+    Lock scope: only the final commit. Cancellation is cooperative and checked
+    before commit; if cancelled, all computed work is discarded and session
+    state is never mutated.
+    """
+    try:
+        pipe = sess["pipeline"]
+
+        # Phase 1: analyze user move (outside lock — just reads history).
+        # Always run analysis if there IS a user move to analyze: even when
+        # the human's move ended the game, _analyze_user_move builds the
+        # pre-move state internally (which is non-terminal by definition)
+        # and runs MCTS on it. Skipping here on gs_check.is_terminal
+        # silently drops the analysis on the game-ending move (e.g.
+        # liarsdice "challenge" — the player never gets a recommended-
+        # action line on that frame in replay).
+        pipe["phase"] = "analyzing"
+        analysis = None
+        if sess["action_history"]:
+            analysis = _analyze_user_move(sess)
+            if _cancelled(sess):
+                return
+
+        # Phase 2: AI thinking — runs on isolated GameSession, outside lock.
+        pipe["phase"] = "ai_thinking"
+        ai_move = None
+        acting_player = -1
+        gs_check = _build_isolated_gs(sess)
+        if not gs_check.is_terminal and gs_check.current_player in sess["ai_players"]:
+            acting_player = gs_check.current_player
+            ai_move = _get_ai_move(gs_check, sess)
+            if _cancelled(sess):
+                return
+
+        # Commit phase: hold lock briefly, re-check cancellation, apply.
+        lock = sess["pipeline_lock"]
+        if not lock.acquire(timeout=12):
+            logger.warning("pipeline_worker: commit-lock timeout for session %s", session_id)
+            return
+        try:
+            if _cancelled(sess):
+                return
+            if ai_move is not None:
+                _commit_ai_move(sess, pipe, ai_move, acting_player, analysis)
+            else:
+                # No AI follow-up (terminal game-ending move). Still need
+                # to attach the analysis to the most recent human frame so
+                # replay can show the recommended-action line on the
+                # game-ending move.
+                if analysis and sess["replay_frames"]:
+                    human_actor = f"player_{sess['human_player']}"
+                    for frame in reversed(sess["replay_frames"]):
+                        if frame["actor"] == human_actor:
+                            frame["analysis"] = analysis
+                            break
+                pipe["analysis"] = analysis
+                pipe["ai_action"] = None
+                pipe["ai_action_info"] = None
+                pipe["ai_stats"] = None
+                pipe["ai_events"] = None
+            pipe["phase"] = "done"
+            precompute_clear(sess)
+        finally:
+            lock.release()
+
+        schedule_precompute(sess)
+
+    except Exception as exc:
+        logger.exception("pipeline_worker failed for session %s", session_id)
+        sess["pipeline"]["phase"] = "error"
+        sess["pipeline"]["error"] = str(exc)
+        sess["pipeline"]["ai_action"] = None
+
+
+def _pipeline_worker_ai_only(sess: dict, session_id: str) -> None:
+    """AI-only variant: compute and commit a SINGLE AI move.
+
+    The frontend (platform/static/general/app.js pollPipeline) drives the
+    multi-step loop itself: after each animation finishes, if it's still an
+    AI's turn, the page POSTs /ai-action again to schedule the next
+    sub-action. So this worker must only walk ONE step — looping here would
+    collapse every intra-turn sub-action into a single transition that
+    overwrites the pipeline's ai_action slot, hiding all but the last
+    animation from the player (regression for harmonies' multi-step turns
+    and any other intra-turn-multi-action game). For Jaipur the previous
+    bug was on the GAME-RULES side (camel phase didn't advance), not here.
+    """
+    try:
+        pipe = sess["pipeline"]
+        pipe["phase"] = "ai_thinking"
+
+        gs_check = _build_isolated_gs(sess)
+        if not gs_check.is_terminal and gs_check.current_player in sess["ai_players"]:
+            acting_player = gs_check.current_player
+            ai_move = _get_ai_move(gs_check, sess)
+            if _cancelled(sess):
+                return
+            if ai_move is not None and "action" in ai_move:
+                lock = sess["pipeline_lock"]
+                if not lock.acquire(timeout=12):
+                    logger.warning("pipeline_worker_ai_only: commit-lock timeout for session %s", session_id)
+                    return
+                try:
+                    if _cancelled(sess):
+                        return
+                    _commit_ai_move(sess, pipe, ai_move, acting_player, None)
+                finally:
+                    lock.release()
+
+        pipe["phase"] = "done"
+        precompute_clear(sess)
+        schedule_precompute(sess)
+
+    except Exception as exc:
+        logger.exception("pipeline_worker_ai_only failed for session %s", session_id)
+        sess["pipeline"]["phase"] = "error"
+        sess["pipeline"]["error"] = str(exc)
+        sess["pipeline"]["ai_action"] = None
+
+
+def schedule_pipeline(sess: dict, session_id: str) -> None:
+    pipe = sess["pipeline"]
+    if pipe["phase"] in ("analyzing", "ai_thinking"):
+        return
+    pipe["phase"] = "queued"
+    pipe["ai_action"] = None
+    pipe["ai_action_info"] = None
+    pipe["ai_stats"] = None
+    pipe["ai_events"] = None
+    PIPELINE_EXECUTOR.submit(_pipeline_worker, sess, session_id)
+
+
+def schedule_pipeline_ai_only(sess: dict, session_id: str) -> None:
+    pipe = sess["pipeline"]
+    if pipe["phase"] in ("analyzing", "ai_thinking"):
+        return
+    pipe["phase"] = "queued"
+    pipe["ai_action"] = None
+    pipe["ai_action_info"] = None
+    pipe["ai_stats"] = None
+    pipe["ai_events"] = None
+    PIPELINE_EXECUTOR.submit(_pipeline_worker_ai_only, sess, session_id)
+
+
+def signal_cancel(sess: dict) -> None:
+    """Non-blocking cancel of the PIPELINE only: signal workers to stop.
+
+    Does NOT touch the precompute — precompute runs in a separate executor
+    and its cached result is needed by _analyze_user_move right after the
+    cancel. Clearing precompute here caused a bug where apply_action's
+    opening cancel_pipeline() wiped the game-start precompute, forcing
+    _analyze_user_move to time-wait 8s on an empty cache (observed as
+    "AI takes ~10 seconds to respond to the first move"). Callers that
+    genuinely need to invalidate precompute (undo / state rebuild) must
+    call precompute_clear() explicitly.
+    """
+    pipeline_mark_done_empty(sess)
+
+
+def cancel_pipeline(sess: dict) -> None:
+    signal_cancel(sess)
+    lock = sess["pipeline_lock"]
+    lock.acquire()
+    lock.release()
+    pipeline_reset(sess)

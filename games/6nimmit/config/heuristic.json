@@ -1,0 +1,20 @@
+{
+  "named": {
+    "rule_v1": {
+      "type": "rule"
+    },
+    "lkf_v1": {
+      "type": "rule"
+    }
+  },
+  "selectors": {
+    "eval_vs_heuristic": {
+      "name": "lkf_v1",
+      "temperature": 0.0
+    },
+    "web": {
+      "name": "lkf_v1",
+      "temperature": 0.0
+    }
+  }
+}

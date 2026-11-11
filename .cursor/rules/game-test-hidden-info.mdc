@@ -1,0 +1,147 @@
+---
+description: "Hidden-info game tests — tracker consistency, ISMCTS sampling, hash scope, snapshot"
+globs:
+  - "tests/**"
+alwaysApply: false
+---
+
+# Hidden-Info Game Tests Reference
+
+## Overview
+
+Hidden-info games require extra tests beyond the 11-step checklist. These verify
+that the tracker, ISMCTS sampling, hash, encoder, and snapshot protocol correctly
+maintain the information barrier. Five tests, each with its own enrollment mechanism.
+
+## 1. test_tracker_consistent_with_truth
+
+**File**: `tests/framework/test_tracker_consistent_with_truth.py`
+
+**What it checks**: At every ply of a random game, the tracker's "definite
+knowledge" claims must not contradict ground truth. Known facts (e.g. loveletter
+`known_hand[p]` after Priest peek) must match; unknown slots are free.
+
+**Why separate from belief-matches-selfplay**: Two trackers can be wrong in the
+same way and still match each other. This test pins claims against GT.
+
+**Enrollment**: Manual. Add a checker function to `_CHECKERS` dict:
+```python
+def _check_mygame(state: dict, snap: dict, perspective: int) -> None:
+    known = snap.get("known_field")
+    if known is None:
+        return
+    # Assert: claim != UNKNOWN implies claim == truth
+    ...
+
+_CHECKERS = {
+    "loveletter": _check_loveletter,
+    "mygame": _check_mygame,   # add here
+}
+```
+The game is parametrized over `list(_CHECKERS.keys())`.
+
+## 2. test_ismcts_samples_respect_tracker
+
+**File**: `tests/framework/test_ismcts_samples_respect_tracker.py`
+
+**What it checks**: Every world produced by `randomize_unseen` must honor the
+tracker's certain knowledge. If tracker says player P holds card C, every sampled
+world must have player P holding card C. Violations mean MCTS searches trees
+whose roots contradict legal observations.
+
+**Enrollment**: Manual. Add a checker function to `_CHECKERS` dict:
+```python
+def _check_mygame(snap: dict, trial_state: dict) -> None:
+    known = snap.get("known_field")
+    if known is None:
+        return
+    # Assert: claim != UNKNOWN implies sample == claim
+    ...
+
+_CHECKERS = {
+    "loveletter": _check_loveletter,
+    "mygame": _check_mygame,
+}
+ISMCTS_SAMPLE_GAMES = list(_CHECKERS.keys())
+```
+
+## 3. test_public_hash_excludes_internal_rng
+
+**File**: `tests/framework/test_public_hash_excludes_internal_rng.py`
+
+**What it checks**: Two API sessions with DIFFERENT seeds, driven through the
+same observation history, must produce identical `state_hash_for_perspective` at
+every ply. If the hash leaks any internal RNG state (rng_salt, mt19937 snapshot,
+deck order), the two hashes diverge.
+
+**Enrollment**: Automatic via manifest capabilities.
+```python
+from conftest import games_with_capability
+HIDDEN_INFO_GAMES = games_with_capability("hidden_info", "snapshot")
+```
+Requires both `"hidden_info"` and `"snapshot"` capabilities in manifest.json.
+
+**Sweep**: 60 episodes (seeds 50..463 step 7), max 60 plies each. Single-seed
+tests can miss conditional divergences (BUG-028 postmortem).
+
+## 4. test_encoder_respects_hash_scope
+
+**File**: `tests/framework/test_encoder_respects_hash_scope.py`
+
+**What it checks**: Encoder output must be bit-equal when opponent private state
+changes but the acting player's viz=1 slots stay the same. If the encoder reads
+a viz=0 slot, the feature vector becomes world-specific rather than info-set-
+specific, causing prior pollution under root sampling.
+
+**Enrollment**: Automatic via manifest capabilities.
+```python
+from conftest import hidden_info_games as _hidden_info_games
+HIDDEN_INFO_GAMES = _hidden_info_games()
+```
+Requires `"hidden_info"` capability in manifest.json.
+
+**Method**: Two GameSession instances with same seed, identical action sequences,
+extract features at each perspective's decision point, assert bit-equal.
+
+## 5. test_public_snapshot_round_trip
+
+**File**: `tests/framework/test_public_snapshot_round_trip.py`
+
+**What it checks**: For every game with a public_state_applier:
+truth state -> extractor populates public_snapshot -> observer session for a
+trace perspective + apply_public_snapshot -> observer
+`state_hash_for_perspective(trace_perspective)` must equal truth's hash for that
+same perspective. The test intentionally compares the traced perspective only:
+other players' private slots in the observer session are sampled/unknown, not
+truth. If the applier drifts from state_hash_for_perspective, the observer's
+public view silently diverges from truth (same class as BUG-028).
+
+**Enrollment**: Automatic via manifest capabilities.
+```python
+from conftest import games_with_snapshot
+GAMES_WITH_APPLIER = games_with_snapshot()
+```
+Requires `"snapshot"` capability in manifest.json.
+
+**Sub-tests**:
+- `test_extractor_populates_public_snapshot`: every trace step carries non-empty snapshot
+- `test_snapshot_round_trip_hash_equal`: hash equality after apply
+
+## Enrollment summary
+
+| Test                                  | Enrollment     | Required capabilities        |
+|---------------------------------------|----------------|------------------------------|
+| test_tracker_consistent_with_truth    | Manual (_CHECKERS dict) | --                    |
+| test_ismcts_samples_respect_tracker   | Manual (_CHECKERS dict) | --                    |
+| test_public_hash_excludes_internal_rng| Auto (manifest)| hidden_info + snapshot        |
+| test_encoder_respects_hash_scope      | Auto (manifest)| hidden_info                   |
+| test_public_snapshot_round_trip       | Auto (manifest)| snapshot                      |
+
+## Adding a new hidden-info game: minimum steps
+
+1. Add manifest.json entry with `capabilities: ["hidden_info", "snapshot", "tracker"]`
+2. Tests 3, 4, 5 auto-enroll via capabilities
+3. For tests 1, 2: write game-specific checker functions and add to `_CHECKERS` dicts
+4. Each checker identifies "definite knowledge" fields in `tracker.serialize()` output
+   and matches them against ground truth (test 1) or sampled world (test 2)
+5. Run: `pytest tests/framework/test_tracker_consistent_with_truth.py tests/framework/test_ismcts_samples_respect_tracker.py tests/framework/test_public_hash_excludes_internal_rng.py tests/framework/test_encoder_respects_hash_scope.py tests/framework/test_public_snapshot_round_trip.py -v -k <your_game>`

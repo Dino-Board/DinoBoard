@@ -1,0 +1,34 @@
+{
+  "game_id": "6nimmit",
+  "display_name": "\u725b\u5934\u738b",
+  "display_name_en": "6 nimmt!",
+  "victory_mode": "loser_pays",
+  "players": {
+    "min": 2,
+    "max": 4
+  },
+  "max_game_plies": 50,
+  "variants": {
+    "6nimmit": {
+      "feature_dim": 341,
+      "action_space": 108,
+      "num_players": 2,
+      "belief_feature_dim": 329,
+      "belief_logit_count": 104
+    },
+    "6nimmit_3p": {
+      "feature_dim": 448,
+      "action_space": 108,
+      "num_players": 3,
+      "belief_feature_dim": 331,
+      "belief_logit_count": 208
+    },
+    "6nimmit_4p": {
+      "feature_dim": 555,
+      "action_space": 108,
+      "num_players": 4,
+      "belief_feature_dim": 333,
+      "belief_logit_count": 312
+    }
+  }
+}

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Carcassonne Meeple Anchor Editor</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="toolbar">
+    <div>
+      <h1>卡卡颂米宝点位编辑器</h1>
+      <p>拖动每张板块上的点位，点击保存后写回 <code>games/carcassonne/web/carcassonne.js</code>。</p>
+    </div>
+    <div class="actions">
+      <label class="toggle">
+        <input id="showLabels" type="checkbox" checked>
+        <span>标签</span>
+      </label>
+      <label class="toggle">
+        <input id="showGrid" type="checkbox">
+        <span>网格</span>
+      </label>
+      <button id="reloadBtn" type="button">重新读取</button>
+      <button id="saveBtn" class="primary" type="button">保存</button>
+    </div>
+  </header>
+
+  <main>
+    <aside class="panel">
+      <div class="panel-title">当前点位</div>
+      <div id="selection" class="selection empty">还没选中点</div>
+      <div class="legend">
+        <span><i class="dot feature"></i>道路/城市</span>
+        <span><i class="dot farm"></i>草地</span>
+        <span><i class="dot center"></i>修道院</span>
+      </div>
+      <div class="hint">拖动圆点调整。选中后可用方向键微调，按住 Shift 每次移动 5%。</div>
+      <div id="status" class="status">准备读取。</div>
+    </aside>
+    <section id="tileGrid" class="tile-grid" aria-label="tile anchor editor"></section>
+  </main>
+
+  <script type="module" src="editor.js"></script>
+</body>
+</html>

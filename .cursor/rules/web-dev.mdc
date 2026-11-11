@@ -1,0 +1,14 @@
+---
+description: "Develop game web frontends (design principles, createApp API, patterns, AI pipeline, replay)"
+globs:
+  - "games/**/web/**"
+alwaysApply: false
+---
+# Web Frontend Development
+
+See the rule matching your current task:
+- **Design principles** (natural interaction, spatial anchoring, visual clarity): see web-dev-design
+- **Animation system**: see web-animation (separate skill)
+- **createApp API** (config fields, ctx, gameState): see web-dev-api
+- **AI pipeline + replay** (precompute, drop-score, undo, hint, replay format): see web-dev-pipeline
+- **Patterns** (i18n, imports, seat rotation, directory structure, pre-ship checklist): see web-dev-patterns

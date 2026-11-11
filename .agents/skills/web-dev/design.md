@@ -1,0 +1,134 @@
+# Web Frontend Design Principles
+
+Hard rules for every game's web frontend. Mandatory reading before touching any frontend code.
+
+---
+
+## 1. Natural Interaction (No Naive Button Mapping)
+
+**Rule**: Actions must NOT be mapped naively to individual buttons. Design interactions as the player would naturally play the physical game.
+
+- Clicking a card to play it, not selecting from a dropdown of action IDs.
+- Dragging a tile to a slot, not pressing "Place tile at row 2".
+- Clicking a board position to move, not typing coordinates.
+- Multi-step actions (e.g. "take 3 gems") use sequential clicks on the gems, not a single form.
+
+**Anti-pattern**: A row of buttons labeled "Action 0", "Action 1", ... "Action N" is never acceptable.
+
+---
+
+## 2. Spatial Anchoring
+
+**Rule**: Fixed game regions must have fixed screen positions and sizes. Never let a container shrink or shift when its contents change.
+
+- Board area: fixed size, fixed position. Empty slots show ghost/placeholder backgrounds.
+- Player areas: fixed height per player. Empty hand slots remain as placeholders.
+- Supply/market: fixed grid dimensions. Taken items leave visible gaps or empty-slot styling.
+- Score/status: fixed position in layout. Never push content down when scores grow.
+
+**Anti-pattern**: A hand area that collapses to zero height when empty, causing the board to jump upward.
+
+---
+
+## 3. Animation Rules
+
+All state transitions must be animated via `describeTransition(prevState, newState, actionInfo, actionId)`.
+
+### Timing
+- Default fly duration: 350ms
+- Inter-step gap: 60ms (automatic)
+- Popup duration: 900ms default
+- Max total transition: 30s hard cap
+
+### Step sequencing
+- Steps in the array execute sequentially (with 60ms gap).
+- Use `flyGroup` or `group` for parallel sub-animations within a step.
+- Use `pause` for explicit timing control between steps.
+
+### hideFrom vs onStart
+- `hideFrom: true` — simple: hides the source element entirely (visibility:hidden, preserves layout).
+- `onStart(srcEl)` — preferred when source has a meaningful empty-state background. Mutate the DOM to show "post-take" state.
+- Never hide a container to hide its contents — the empty container's background is meaningful layout.
+
+### popup bubbles
+- Use for score changes, status notifications ("+5", "BLOCKED").
+- Target a specific element for spatial context.
+- Keep content short (1-3 chars or a small icon).
+
+### reveal modals
+- Use for private-info reveals (Priest peek, Baron compare, card draws).
+- Blocks animation chain until user acknowledges.
+- Auto-dismiss during replay autoplay (1800ms).
+- Never use for public information — that goes in the info panel or popup.
+
+---
+
+## 4. Visual Clarity
+
+### Contrast and sizing
+- Interactive elements: minimum 44x44px touch target.
+- Text on colored backgrounds: WCAG AA contrast ratio (4.5:1 for body text).
+- Current player indicator: prominent (border, glow, or dedicated badge), not subtle opacity change.
+- Disabled/unavailable elements: visibly distinct (opacity + cursor:not-allowed + no hover effect).
+
+### State distinction
+- Selected vs unselected: clear visual difference (border + scale, not just color).
+- Legal vs illegal targets: legal targets get hover effect; illegal targets show nothing on hover.
+- Your turn vs opponent's turn: board interaction enabled/disabled + visual cue.
+- Terminal state: clear "game over" signal (modal + disabled board).
+
+### Color usage
+- Player colors: high-contrast, colorblind-friendly palette.
+- Status colors: green=positive, red=negative, blue=info, yellow=warning (standard semantics).
+- Never rely on color alone — add shape/icon/text as secondary signal.
+
+---
+
+## 5. CSS Pitfalls
+
+- Never use `display:none` for layout-participating elements — use `visibility:hidden` (preserves space).
+- Fixed-dimension containers: use `min-height` not `height` to allow content overflow without layout break.
+- Transform scale on board container: animation engine accounts for this (flyer sizing uses rendered rect).
+- z-index layering: board=1, player-area=1, anim-overlay=9999, flying-sprites=10001, popup=10002, reveal-modal=10003, game-over-modal=40000.
+- Mobile: use CSS `transform: scale()` on the board container, not viewport-width font tricks.
+
+---
+
+## 6. Layout Framework
+
+The platform provides `buildLayout()` which creates:
+- `refs.sidebar` — left sidebar (340px desktop; 280px below 1200px; 260px overlay on phone)
+- `refs.boardCol` — main board area (flexible)
+- `refs.playerArea` — below-board player area (optional, used by renderPlayerArea)
+- `refs.infoCol` — right info panel (340px; full-width below 900px)
+- `refs.stage` — outer stage container (wraps boardCol + infoCol + playerArea; zoom controls target this)
+
+Games render into `refs.boardCol` and optionally `refs.playerArea`. Never create custom layout containers outside this structure.
+
+---
+
+## Summary Checklist
+
+Before shipping any game frontend:
+- [ ] No action-ID buttons — all interactions are spatial/natural
+- [ ] All containers have fixed dimensions (no layout shift)
+- [ ] Every action has describeTransition animation
+- [ ] Touch targets >= 44px
+- [ ] Current player clearly indicated
+- [ ] Legal actions have hover feedback
+- [ ] Disabled state visually distinct
+- [ ] Works on mobile (scaled board, no horizontal scroll)
+- [ ] reveal modals for private-info, popup for ephemeral status
+- [ ] No `display:none` on layout-participating elements
+
+---
+
+## Reference Implementations
+
+| Game | File | Best for |
+|------|------|----------|
+| Azul | `games/azul/web/azul.js` | Spatial anchoring (fixed factory grid + center pool + 5-row pattern/wall boards), multi-phase settlement animation |
+| Splendor | `games/splendor/web/splendor.js` | Complex multi-step natural interactions (gem picking → confirm, card buy/reserve with spatial click) |
+| 6 nimmt! | `games/6nimmit/web/6nimmit.js` | Simultaneous-action game (commit-area with face-down → reveal → per-card apply sequence) |
+| Coup | `games/coup/web/coup.js` | Action-panel design for stages (declare → challenge → counter → reveal), reveal modals for hidden info |
+| Love Letter | `games/loveletter/web/loveletter.js` | Card play with target selection + guess modal, reveal modals (Priest peek / Baron compare) |

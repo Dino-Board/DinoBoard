@@ -1,0 +1,134 @@
+# Model Evaluation Reference
+
+Script: `scripts/eval_model.py`
+
+## What It Does
+
+Runs arena matches between a test side and an opponent, rotates the test side
+across seats, and prints overall plus per-seat win rates.
+
+Actor specs:
+
+| Spec | Meaning |
+|------|---------|
+| ONNX path | MCTS over that policy/value model |
+| `heuristic` | Heuristic selected by `heuristic.json::selectors[--heuristic-selector]` |
+| `heuristic:<name>` | Named heuristic from `heuristic.json::named` |
+
+## Default Evaluation Mode
+
+For model-involved matches (`model vs model` or `model vs heuristic`), the script
+now defaults to the same single-process batched evaluator path used by training
+self-play when:
+
+```json
+training.selfplay_concurrency.enabled = true
+```
+
+The batch config comes from:
+
+```json
+training.selfplay_concurrency.evaluator
+```
+
+Fields consumed:
+
+| Field | Purpose |
+|-------|---------|
+| `batch_size` | Max ONNX leaf batch size |
+| `batch_timeout_us` | Batch fill timeout |
+| `max_queue_size` | Evaluator request queue cap |
+| `intra_op_num_threads` | ONNX intra-op thread count |
+| `providers` | ONNX providers, e.g. `["coreml", "cpu"]` or `["cuda", "cpu"]` |
+
+Use `--providers coreml,cpu` or `--providers cuda,cpu` at launch to override
+the JSON without editing config files. The script prints a `Using batched eval`
+line when this path is active. Use `--no-batched` only for debugging legacy
+ProcessPool behavior.
+
+## Quick Commands
+
+Model vs default heuristic, GPU/CoreML batch, no replay files:
+
+```bash
+python3 scripts/eval_model.py --game carcassonne \
+  --model games/carcassonne/model/carcassonne_2p.onnx \
+  --opponent heuristic --games 100 --workers 100 \
+  --sims 1000 --profile eval --providers coreml,cpu \
+  --no-save -o /tmp/eval
+```
+
+Heuristic as the measured side vs a random/current model:
+
+```bash
+python3 scripts/eval_model.py --game carcassonne \
+  --model heuristic \
+  --opponent games/carcassonne/model/carcassonne_2p.onnx \
+  --name-model rule_mcts --name-opponent model \
+  --games 100 --workers 100 --sims 1000 --profile eval \
+  --providers coreml,cpu --no-save -o /tmp/eval
+```
+
+Model vs model:
+
+```bash
+python3 scripts/eval_model.py --game coup \
+  --model runs/coup/models/model_latest.onnx --name-model latest \
+  --opponent runs/coup/models/model_best.onnx --name-opponent best \
+  --games 40 --workers 40 --providers cuda,cpu \
+  --no-save -o /tmp/eval
+```
+
+Pair seats for 2p luck cancellation:
+
+```bash
+python3 scripts/eval_model.py --game quoridor \
+  --model new.onnx --opponent old.onnx \
+  --games 100 --paired-seats --workers 50 --no-save -o /tmp/eval
+```
+
+## Important Semantics
+
+- `--model` is the measured side in the printed W-L-D summary.
+- The measured side rotates by `game_idx % num_players` unless `--fixed-seat`
+  or `--paired-seats` is set.
+- `--sims` overrides the MCTS simulation count for ONNX model seats.
+- Heuristic MCTS-PV simulation counts come from `heuristic.json`, not `--sims`.
+  To benchmark a heuristic at a temporary sim count, edit config deliberately
+  and restore it after the run.
+- `--heuristic-selector web` is the default for bare `heuristic`. Use
+  `--heuristic-selector eval_vs_heuristic` to match training benchmark intent.
+- `--no-save` skips replay JSON and is preferred for strength sweeps.
+
+## Batched GPU Reality Check
+
+Batched eval accelerates ONNX leaf inference. It does not move tree search,
+rules, legal-action generation, state cloning, or hand-written heuristic PV
+evaluation onto the GPU. For heuristic-vs-model runs, only the model side's
+ONNX forward passes are GPU/CoreML batched unless the heuristic is itself an
+ONNX-backed `mcts_pv`.
+
+## Verification
+
+Before trusting a long run:
+
+```bash
+python3 scripts/eval_model.py --game <game> --model <model.onnx> \
+  --opponent heuristic:rule --games 1 --workers 1 --sims 1 \
+  --providers coreml,cpu --no-save -o /tmp/eval_smoke
+```
+
+Confirm:
+
+- The script prints `Using batched eval` when GPU/CoreML batching is expected.
+- The provider list matches the launch command.
+- The W-L-D side labels match the side you intend to measure.
+
+## Known Issues
+
+- The C++ batched runner returns results after the whole batch finishes, so
+  per-game lines may appear only at the end of a long run.
+- `rule_mcts` implementations backed by hand-written PV evaluators remain CPU
+  bound even when the model side uses CoreML/CUDA.
+- `--no-batched` with many workers forks one ONNX stack per process and can
+  exhaust memory. Keep legacy workers low.
