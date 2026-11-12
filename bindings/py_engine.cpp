@@ -3403,7 +3403,11 @@ class GameSessionWrapper {
                          int dirichlet_on_first_n_plies = 0,
                          int top_k = 0,
                          std::optional<float> fpu_reduction = std::nullopt,
-                         bool uct2_arrival_visits = true) {
+                         bool uct2_arrival_visits = true,
+                         double time_limit_ms = 0.0) {
+    if (!(time_limit_ms >= 0.0)) {
+      throw std::invalid_argument("get_ai_action: time_limit_ms must be >= 0");
+    }
     const auto opp_sel = parse_opponent_selection(opponent_selection);
     py::gil_scoped_release release;
 
@@ -3463,6 +3467,7 @@ class GameSessionWrapper {
     // ISMCTS: root-sampling hidden info + DAG per-acting-player keying.
     search::NetMctsConfig mcts_cfg{};
     mcts_cfg.simulations = simulations;
+    mcts_cfg.time_limit_ms = time_limit_ms;
     mcts_cfg.world_cap = world_cap;
     mcts_cfg.c_puct = c_puct;
     mcts_cfg.fpu_reduction = fpu_reduction;
@@ -4415,7 +4420,8 @@ PYBIND11_MODULE(dinoboard_engine, m) {
            py::arg("dirichlet_on_first_n_plies") = 0,
            py::arg("top_k") = 0,
            py::arg("fpu_reduction") = py::none(),
-           py::arg("uct2_arrival_visits").noconvert() = true)
+           py::arg("uct2_arrival_visits").noconvert() = true,
+           py::arg("time_limit_ms") = 0.0)
       .def("get_heuristic_action", &GameSessionWrapper::get_heuristic_action,
            py::arg("selector"),
            py::arg("temperature") = 0.0)

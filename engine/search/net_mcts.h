@@ -52,6 +52,16 @@ enum class OpponentSelection {
 //   - No chance node machinery: physical randomness resolves at root-sampling time.
 struct NetMctsConfig {
   int simulations = 200;
+  // Wall-clock budget for the whole search, in milliseconds (measured from
+  // the start of the tree build, so root expansion counts against it).
+  //   0 (default): run exactly `simulations`.
+  //   > 0: stop at the first sim boundary past the deadline, with
+  //        `simulations` as a ceiling; at least one sim always runs.
+  //        When world_cap > 0 the K worlds are visited round-robin, one sim
+  //        per visit, so a search cut short still spreads its sims over
+  //        every sampled world instead of exhausting the first few.
+  // stats.simulations_done reports how many sims actually ran.
+  double time_limit_ms = 0.0;
   // Outer/inner split for ISMCTS root determinization (K worlds × M sims
   // per world). At world entry, randomize_unseen runs once to produce a
   // world_state/world_tracker template; every inner sim clones that template.

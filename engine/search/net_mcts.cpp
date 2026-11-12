@@ -419,15 +419,21 @@ ActionId NetMcts::search_root(
   }
 
   const auto t0 = std::chrono::steady_clock::now();
+  const bool timed = cfg_.time_limit_ms > 0.0;
+  const auto deadline = t0 + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      std::chrono::duration<double, std::milli>(timed ? cfg_.time_limit_ms : 0.0));
+  // A timed search's `simulations` is only a ceiling and may be huge.
+  const size_t reserve_hint = static_cast<size_t>(std::max(512, 2 * (timed
+      ? std::min(cfg_.simulations, 1 << 16) : std::min(cfg_.simulations, 1 << 29))));
 
   std::vector<Node> nodes;
-  nodes.reserve(static_cast<size_t>(std::max(512, cfg_.simulations * 2)));
+  nodes.reserve(reserve_hint);
 
   // Global hash → node_index table: the DAG's canonical lookup. Cleared per
   // search_root call (cross-call sharing is not attempted; the step_count in
   // hash would separate states from different sessions anyway).
   std::unordered_map<StateHash64, int> node_index;
-  node_index.reserve(static_cast<size_t>(std::max(512, cfg_.simulations * 2)));
+  node_index.reserve(reserve_hint);
 
   // Per-step masked-state clone: overwrite every hidden slot with
   // kPlaceholder for the acting perspective. ALGORITHM_OVERVIEW §5.2
@@ -591,7 +597,7 @@ ActionId NetMcts::search_root(
   // maintained when selection reads them.
   std::unordered_map<ArrivalKey, ArrivalCount, ArrivalKeyHash> arrivals;
   if (cfg_.uct2_arrival_visits) {
-    arrivals.reserve(static_cast<size_t>(std::max(512, cfg_.simulations * 2)));
+    arrivals.reserve(reserve_hint);
   }
 
   // Backup. Standard path-walk; in a DAG each node's visit_count tracks
@@ -691,35 +697,69 @@ ActionId NetMcts::search_root(
   };
 
   int sim = 0;
-  for (int wk = 0; wk < K && sim < simulations; ++wk) {
-    // Per-world subseed: every sim inside this world starts descent from
-    // the same RNG state so randomize_unseen's sampled hidden world is
-    // shared byte-equal across the M inner iterations. Divergence between
-    // inner sims comes only from the bandit picking different edges as
-    // edge visit counts grow.
-    const std::uint64_t world_seed = board_ai::rng::derive_subseed(
-        parent_seed, "mcts.world", static_cast<std::uint64_t>(wk));
+  auto out_of_time = [&]() {
+    return timed && sim > 0 && std::chrono::steady_clock::now() >= deadline;
+  };
+  // Untimed: K passes of M sims, each pass its own world. Timed: one sim
+  // per pass, cycling through the K worlds (kept alive between visits when
+  // world_cap bounds them; with world_cap == 0 every sim is its own world
+  // anyway, so nothing is kept).
+  struct WorldTemplate {
+    std::mt19937_64 rng;
+    std::unique_ptr<IGameState> state;
+    std::unique_ptr<IBeliefTracker> tracker;
+  };
+  const bool keep_worlds = timed && cfg_.world_cap > 0;
+  std::vector<WorldTemplate> kept_worlds;
+  if (keep_worlds) kept_worlds.reserve(static_cast<size_t>(K));
+  WorldTemplate fresh_world;
+  const int passes = timed ? simulations : K;
+  const int sims_per_pass = timed ? 1 : M;
+  for (int pass = 0; pass < passes && sim < simulations && !out_of_time(); ++pass) {
+    const int wk = keep_worlds ? pass % K : pass;
+    WorldTemplate* world = nullptr;
+    if (keep_worlds && wk < static_cast<int>(kept_worlds.size())) {
+      world = &kept_worlds[static_cast<size_t>(wk)];
+    } else {
+      // Per-world subseed: every sim inside this world starts descent from
+      // the same RNG state so randomize_unseen's sampled hidden world is
+      // shared byte-equal across the M inner iterations. Divergence between
+      // inner sims comes only from the bandit picking different edges as
+      // edge visit counts grow.
+      const std::uint64_t world_seed = board_ai::rng::derive_subseed(
+          parent_seed, "mcts.world", static_cast<std::uint64_t>(wk));
 
-    // Run randomize_unseen ONCE per world (not per inner sim). For
-    // belief-aware games this can fire ONNX forward passes (belief-net
-    // posterior cached in the tracker, Plackett-Luce sampling, etc.) —
-    // amortizing it from K×M to K is the whole point of world_cap.
-    // The world_state / world_tracker
-    // produced here serve as templates for every inner sim, which clone
-    // them fresh before descent. world_rng's state after randomize is
-    // captured and copied into each inner's sim_rng so descent's
-    // do_action_fast draws stay bit-exact identical to the legacy
-    // per-sim re-randomize behavior.
-    std::mt19937_64 world_rng(world_seed);
-    std::unique_ptr<IGameState> world_state = root.clone_state();
-    std::unique_ptr<IBeliefTracker> world_tracker;
-    if (cfg_.root_belief_tracker != nullptr) {
-      world_tracker = cfg_.root_belief_tracker->clone();
-      world_tracker->randomize_unseen(*world_state, root.current_player(),
-                                      world_rng);
+      // Run randomize_unseen ONCE per world (not per inner sim). For
+      // belief-aware games this can fire ONNX forward passes (belief-net
+      // posterior cached in the tracker, Plackett-Luce sampling, etc.) —
+      // amortizing it from K×M to K is the whole point of world_cap.
+      // The world_state / world_tracker
+      // produced here serve as templates for every inner sim, which clone
+      // them fresh before descent. world_rng's state after randomize is
+      // captured and copied into each inner's sim_rng so descent's
+      // do_action_fast draws stay bit-exact identical to the legacy
+      // per-sim re-randomize behavior.
+      WorldTemplate made;
+      made.rng.seed(world_seed);
+      made.state = root.clone_state();
+      if (cfg_.root_belief_tracker != nullptr) {
+        made.tracker = cfg_.root_belief_tracker->clone();
+        made.tracker->randomize_unseen(*made.state, root.current_player(),
+                                       made.rng);
+      }
+      if (keep_worlds) {
+        kept_worlds.push_back(std::move(made));
+        world = &kept_worlds.back();
+      } else {
+        fresh_world = std::move(made);
+        world = &fresh_world;
+      }
     }
+    const std::mt19937_64& world_rng = world->rng;
+    const std::unique_ptr<IGameState>& world_state = world->state;
+    const std::unique_ptr<IBeliefTracker>& world_tracker = world->tracker;
 
-    for (int wm = 0; wm < M && sim < simulations; ++wm, ++sim) {
+    for (int wm = 0; wm < sims_per_pass && sim < simulations; ++wm, ++sim) {
     std::unique_ptr<IGameState> sim_state = world_state->clone_state();
 
     // Single per-sim RNG drives descent's do_action_fast draws. Initialized
@@ -1053,7 +1093,7 @@ ActionId NetMcts::search_root(
   if (stats) {
     const auto t1 = std::chrono::steady_clock::now();
     const double sec = std::max(1e-9, std::chrono::duration<double>(t1 - t0).count());
-    stats->simulations_done = simulations;
+    stats->simulations_done = sim;
     stats->expanded_nodes = static_cast<std::int64_t>(nodes.size());
     stats->nodes_per_sec = static_cast<double>(nodes.size()) / sec;
     stats->dag_reuse_hits = dag_reuse_hits;
