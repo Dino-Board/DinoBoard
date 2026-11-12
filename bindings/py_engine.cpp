@@ -2701,11 +2701,56 @@ py::dict tail_solve_py(
   return out;
 }
 
+// One batched evaluator per (game, model, providers) for every GameSession
+// created with execution providers: built on first use and kept for the life
+// of the process, so a session per request loads no model and a GPU session
+// is initialized once. The evaluator borrows the encoder of the bundle kept
+// beside it. Never destroyed: tearing down CUDA sessions during static
+// destruction races the driver's own shutdown.
+constexpr int kMaxSessionLeafBatch = 64;
+
+struct SharedSessionEvaluator {
+  std::unique_ptr<GameBundle> bundle;
+  std::unique_ptr<infer::BatchedPolicyValueEvaluator> evaluator;
+};
+
+const search::IPolicyValueEvaluator* shared_session_evaluator(
+    const std::string& game_id, const std::string& model_path,
+    const std::vector<std::string>& providers) {
+  static std::mutex mu;
+  static auto* cache =
+      new std::unordered_map<std::string, std::unique_ptr<SharedSessionEvaluator>>();
+  std::string key = game_id + "\n" + model_path;
+  for (const auto& provider : providers) key += "\n" + provider;
+  std::lock_guard<std::mutex> lock(mu);
+  if (auto it = cache->find(key); it != cache->end()) return it->second->evaluator.get();
+  auto entry = std::make_unique<SharedSessionEvaluator>();
+  entry->bundle = std::make_unique<GameBundle>(
+      GameRegistry::instance().create_game(game_id, 0));
+  if (!entry->bundle->encoder) {
+    throw std::runtime_error("GameSession: game '" + game_id + "' has no feature encoder");
+  }
+  infer::BatchedEvaluatorConfig cfg{};
+  cfg.providers = providers;
+  cfg.batch_size = kMaxSessionLeafBatch;
+  cfg.max_queue_size = 4 * kMaxSessionLeafBatch;
+  entry->evaluator = std::make_unique<infer::BatchedPolicyValueEvaluator>(
+      model_path, entry->bundle->encoder.get(), cfg);
+  if (!entry->evaluator->is_ready()) {
+    throw std::runtime_error("GameSession: failed to load model with providers: " +
+                             entry->evaluator->last_error());
+  }
+  const auto* evaluator = entry->evaluator.get();
+  cache->emplace(std::move(key), std::move(entry));
+  return evaluator;
+}
+
 class GameSessionWrapper {
  public:
   GameSessionWrapper(const std::string& game_id, std::uint64_t seed,
                      const std::string& model_path, bool use_filter,
-                     const std::string& belief_model_path = "")
+                     const std::string& belief_model_path = "",
+                     const std::vector<std::string>& providers = {})
       : game_id_(game_id), seed_(seed), model_path_(model_path) {
     py::gil_scoped_release release;
     bundle_ = std::make_unique<GameBundle>(
@@ -2713,7 +2758,9 @@ class GameSessionWrapper {
     if (!belief_model_path.empty()) {
       bundle_->belief_model_path = belief_model_path;
     }
-    if (!model_path.empty()) {
+    if (!model_path.empty() && !providers.empty()) {
+      shared_evaluator_ = shared_session_evaluator(game_id, model_path, providers);
+    } else if (!model_path.empty()) {
       evaluator_ = std::make_unique<infer::OnnxPolicyValueEvaluator>(
           model_path, bundle_->encoder.get());
       if (!evaluator_->is_ready()) {
@@ -2762,7 +2809,7 @@ class GameSessionWrapper {
       if (ai_trackers_[p]) {
         tracker_init(*ai_trackers_[p], *bundle_, *ai_views_[p], p);
       }
-      if (!model_path_.empty() && ai_encoders_[p]) {
+      if (!model_path_.empty() && ai_encoders_[p] && !shared_evaluator_) {
         ai_evaluators_[p] = std::make_unique<infer::OnnxPolicyValueEvaluator>(
             model_path_, ai_encoders_[p].get());
         if (!ai_evaluators_[p]->is_ready()) {
@@ -3404,9 +3451,14 @@ class GameSessionWrapper {
                          int top_k = 0,
                          std::optional<float> fpu_reduction = std::nullopt,
                          bool uct2_arrival_visits = true,
-                         double time_limit_ms = 0.0) {
+                         double time_limit_ms = 0.0,
+                         int leaf_batch_size = 1) {
     if (!(time_limit_ms >= 0.0)) {
       throw std::invalid_argument("get_ai_action: time_limit_ms must be >= 0");
+    }
+    if (leaf_batch_size < 1 || leaf_batch_size > kMaxSessionLeafBatch) {
+      throw std::invalid_argument("get_ai_action: leaf_batch_size must be in [1, " +
+                                  std::to_string(kMaxSessionLeafBatch) + "]");
     }
     const auto opp_sel = parse_opponent_selection(opponent_selection);
     py::gil_scoped_release release;
@@ -3441,7 +3493,7 @@ class GameSessionWrapper {
     IBeliefTracker* search_bt = nullptr;
     if (external_obs_mode_) {
       search_state = bundle_->state.get();
-      eval_ptr = evaluator_.get();
+      eval_ptr = session_evaluator_();
       search_bt = bt_;
     } else {
       if (cp < 0 || cp >= static_cast<int>(ai_views_.size()) || !ai_views_[cp]) {
@@ -3449,7 +3501,7 @@ class GameSessionWrapper {
             "GameSession.get_ai_action: ai_view for current player not initialized");
       }
       search_state = ai_views_[cp].get();
-      eval_ptr = ai_evaluators_[cp].get();
+      eval_ptr = view_evaluator_(cp);
       search_bt = ai_trackers_[cp].get();
     }
 
@@ -3468,6 +3520,7 @@ class GameSessionWrapper {
     search::NetMctsConfig mcts_cfg{};
     mcts_cfg.simulations = simulations;
     mcts_cfg.time_limit_ms = time_limit_ms;
+    mcts_cfg.leaf_batch_size = leaf_batch_size;
     mcts_cfg.world_cap = world_cap;
     mcts_cfg.c_puct = c_puct;
     mcts_cfg.fpu_reduction = fpu_reduction;
@@ -3658,7 +3711,7 @@ class GameSessionWrapper {
     IBeliefTracker* search_bt = nullptr;
     if (external_obs_mode_) {
       search_state = bundle_->state.get();
-      eval_ptr = evaluator_.get();
+      eval_ptr = session_evaluator_();
       search_bt = bt_;
     } else {
       if (cp < 0 || cp >= static_cast<int>(ai_views_.size()) || !ai_views_[cp]) {
@@ -3666,7 +3719,7 @@ class GameSessionWrapper {
             "_debug_run_mcts_with_sim_traces: ai_view for current player not initialized");
       }
       search_state = ai_views_[cp].get();
-      eval_ptr = ai_evaluators_[cp].get();
+      eval_ptr = view_evaluator_(cp);
       search_bt = ai_trackers_[cp].get();
     }
 
@@ -3746,7 +3799,7 @@ class GameSessionWrapper {
     IBeliefTracker* search_bt = nullptr;
     if (external_obs_mode_) {
       search_state = bundle_->state.get();
-      eval_ptr = evaluator_.get();
+      eval_ptr = session_evaluator_();
       search_bt = bt_;
     } else {
       if (cp < 0 || cp >= static_cast<int>(ai_views_.size()) || !ai_views_[cp]) {
@@ -3754,7 +3807,7 @@ class GameSessionWrapper {
             "_debug_run_mcts_with_edge_traces: ai_view for current player not initialized");
       }
       search_state = ai_views_[cp].get();
-      eval_ptr = ai_evaluators_[cp].get();
+      eval_ptr = view_evaluator_(cp);
       search_bt = ai_trackers_[cp].get();
     }
     if (!eval_ptr) {
@@ -3806,11 +3859,22 @@ class GameSessionWrapper {
   }
 
  private:
+  const search::IPolicyValueEvaluator* session_evaluator_() const {
+    return shared_evaluator_ ? shared_evaluator_ : evaluator_.get();
+  }
+  const search::IPolicyValueEvaluator* view_evaluator_(int perspective) const {
+    return shared_evaluator_ ? shared_evaluator_
+                             : ai_evaluators_[static_cast<size_t>(perspective)].get();
+  }
+
   std::string game_id_;
   std::uint64_t seed_;
   std::string model_path_;
   std::unique_ptr<GameBundle> bundle_;
   std::unique_ptr<infer::OnnxPolicyValueEvaluator> evaluator_;
+  // Set instead of evaluator_ / ai_evaluators_ when the session was created
+  // with execution providers; owned by shared_session_evaluator's cache.
+  const search::IPolicyValueEvaluator* shared_evaluator_ = nullptr;
   std::unique_ptr<infer::OnnxBeliefEvaluator> belief_evaluator_;
   std::unique_ptr<runtime::FilteredRulesWrapper> filtered_rules_;
   IBeliefTracker* bt_ = nullptr;
@@ -4346,12 +4410,13 @@ PYBIND11_MODULE(dinoboard_engine, m) {
 
   py::class_<GameSessionWrapper>(m, "GameSession")
       .def(py::init<const std::string&, std::uint64_t, const std::string&, bool,
-                    const std::string&>(),
+                    const std::string&, const std::vector<std::string>&>(),
            py::arg("game_id"),
            py::arg("seed") = 0xC0FFEE,
            py::arg("model_path") = "",
            py::arg("use_filter") = false,
-           py::arg("belief_model_path") = std::string(""))
+           py::arg("belief_model_path") = std::string(""),
+           py::arg("providers") = std::vector<std::string>{})
       .def_property_readonly("is_terminal", &GameSessionWrapper::is_terminal)
       .def_property_readonly("is_turn_start", &GameSessionWrapper::is_turn_start)
       .def_property_readonly("current_player", &GameSessionWrapper::current_player)
@@ -4421,7 +4486,8 @@ PYBIND11_MODULE(dinoboard_engine, m) {
            py::arg("top_k") = 0,
            py::arg("fpu_reduction") = py::none(),
            py::arg("uct2_arrival_visits").noconvert() = true,
-           py::arg("time_limit_ms") = 0.0)
+           py::arg("time_limit_ms") = 0.0,
+           py::arg("leaf_batch_size") = 1)
       .def("get_heuristic_action", &GameSessionWrapper::get_heuristic_action,
            py::arg("selector"),
            py::arg("temperature") = 0.0)
