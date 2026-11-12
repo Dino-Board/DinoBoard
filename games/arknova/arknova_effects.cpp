@@ -272,7 +272,7 @@ void gain(State& s, int p, EffectKind kind, int amount) {
       for (int i = 0; i < amount; ++i) {
         if (pl.workers < kMaxWorkers) {
           ++pl.workers;
-          if (pl.workers == kMaxWorkers) apply_effect(s, p, kMap0LastWorker);
+          if (pl.workers == kMaxWorkers) apply_effect(s, p, pl.zoo.def().last_worker);
         }
       }
       break;
@@ -293,6 +293,10 @@ void gain(State& s, int p, EffectKind kind, int amount) {
     case EffectKind::kEffPartnerZoo: push(s, FrameKind::gain_partner_zoo, p); break;
     case EffectKind::kEffUniversity: push(s, FrameKind::gain_university, p); break;
     case EffectKind::kEffSponsorForMoney: push(s, FrameKind::paid_sponsor, p); break;
+    case EffectKind::kEffSpecialEnclosure:  // Map 5: a free reptile house or aviary, even with Build not upgraded
+      push_free_build(s, p, {{BuildingKind::kReptileHouse, 5}, {BuildingKind::kAviary, 5}});
+      break;
+    case EffectKind::kNumEffectKinds: engine_error("gain: bad effect kind");
   }
 }
 
@@ -307,12 +311,13 @@ void take_map_token(State& s, int p, int index) {
   Player& pl = s.players[p];
   if (!pl.tokens[index]) engine_error("take_map_token: token already taken");
   pl.tokens[index] = false;
-  apply_effect(s, p, kMap0Tokens[index].effect);
+  apply_effect(s, p, pl.zoo.def().tokens[index].effect);
 }
 
 void token_income(State& s, int p) {
   for (int i = 0; i < kNumMapTokens; ++i) {
-    if (kMap0Tokens[i].repeats && !s.players[p].tokens[i]) apply_effect(s, p, kMap0Tokens[i].effect);
+    const MapToken& t = s.players[p].zoo.def().tokens[i];
+    if (t.repeats && !s.players[p].tokens[i]) apply_effect(s, p, t.effect);
   }
 }
 
@@ -332,7 +337,7 @@ void take_partner_zoo(State& s, int p, int continent, Chance& ch) {
   IconCounts added{};
   added[kContinentIcon0 + continent] = 1;
   icons_played(s, p, added, before, ch);
-  apply_effect(s, p, kMap0PartnerZooSlots[slot]);
+  apply_effect(s, p, pl.zoo.def().partner_zoo_slots[slot]);
 }
 
 bool can_take_university(const State& s, int p, int university) {
@@ -351,17 +356,17 @@ void take_university(State& s, int p, int university, Chance& ch) {
   if (university == kUniScience2) added[kIcon_science] = 2;
   if (university == kUniScienceRep) added[kIcon_science] = 1;
   icons_played(s, p, added, before, ch);
-  apply_effect(s, p, kMap0UniversitySlots[slot]);
+  apply_effect(s, p, pl.zoo.def().university_slots[slot]);
   gain(s, p, EffectKind::kEffReputation, university == kUniHand ? 1 : university == kUniScienceRep ? 2 : 0);
 }
 
 // ---- buildings --------------------------------------------------------------------
 
-int place_building(State& s, int p, BuildingKind kind, int size, CellMask cells, CardIdx name) {
+int place_building(State& s, int p, BuildingKind kind, int size, CellMask cells, Chance& ch, CardIdx name) {
   Player& pl = s.players[p];
   std::vector<PlacementBonus> bonuses;
   int b = pl.zoo.place(kind, size, cells, name, &bonuses);
-  after_build_hooks(s, p, b);
+  after_build_hooks(s, p, b, ch);
   if (kind == BuildingKind::kPavilion) gain(s, p, EffectKind::kEffAppeal, 1);
   if (!pl.full_cover_scored && pl.zoo.is_fully_covered()) {
     pl.full_cover_scored = true;
@@ -490,10 +495,10 @@ void free_build_options(State& s, int fi, std::vector<Option>& out) {
   out.push_back(opt_skip());
 }
 
-void free_build_apply(State& s, int fi, const Option& o, Chance&) {
+void free_build_apply(State& s, int fi, const Option& o, Chance& ch) {
   int p = frame(s, fi).player;
   pop(s, fi);
-  if (o.head == Head::place) place_building(s, p, static_cast<BuildingKind>(o.a[0]), o.a[1], o.cells);
+  if (o.head == Head::place) place_building(s, p, static_cast<BuildingKind>(o.a[0]), o.a[1], o.cells, ch);
 }
 
 void multiplier_options(State& s, int, std::vector<Option>& out) {

@@ -207,13 +207,20 @@ void rng_shuffle(std::vector<T>& v, std::mt19937_64& rng) {
 
 }  // namespace
 
-void new_game(State& s, std::mt19937_64& rng) {
+void new_game(State& s, std::mt19937_64& rng, int map) {
   registry();
   s = State{};
+  if (map < 0 || map >= num_maps()) engine_error("new_game: bad map");
+  s.map = static_cast<std::int8_t>(map);
   for (int i = 0; i < kPlayers; ++i) {
     std::vector<int> others = {kBuild, kCards, kAssociation, kSponsors};
     rng_shuffle(others, rng);
     Player& pl = s.players[i];
+    pl.zoo.map = s.map;
+    const MapDef& md = map_def(map);
+    for (int b = 0; b < md.n_prebuilt; ++b) {
+      pl.zoo.place(md.prebuilt[b].kind, md.prebuilt[b].size, md.prebuilt[b].cells, kNoCard, nullptr);
+    }
     pl.slots[0] = kAnimals;
     for (int k = 0; k < 4; ++k) pl.slots[k + 1] = static_cast<std::int8_t>(others[k]);
     pl.appeal = static_cast<std::int16_t>(i);
@@ -517,6 +524,7 @@ void next_turn(State& s, int fi, Chance&) {
     --s.final_turns;
   }
   s.current = static_cast<std::int8_t>((s.current + 1) % kPlayers);
+  s.harbor_used = false;
   push(s, FrameKind::turn, s.current);
 }
 
@@ -568,6 +576,7 @@ void break_auto(State& s, int fi, Chance& ch) {
     for (auto it = zoo.rbegin(); it != zoo.rend(); ++it) {
       if (has_income(*it)) income_effect(s, *it, p);
     }
+    map_break_income(s, p);
   } else {
     pop(s, fi);
     s.break_pos = 0;
@@ -636,8 +645,10 @@ std::vector<int> winners(const State& s) {
 
 // ---- step -----------------------------------------------------------------------------
 
-std::vector<Option> legal_options(State& s) {
-  if (s.over) return {};
+namespace {
+
+// The options of the pending decision without the map-rule extras (CHOICES only).
+std::vector<Option> frame_options(State& s) {
   const Registry& r = registry();
   if (s.stack_n == 0) engine_error("empty stack");
   std::vector<Option> out;
@@ -645,6 +656,15 @@ std::vector<Option> legal_options(State& s) {
   OptionsFn fn = r.options[static_cast<int>(s.stack[fi].kind)];
   if (!fn) engine_error(std::string("not a choice frame: ") + frame_kind_name(s.stack[fi].kind));
   fn(s, fi, out);
+  return out;
+}
+
+}  // namespace
+
+std::vector<Option> legal_options(State& s) {
+  if (s.over) return {};
+  std::vector<Option> out = frame_options(s);
+  harbor_options(s, out);
   return out;
 }
 
@@ -660,7 +680,7 @@ void settle(State& s, Chance& ch) {
       r.autos[k](s, fi, ch);
       continue;
     }
-    if (legal_options(s).empty()) engine_error(std::string("choice frame has no options: ") + frame_kind_name(s.stack[fi].kind));
+    if (frame_options(s).empty()) engine_error(std::string("choice frame has no options: ") + frame_kind_name(s.stack[fi].kind));
     return;
   }
 }
@@ -674,7 +694,11 @@ void step(State& s, const Option& option, Chance& ch) {
     engine_error("illegal option " + option_to_json(s, option) + " for " + frame_kind_name(s.top().kind));
   }
   int fi = s.stack_n - 1;
-  registry().apply[static_cast<int>(s.stack[fi].kind)](s, fi, option, ch);
+  if (option.head == Head::harbor) {
+    harbor_apply(s, option);
+  } else {
+    registry().apply[static_cast<int>(s.stack[fi].kind)](s, fi, option, ch);
+  }
   settle(s, ch);
 }
 

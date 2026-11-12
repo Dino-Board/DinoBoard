@@ -33,7 +33,7 @@ MEANING = {
     "discard_hand": {"hand_discard": GIVE},
     "act_build": {"build": PICK, "engineer": PICK, "cell": PICK, "done": PICK},
     "free_build": {"place": PICK, "cell": PICK, "skip": PICK},
-    "sponsor_building": {"cell": PICK},
+    "sponsor_building": {"cell": PICK, "place": PICK},  # place: a choice only next to the harbour
     "act_animals": {"hand": TAKE, "display": TAKE, "enclosure": PICK, "done": PICK},
     "act_sponsors": {"hand": TAKE, "display": TAKE, "break": PICK, "done": PICK},
     "paid_sponsor": {"hand": TAKE, "skip": PICK},
@@ -62,6 +62,9 @@ MEANING = {
     "okapi_stable": {"yes": PICK, "no": PICK},
     "waza_kind": {"kind": PICK},
 }
+# The harbour (Map 4) is offered on top of any decision of the player whose turn it is: "harbor",
+# then the hand card to discard for 3 money.
+HARBOR = {"harbor": PICK, "hand_discard": GIVE}
 
 
 def _core(gs):
@@ -70,30 +73,37 @@ def _core(gs):
 
 def test_no_atom_means_both_taking_and_giving():
     """F1. The declared meanings never put "take" and "give" on one atom class, and the table is the
-    complete list of what the rules offer: over 45 random games exactly these (frame, atom class)
-    pairs are legal."""
+    complete list of what the rules offer: over 75 random games (on random maps) exactly these
+    (frame, atom class) pairs are legal."""
     by_class = collections.defaultdict(set)
-    for frame, classes in MEANING.items():
+    for classes in list(MEANING.values()) + [HARBOR]:
         for cls, meaning in classes.items():
             by_class[cls].add(meaning)
     mixed = {cls: m for cls, m in by_class.items() if {TAKE, GIVE} <= m}
     assert not mixed, f"atom classes used for both taking and giving: {mixed}"
 
     names = atom_names()
-    seen = set()
-    for seed in range(45):
+    seen, harbor = set(), set()
+    for seed in range(75):
         gs = engine.GameSession(GAME, seed=seed)
         rng = random.Random(seed)
         while not gs.is_terminal:
-            frame = _core(gs)["stack"][-1]["kind"]
+            state = gs.get_state_dict()
+            frame = json.loads(state["core_json"])["stack"][-1]["kind"]
+            after_harbor = state["prefix"].split() == ["harbor"]
             legal = gs.get_legal_actions()
             for a in legal:
                 cls = names[a].split(":")[0]
+                if cls == "harbor" or after_harbor:
+                    assert cls in HARBOR, f"atom {names[a]} after the harbour"
+                    harbor.add(cls)
+                    continue
                 assert cls in MEANING[frame], f"atom {names[a]} is legal in frame {frame}: declare its meaning"
                 seen.add((frame, cls))
             gs.apply_action(rng.choice(legal))
     declared = {(frame, cls) for frame, classes in MEANING.items() for cls in classes}
     assert seen == declared, f"declared but never legal in these games: {sorted(declared - seen)}"
+    assert harbor == set(HARBOR), f"the harbour was never offered in these games: {sorted(harbor)}"
 
 
 def test_card_atoms_do_what_their_class_says():
@@ -133,6 +143,7 @@ def test_card_atoms_do_what_their_class_says():
             after = _core(gs)
             own_after = {p: own_slots(gs, p) for p in (0, 1)}
             reshuffled = len(after["deck"]) > len(core["deck"])
+            harbor = pending[0][0] == "harbor"  # the card goes to the discard pile whatever the decision
             for cls, kind, p, card, before, own_before in pending:
                 mine, cid = after["players"][p], cards()[card]["id_str"] if card is not None else None
                 in_play = card is not None and (cid in mine["zoo_cards"] or cid in after["projects"])
@@ -142,7 +153,7 @@ def test_card_atoms_do_what_their_class_says():
                     assert cid not in after["discard"] and card not in own_after[p]["tucked"]
                 elif cls in ("hand_discard", "display_discard"):
                     assert card not in own_after[p]["hand"] and not in_play
-                    if kind == "ab_pouch":
+                    if kind == "ab_pouch" and not harbor:
                         assert card in own_after[p]["tucked"]
                     elif not reshuffled:
                         assert cid in after["discard"], f"{cls} in {kind}: card {cid} is not on the discard pile"
@@ -221,7 +232,7 @@ def test_setup_discards_can_be_named_in_any_order():
 
 def _pack_deck_index(pack):
     """Index of the deck size in the packed public vector (the layout of ArknovaState::pack_public)."""
-    i = 1
+    i = 3                       # after the version, the map and the harbour flag
     for _ in range(2):
         i += 7 + 5 + 4          # track values, action card slots, workers per task
         i += 1 + pack[i]        # partner zoos
@@ -282,7 +293,7 @@ def test_public_list_longer_than_twelve_cards():
 
     obs = truth.extract_initial_observation(p)
     pack = obs["public_snapshot"]["public"][1]
-    assert pack[0] == 0xA44, "the packed public state changed: update _pack_deck_index"
+    assert pack[0] == 0xA45, "the packed public state changed: update _pack_deck_index"
     deck_at = _pack_deck_index(pack)
     assert pack[deck_at] == len(core["deck"])
     n_prefix = len(truth.get_state_dict()["prefix"].split())

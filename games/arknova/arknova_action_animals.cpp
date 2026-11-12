@@ -168,7 +168,7 @@ std::vector<Play> plays(const State& s, int p, bool small_only = false) {
   std::vector<Play> out;
   for (const Source& src : sources) {
     CardIdx c = src.card;
-    if (!is_animal(c) || !sr::requirements_ok(pl, c) || !sr::animal_allowed(pl, c) || (small_only && !is_small(c))) continue;
+    if (!is_animal(c) || !sr::requirements_ok(s, p, c) || !sr::animal_allowed(pl, c) || (small_only && !is_small(c))) continue;
     int cost = animal_cost(pl, c) + src.extra;
     if (cost > pl.money) continue;
     for (const Housing& h : housings(pl, c)) {
@@ -271,6 +271,7 @@ void animals_apply(State& s, int fi, const Option& o, Chance& ch) {
     take_from_display(s, o.a[0]);
   }
   Building& b = pl.zoo.buildings[m.building];
+  const bool filled = b.kind == BuildingKind::kEnclosure && !b.occupied;
   if (b.kind == BuildingKind::kEnclosure) {
     b.occupied = true;
   } else {
@@ -291,6 +292,7 @@ void animals_apply(State& s, int fi, const Option& o, Chance& ch) {
   gain(s, p, EffectKind::kEffConservation, c.conservation);
   gain(s, p, EffectKind::kEffReputation, c.reputation);
   sr::on_animal_played(s, p, m.card);
+  if (filled) map_enclosure_filled(s, p, m.building);
   resolve_abilities(s, p, m.card, ch);
   IconCounts added{};
   const auto& ci = card_icons(m.card);

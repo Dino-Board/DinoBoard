@@ -146,12 +146,12 @@ void building_options(State& s, int fi, std::vector<Option>& out) {
   if (spots.empty()) out.push_back(opt_skip());
 }
 
-void building_apply(State& s, int fi, const Option& o, Chance&) {
+void building_apply(State& s, int fi, const Option& o, Chance& ch) {
   const Frame f = frame(s, fi);
   pop(s, fi);
   if (o.head != Head::place) return;
   CardIdx c = f.d[sponsor_building_card];
-  place_building(s, f.player, BuildingKind::kUnique, card(c).building.size, o.cells, c);
+  place_building(s, f.player, BuildingKind::kUnique, card(c).building.size, o.cells, ch, c);
 }
 
 void paid_options(State& s, int fi, std::vector<Option>& out) {

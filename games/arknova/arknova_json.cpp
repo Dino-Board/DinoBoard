@@ -652,8 +652,9 @@ std::vector<CardIdx> parse_cards(const J& v) {
   return out;
 }
 
-void read_player(Player& pl, const J& v) {
+void read_player(Player& pl, const J& v, int map) {
   pl = Player{};
+  pl.zoo.map = static_cast<std::int8_t>(map);
   pl.appeal = static_cast<std::int16_t>(v.at("appeal").i());
   pl.money = static_cast<std::int16_t>(v.at("money").i());
   pl.conservation = static_cast<std::int16_t>(v.at("conservation").i());
@@ -740,11 +741,19 @@ std::string card_id_string(CardIdx c) {
 std::string state_to_json(const State& s) {
   Writer w;
   w.begin('{');
+  w.key("map"); w_str(w, map_def(s.map).key);
   w.key("players");
   w.begin('[');
   for (const Player& pl : s.players) write_player(w, pl);
   w.end(']');
   w.key("current"); w_num(w, s.current);
+  w.key("turn_flags");
+  w.begin('{');
+  if (s.harbor_used) {
+    w.key("harbor");
+    w_bool(w, true);
+  }
+  w.end('}');
   w.key("deck"); w_cards(w, s.deck.begin(), s.deck.end());
   std::vector<CardIdx> discard = s.discard;
   std::sort(discard.begin(), discard.end());
@@ -833,10 +842,21 @@ void state_from_json(State& s, const std::string& json) {
   registry();
   J v = Parser(json).parse();
   s = State{};
+  if (v.find("map")) {
+    const int m = map_by_key(v.at("map").str());
+    if (m < 0) throw std::runtime_error("arknova json: unknown map " + v.at("map").str());
+    s.map = static_cast<std::int8_t>(m);
+  }
   const auto& players = v.at("players").list();
   if (players.size() != kPlayers) throw std::runtime_error("arknova json: player count");
-  for (int p = 0; p < kPlayers; ++p) read_player(s.players[p], players[p]);
+  for (int p = 0; p < kPlayers; ++p) read_player(s.players[p], players[p], s.map);
   s.current = static_cast<std::int8_t>(v.at("current").i());
+  if (v.find("turn_flags")) {
+    for (const auto& kv : v.at("turn_flags").obj) {
+      if (kv.first != "harbor") throw std::runtime_error("arknova json: unknown turn flag " + kv.first);
+      s.harbor_used = kv.second.boolean();
+    }
+  }
   s.deck = parse_cards(v.at("deck"));
   s.discard = parse_cards(v.at("discard"));
   const auto& display = v.at("display").list();
@@ -946,6 +966,7 @@ std::string option_to_json(const State& s, const Option& o) {
       w_card(w, o.a[0]);
       if (o.n >= 2) w_num(w, o.a[1]);
       break;
+    case Head::harbor: w_card(w, o.a[0]); break;
     case Head::play_display:
       w_num(w, o.a[0]);
       if (o.n >= 2) w_num(w, o.a[1]);

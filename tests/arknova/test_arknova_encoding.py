@@ -16,7 +16,7 @@ from conftest import get_test_model
 
 sys.path.insert(0, str(Path(__file__).parent))
 import arknova_checks as checks  # noqa: E402
-from arknova_reference import (GAME, ROOT, atom_names, card_index, cards, decode, known_to, layout,  # noqa: E402
+from arknova_reference import (GAME, ROOT, atom_index, atom_names, card_index, cards, decode, known_to, layout,  # noqa: E402
                                own_slots)
 
 # Features that need a rare situation (Hypnosis, Snapping 2, Dominance, the Engineer, an extra
@@ -38,9 +38,11 @@ def test_every_token_decodes_to_the_state():
     the ground-truth state bit for bit, and the other player's view of the same state passes the
     same checks and mirrors this one."""
     ck = checks.Checker()
-    for seed in (3, 8, 15, 32):
+    # The seed picks the map: these games are on maps 4, 8, 7, 1, 6, 5 (random) and 8, 2 (greedy),
+    # so that every map rule feature is reached.
+    for seed in (0, 1, 3, 13, 15, 32):
         checks.check_episode(ck, seed, "random", stride=5, perspective_every=6)
-    for seed in (5, 6):
+    for seed in (2, 5):
         checks.check_episode(ck, seed, "greedy", stride=3, perspective_every=8)
     assert ck.decisions > 600
     assert not ck.unchecked(), f"features never compared: {ck.unchecked()}"
@@ -50,13 +52,13 @@ def test_every_token_decodes_to_the_state():
 
 def test_dominance_offers_only_the_primates_project():
     """decision.only_one. A Dominance animal played while base project 108 (primates) is still in the
-    base project pile lets its owner take only that project (abilities: kDOMINANCE). Greedy game 47
+    base project pile lets its owner take only that project (abilities: kDOMINANCE). Greedy game 72
     reaches it: there the flag is set, the legal atoms are that project's list atom and skip, and the
     whole encoding passes the full check; in every other decision of the game the flag is 0."""
     table, idx = cards(), card_index()
     dominance = next(c["id_str"] for c in table if "DOMINANCE" in c["abilities"])
     ck = checks.Checker()
-    episode = checks.Episode(47, "greedy")
+    episode = checks.Episode(72, "greedy")
     found = 0
     for n, sample, me, state, core, legal in episode.steps():
         toks = decode(sample["features"])
@@ -68,7 +70,10 @@ def test_dominance_offers_only_the_primates_project():
         assert top["data"]["only"] == ["108"] and dominance in core["players"][me]["zoo_cards"]
         pile = core["base_project_deck"]
         assert len(pile) > 1, "the pile holds other projects that Dominance must not offer"
-        assert set(legal) == {f"list:{pile.index('108')}", "skip"}
+        (pick,) = set(legal) - {"skip"}
+        assert "skip" in legal and pick.startswith("list:")
+        anchor = checks.binding()[atom_index()[pick]][0]
+        assert next(t for t in toks if t.anchor == anchor).card() == idx["108"], "the list atom is not project 108"
         public = [t for t in toks if t.type == "project" and t["public_list"] == 1.0]
         assert sorted(t.card() for t in public) == sorted(idx[c] for c in pile)
         checks.check_state(ck, toks, me, core, episode.own, state, episode.tracker, legal)
@@ -167,7 +172,7 @@ def test_layout_is_what_the_network_is_built_from():
     tl, lay = meta["token_layout"], layout()
     assert tl["variable_tokens"] and tl["token_positions"] and meta["feature_dim"] == 0
     assert tl["token_dim"] == lay.token_dim and lay.header == 7
-    assert tl["num_token_types"] == len(lay.type_names) == 8
+    assert tl["num_token_types"] == len(lay.type_names) == 9
     assert tl["num_pointer_heads"] == lay.raw["num_heads"] == 6
     widest = max(o + w for feats in lay.features.values() for o, w in feats.values())
     assert lay.token_dim == lay.header + widest

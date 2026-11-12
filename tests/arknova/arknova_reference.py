@@ -1,7 +1,7 @@
 """Independent reference data for the Ark Nova encoder tests.
 
 Nothing here goes through the encoder: card facts are parsed from the generated card table
-(arknova_cards_data.inc), enum orders from the C++ headers, the Map 0 layout from its column strings,
+(arknova_cards_data.inc), enum orders from the C++ headers, the zoo maps from arknova_maps.json,
 and the game facts come from the UI serialization (core_json) or are recomputed in Python from the
 rulebook. tests/arknova decode every token of an encoding and compare it with these.
 """
@@ -48,7 +48,10 @@ def enums() -> dict:
         "proj_categories": [n for n in _enum(cards_h, "ProjCategory") if n != "kNone"],
         "special": [n for n in _enum(cards_h, "SpecialKind") if n != "kNone"],
         "bonus_tiles": re.search(r"kBonusTileNames\[\] = \{(.*?)\}", cards_h, re.S).group(1).replace('"', "").replace("\n", " ").split(","),
-        "placement_bonus": re.search(r"kPlacementBonusNames\[\] = \{(.*?)\}", cards_h).group(1).replace('"', "").split(", "),
+        "placement_bonus": [t.strip() for t in re.search(r"kPlacementBonusNames\[\] = \{(.*?)\}", cards_h, re.S)
+                            .group(1).replace('"', "").replace("\n", " ").split(",")],
+        "effect_kinds": [t.strip() for t in re.search(r"kEffectKindNames\[\] = \{(.*?)\}", cards_h, re.S)
+                         .group(1).replace('"', "").replace("\n", " ").split(",")],
         "building_kinds": re.search(r"kBuildingKindNames\[\] = \{(.*?)\}", map_h, re.S).group(1).replace('"', "").replace("\n", " ").split(","),
         "frames": ["break" if f == "break_" else f for f in re.findall(r"X\((\w+)\)", frames)],
     }
@@ -150,41 +153,85 @@ def is_small(c): return c["type"] == "animal" and c["size"] <= 2
 def is_large(c): return c["type"] == "animal" and c["size"] >= 4
 
 
-# ---- Map 0 -----------------------------------------------------------------------------------------
+# ---- zoo maps --------------------------------------------------------------------------------------
 
 DIRS = [(0, -1), (1, -1), (1, 0), (0, 1), (-1, 1), (-1, 0)]
 
 
 @lru_cache(maxsize=1)
-def map0() -> dict:
-    """Cells in engine order (sorted by axial (q, r)), from the column strings of arknova_map.cpp."""
-    text = (SRC / "arknova_map.cpp").read_text()
-    columns = re.findall(r'"([^"]*)"', re.search(r"kMap0Columns\[\] = \{(.*?)\};", text, re.S).group(1))
-    cells = {}
-    for col, column in enumerate(columns):
-        for row, tok in enumerate(column.split()):
-            terrain = {"W": "water", "R": "rock"}.get(tok, "plain")
-            extra = tok.split(":")[1] if ":" in tok else ""
-            cells[(col, row - (col + 1) // 2)] = dict(terrain=terrain, build2=extra == "build2",
-                                                      bonus="" if extra == "build2" else extra)
-    order = sorted(cells)
-    assert len(order) == 58
-    for (q, r), c in cells.items():
-        c["nbr"] = [(q + dq, r + dr) for dq, dr in DIRS if (q + dq, r + dr) in cells]
-        c["border"] = len(c["nbr"]) < 6
-        c["rock"] = sum(cells[n]["terrain"] == "rock" for n in c["nbr"])
-        c["water"] = sum(cells[n]["terrain"] == "water" for n in c["nbr"])
-    return dict(cells=cells, order=order, index={qr: i for i, qr in enumerate(order)})
+def zoo_maps() -> dict:
+    """The maps by key, from arknova_maps.json (written with the C++ table by tools/gen_maps.py from
+    ark-nova-ai). Cells in engine order (sorted by axial (q, r)); every map has the same 58 cells."""
+    raw = json.loads((SRC / "arknova_maps.json").read_text())["maps"]
+    out = {}
+    for m in raw:
+        cells = {(q, r): dict(terrain=t, bonus=b or "", build2=b2) for q, r, t, b, b2 in m["cells"]}
+        order = sorted(cells)
+        assert len(order) == 58
+        for (q, r), c in cells.items():
+            c["nbr"] = [(q + dq, r + dr) for dq, dr in DIRS if (q + dq, r + dr) in cells]
+            c["border"] = len(c["nbr"]) < 6
+            c["rock"] = sum(cells[n]["terrain"] == "rock" for n in c["nbr"])
+            c["water"] = sum(cells[n]["terrain"] == "water" for n in c["nbr"])
+        out[m["key"]] = dict(m, cells=cells, order=order, index={qr: i for i, qr in enumerate(order)},
+                             rule_cells={tuple(c) for c in m["rule_cells"]})
+    assert len({tuple(m["order"]) for m in out.values()}) == 1
+    return out
+
+
+def zoo_map(key: str) -> dict:
+    return zoo_maps()[key]
 
 
 def neighbors(cellset) -> set:
-    m = map0()["cells"]
+    m = zoo_map("map0")["cells"]  # the grid, the same on every map
     return {n for qr in cellset for n in m[qr]["nbr"]} - set(cellset)
 
 
-def adjacent_terrain(cellset, terrain: str) -> int:
-    m = map0()["cells"]
+def adjacent_terrain(cellset, terrain: str, key: str) -> int:
+    m = zoo_map(key)["cells"]
     return sum(m[n]["terrain"] == terrain for n in neighbors(cellset))
+
+
+# What a placement bonus gives (the C++ kPlacementBonusNames; rulebook p. 9 and the map sheets).
+PLACEMENT_BONUS_EFFECT = {
+    "money5": ("money", 5), "money10": ("money", 10), "money2": ("money", 2), "xtoken": ("xtoken", 1),
+    "rep2": ("reputation", 2), "rep1": ("reputation", 1), "card": ("card", 1), "clever": ("clever", 1),
+    "kiosk": ("kiosk", 1), "worker1": ("worker", 1), "partner_zoo": ("partner_zoo", 1),
+    "university": ("university", 1), "multiplier": ("multiplier", 1), "sponsor_for_money": ("sponsor_for_money", 1),
+}
+
+
+def map_rule_state(pl, key: str) -> dict:
+    """Where the map's special rule stands for a zoo (the map sheets): the break income from the
+    park restaurant (1 per covered space next to it) or the ice cream parlours (1 per kiosk once all
+    three are covered), the harbour (discard a card for 3 money once a turn), the research institute
+    (one condition may be unmet), Hollywood (sponsor levels 1 lower once all H spaces are covered)."""
+    m = zoo_map(key)
+    covered = {tuple(c) for b in pl["buildings"] for c in b["cells"]}
+    special = m["rule_cells"]
+    rule = m["rule"]
+    out = dict(map_income=0, can_trade=False, ignore_conditions=0, sponsor_discount=0, group_left=0)
+    if rule == "parkrestaurant":
+        out["map_income"] = sum(n in covered for r in special for n in m["cells"][r]["nbr"])
+    if rule == "icecream" and special <= covered:
+        out["map_income"] = sum(b["kind"] == "kiosk" for b in pl["buildings"])
+    out["can_trade"] = rule == "harbor" and bool(special & covered)
+    out["ignore_conditions"] = int(rule == "researchinstitute" and bool(special & covered))
+    out["sponsor_discount"] = int(rule == "hollywood" and special <= covered)
+    if rule in ("icecream", "hollywood"):
+        out["group_left"] = len(special - covered)
+    return out
+
+
+def effect_vector(effect) -> list:
+    """The encoder's effect block: per effect kind its amount, money / 10, enclosure size / 5, else / 3."""
+    kinds = enums()["effect_kinds"]
+    v = [0.0] * len(kinds)
+    if effect:
+        kind, amount = effect
+        v[kinds.index(kind)] = amount / (10 if kind == "money" else 5 if kind == "enclosure" else 3)
+    return v
 
 
 def building_cells(b) -> list:
@@ -274,7 +321,12 @@ def action_strength(pl, action: str) -> int:
     return pl["slots"].index(action) + 1 - 2 * ("constriction" in pl["action_tokens"].get(action, []))
 
 
-def strength_short(pl, c) -> float:
+def sponsor_level(pl, c, key: str) -> int:
+    """A sponsor's level for pl: 1 lower on Hollywood Hills once all its H spaces are covered."""
+    return max(0, c["level"] - map_rule_state(pl, key)["sponsor_discount"])
+
+
+def strength_short(pl, c, key: str) -> float:
     """Strength points pl's action card lacks for card c now, X-tokens aside, / 5 (capped at 5).
     Animals I plays an animal from strength 2, Animals II from 1; Sponsors plays levels up to its
     strength, plus 1 on side II; supporting a project takes Association 5 (4 with the Veterinarian,
@@ -282,7 +334,7 @@ def strength_short(pl, c) -> float:
     if c["type"] == "animal":
         action, needed = "animals", 1 if "animals" in pl["upgraded"] else 2
     elif c["type"] == "sponsor":
-        action, needed = "sponsors", max(1, c["level"] - ("sponsors" in pl["upgraded"]))
+        action, needed = "sponsors", max(1, sponsor_level(pl, c, key) - ("sponsors" in pl["upgraded"]))
     elif c["type"] == "project":
         action, needed = "association", 4 if "203" in pl["zoo_cards"] else 5
     else:
@@ -310,10 +362,10 @@ def project_count(pl, icon: str) -> int:
     return icons[icon[len("kPIcon_"):]]
 
 
-def map_facts(pl) -> dict:
+def map_facts(pl, key: str) -> dict:
     """What the end-of-game and sponsor effects count on a zoo map. A space is connected when a
     building covers a space next to it; "empty" spaces are plain spaces without a building."""
-    cells = map0()["cells"]
+    cells = zoo_map(key)["cells"]
     covered = {tuple(c) for b in pl["buildings"] for c in b["cells"]}
 
     def near(qr):
@@ -339,7 +391,7 @@ def final_card_points(core, p: int, card_id: int) -> int:
     pl = core["players"][p]
     zoo = [table[idx[cid]] for cid in pl["zoo_cards"]]
     icons = zoo_icons(pl)
-    facts = map_facts(pl)
+    facts = map_facts(pl, core["map"])
     count = {
         1: sum(is_large(c) for c in zoo), 2: sum(is_small(c) for c in zoo), 3: icons["science"],
         5: sum(not t for t in pl["tokens"]), 6: facts["empty"],
@@ -382,20 +434,22 @@ def _distinct(icons, continents=True, categories=True) -> int:
     return sum(icons[i] > 0 for i in (e["icons"][:7] if categories else []) + (e["continents"] if continents else []))
 
 
-def sponsor_immediate(pl, c) -> dict:
+def sponsor_immediate(pl, c, key: str) -> dict:
     """What sponsor c's immediate effect gives pl when played now (the card already counts as in
     the zoo): money, appeal, conservation and other gains (cards to take, workers, free buildings)."""
     icons = zoo_icons(pl) + c["icons"]
-    facts = map_facts(pl)
+    facts = map_facts(pl, key)
     out = dict(money=0, appeal=0, conservation=0, other=0)
     cid = c["id"]
     if cid in CATEGORY_SPONSORS:
         out["appeal"] = icons[CATEGORY_SPONSORS[cid]]
     elif cid in (201, 254):
         out["other"] = 1
-    elif cid == 216 and pl["workers"] < 4:  # the 4th worker brings 2 conservation (map 0)
+    elif cid == 216 and pl["workers"] < 4:  # the 4th worker brings what the map prints next to it
         out["other"] = 1
-        out["conservation"] = 2 * (pl["workers"] == 3)
+        last = zoo_map(key)["last_worker"]
+        assert last is None or last[0] == "conservation"
+        out["conservation"] = last[1] if last and pl["workers"] == 3 else 0
     elif cid == 207:
         out["conservation"] = _distinct(icons) // 2
     elif cid == 222:
@@ -443,9 +497,9 @@ def sponsor_income(pl, c, in_zoo: bool) -> dict:
     return out
 
 
-def sponsor_endgame(pl, c) -> tuple:
+def sponsor_endgame(pl, c, key: str) -> tuple:
     """(conservation, appeal) sponsor c's end-of-game effect gives pl now."""
-    icons, facts, cid = zoo_icons(pl), map_facts(pl), c["id"]
+    icons, facts, cid = zoo_icons(pl), map_facts(pl, key), c["id"]
     steps = {201: "science", 251: "bear"}
     if cid in steps:
         n = icons[steps[cid]]

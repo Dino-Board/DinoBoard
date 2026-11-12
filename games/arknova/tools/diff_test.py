@@ -7,7 +7,7 @@ arknova_diff_cli runs with g_upstream_rules, so the few places where ark-nova-ai
 rulebook (listed at its declaration in arknova_core.h) follow ark-nova-ai here; rule_scenarios.py
 checks the rulebook behaviour of those places.
 
-    python games/arknova/tools/diff_test.py --ref ~/ref/ark-nova-ai --cli build/.../arknova_diff_cli --games 200
+    python games/arknova/tools/diff_test.py --ref ~/ref/ark-nova-ai --cli build/.../arknova_diff_cli --games 200 [--maps all]
 """
 import argparse
 import json
@@ -73,11 +73,12 @@ def export_player(pl):
 
 
 def export_state(s):
-    if s.map_name != "map0" or s.n != 2:
-        raise ValueError("only the 2-player Map 0 game is supported")
-    if s.turn_flags:
+    if s.n != 2:
+        raise ValueError("only the 2-player game is supported")
+    if set(s.turn_flags) - {"harbor"}:
         raise ValueError(f"turn flags are not supported: {s.turn_flags}")
     return {
+        "map": s.map_name, "turn_flags": canon(s.turn_flags),
         "players": [export_player(p) for p in s.players], "current": s.current, "deck": list(s.deck),
         "discard": sorted(s.discard), "display": list(s.display), "final_deck": list(s.final_deck),
         "break_pos": s.break_pos, "break_by": s.break_by, "base_projects": list(s.base_projects),
@@ -179,8 +180,8 @@ class CppError(Exception):
     pass
 
 
-def play(engine, cli, seed, max_steps, dump=None):
-    state = engine.new_game(2, seed=seed)
+def play(engine, cli, seed, map_name, max_steps, dump=None):
+    state = engine.new_game(2, seed=seed, map_name=map_name)
     pick = random.Random(seed)
     for n in range(max_steps):
         if state.over:
@@ -193,7 +194,7 @@ def play(engine, cli, seed, max_steps, dump=None):
         cli.send("S " + dumps(before))
         py_options = [dumps(canon(o.key)) for o in engine.legal_options(state)]
         cpp_options = [dumps(o) for o in json.loads(cli.send("O"))]
-        where = f"seed {seed} step {n} ({state.stack[-1].kind})"
+        where = f"{map_name} seed {seed} step {n} ({state.stack[-1].kind})"
         # Python lists hand-card options in hand order, C++ in card order; actions map to fixed ids anyway.
         if sorted(py_options) != sorted(cpp_options) or len(set(cpp_options)) != len(cpp_options):
             only_py = [o for o in py_options if o not in cpp_options]
@@ -225,7 +226,7 @@ def play(engine, cli, seed, max_steps, dump=None):
                     json.dump({"before": before, "option": canon(option.key), "python": export_state(state),
                                "cpp": cpp_after}, f)
             raise AssertionError(f"{where}: state differs after {dumps(canon(option.key))}\n  {diff}")
-    raise AssertionError(f"seed {seed}: game did not finish in {max_steps} steps")
+    raise AssertionError(f"{map_name} seed {seed}: game did not finish in {max_steps} steps")
 
 
 def main():
@@ -235,16 +236,19 @@ def main():
     ap.add_argument("--games", type=int, default=50)
     ap.add_argument("--seed", type=int, default=0, help="first seed")
     ap.add_argument("--max-steps", type=int, default=4000)
+    ap.add_argument("--maps", default="all",
+                    help="comma-separated map keys (map0, plan1..plan8, plana) played in turn, or all")
     ap.add_argument("--dump", help="on a state mismatch, write the state before, the option and both results here")
     args = ap.parse_args()
     sys.path.insert(0, args.ref)
     from arknova import engine
 
+    maps = list(engine.MAP_DEFS) if args.maps == "all" else args.maps.split(",")
     cli = Cli(args.cli)
     t0, steps = time.time(), 0
     for g in range(args.seed, args.seed + args.games):
-        steps += play(engine, cli, g, args.max_steps, args.dump)
-    print(f"{args.games} games, {steps} steps identical ({time.time() - t0:.1f}s)")
+        steps += play(engine, cli, g, maps[g % len(maps)], args.max_steps, args.dump)
+    print(f"{args.games} games on {len(maps)} maps, {steps} steps identical ({time.time() - t0:.1f}s)")
 
 
 if __name__ == "__main__":

@@ -186,7 +186,7 @@ void build_options(State& s, int fi, std::vector<Option>& out) {
   }
 }
 
-void build_apply(State& s, int fi, const Option& o, Chance&) {
+void build_apply(State& s, int fi, const Option& o, Chance& ch) {
   if (o.head != Head::build && o.head != Head::engineer) {
     pop(s, fi);
     return;
@@ -211,7 +211,7 @@ void build_apply(State& s, int fi, const Option& o, Chance&) {
   bool engineer_possible = sr::has_engineer(s.players[p]) && !f.d[fd::build_engineer_used];
   bool finished = f.d[fd::build_normal_done] && !engineer_possible;
   if (finished) pop(s, fi);
-  place_building(s, p, kind, size, o.cells);
+  place_building(s, p, kind, size, o.cells, ch);
   if (finished) return;
   int cur = find_frame(s, uid);
   if (cur < 0) engine_error("act_build: frame vanished");

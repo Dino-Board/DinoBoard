@@ -14,75 +14,26 @@ namespace {
 
 constexpr int kDirs[6][2] = {{0, -1}, {1, -1}, {1, 0}, {0, 1}, {-1, 1}, {-1, 0}};  // N NE SE S SW NW
 
-// Map 0 by columns, top to bottom (hexmap.MAP0): W water, R rock, . plain, .:<bonus>, .:build2.
-const char* const kMap0Columns[] = {
-    "W W . . .:rep2 R",
-    "W .:card . . . W R",
-    "R . .:card W . .",
-    "W R . . .:xtoken . .:card",
-    ".:xtoken . .:money10 . . .",
-    ". . W .:clever R .:xtoken R",
-    ". R .:build2 . R R",
-    ". .:money5 .:build2 . . .:rep2 W",
-    ". . . .:money5 W W",
-};
+// The grid by columns (hexmap.MapDef.from_columns): column col, row k is axial (col, k - (col + 1) / 2).
+constexpr int kColumnLengths[] = {6, 7, 6, 7, 6, 7, 6, 7, 6};
 
 struct MapData {
   std::array<MapCell, kMapCells> cells{};
   std::map<std::pair<int, int>, int> index;
-  CellMask buildable = 0;
 };
 
-PlacementBonus parse_bonus(const std::string& s) {
-  for (int b = 1; b < kNumPlacementBonuses; ++b) {
-    if (s == kPlacementBonusNames[b]) return static_cast<PlacementBonus>(b);
+MapData build_grid() {
+  std::vector<std::pair<int, int>> qr;
+  for (int col = 0; col < static_cast<int>(std::size(kColumnLengths)); ++col) {
+    for (int row = 0; row < kColumnLengths[col]; ++row) qr.emplace_back(col, row - (col + 1) / 2);
   }
-  throw std::runtime_error("arknova map: unknown placement bonus " + s);
-}
-
-MapData build_map0() {
-  struct Raw {
-    int q, r;
-    MapCell cell;
-  };
-  std::vector<Raw> raw;
-  int col = 0;
-  for (const char* column : kMap0Columns) {
-    std::string s(column);
-    std::size_t pos = 0;
-    int row = 0;
-    while (pos < s.size()) {
-      std::size_t end = s.find(' ', pos);
-      if (end == std::string::npos) end = s.size();
-      std::string tok = s.substr(pos, end - pos);
-      pos = end + 1;
-      MapCell c;
-      if (tok == "W") {
-        c.terrain = Terrain::kWater;
-      } else if (tok == "R") {
-        c.terrain = Terrain::kRock;
-      } else if (tok == ".") {
-      } else if (tok == ".:build2") {
-        c.build2_only = true;
-      } else if (tok.rfind(".:", 0) == 0) {
-        c.bonus = parse_bonus(tok.substr(2));
-      } else {
-        throw std::runtime_error("arknova map: bad token " + tok);
-      }
-      int q = col, r = row - (col + 1) / 2;
-      c.q = static_cast<std::int8_t>(q);
-      c.r = static_cast<std::int8_t>(r);
-      raw.push_back({q, r, c});
-      ++row;
-    }
-    ++col;
-  }
-  if (static_cast<int>(raw.size()) != kMapCells) throw std::runtime_error("arknova map: Map 0 cell count");
-  std::sort(raw.begin(), raw.end(), [](const Raw& a, const Raw& b) { return std::make_pair(a.q, a.r) < std::make_pair(b.q, b.r); });
+  if (static_cast<int>(qr.size()) != kMapCells) throw std::runtime_error("arknova map: cell count");
+  std::sort(qr.begin(), qr.end());
   MapData m;
   for (int i = 0; i < kMapCells; ++i) {
-    m.cells[i] = raw[i].cell;
-    m.index[{raw[i].q, raw[i].r}] = i;
+    m.cells[i].q = static_cast<std::int8_t>(qr[i].first);
+    m.cells[i].r = static_cast<std::int8_t>(qr[i].second);
+    m.index[qr[i]] = i;
   }
   for (int i = 0; i < kMapCells; ++i) {
     MapCell& c = m.cells[i];
@@ -91,14 +42,63 @@ MapData build_map0() {
       c.nbr[d] = it == m.index.end() ? -1 : static_cast<std::int8_t>(it->second);
       if (c.nbr[d] < 0) c.border = true;
     }
-    if (c.terrain == Terrain::kPlain) m.buildable |= CellMask{1} << i;
   }
   return m;
 }
 
 const MapData& map_data() {
-  static const MapData m = build_map0();
+  static const MapData m = build_grid();
   return m;
+}
+
+struct MapSource {
+  const char* key;
+  const char* name;
+  MapRule rule;
+  const char* terrain;  // per cell: '.' plain, 'W' water, 'R' rock
+  PlacementBonus bonus[kMapCells];
+  CellMask build2;
+  CellMask rule_cells;
+  Effect partner_zoo_slots[kMaxPartnerZoos];
+  Effect university_slots[kNumUniversities];
+  Effect last_worker;
+  MapToken tokens[kNumMapTokens];
+  std::int8_t n_prebuilt;
+  Prebuilt prebuilt[2];
+};
+
+#include "arknova_maps_data.inc"
+
+std::vector<MapDef> build_maps() {
+  std::vector<MapDef> out;
+  for (const MapSource& src : kMapSources) {
+    MapDef m;
+    m.key = src.key;
+    m.name = src.name;
+    if (std::string(src.terrain).size() != kMapCells) throw std::runtime_error(std::string("arknova map: ") + src.key);
+    for (int c = 0; c < kMapCells; ++c) {
+      MapTerrain& t = m.cells[c];
+      t.terrain = src.terrain[c] == 'W' ? Terrain::kWater : src.terrain[c] == 'R' ? Terrain::kRock : Terrain::kPlain;
+      t.bonus = src.bonus[c];
+      t.build2_only = src.build2 >> c & 1;
+      if (t.terrain == Terrain::kPlain) m.buildable |= CellMask{1} << c;
+    }
+    m.rule = src.rule;
+    m.rule_cells = src.rule_cells;
+    std::copy(std::begin(src.partner_zoo_slots), std::end(src.partner_zoo_slots), m.partner_zoo_slots);
+    std::copy(std::begin(src.university_slots), std::end(src.university_slots), m.university_slots);
+    m.last_worker = src.last_worker;
+    std::copy(std::begin(src.tokens), std::end(src.tokens), m.tokens);
+    m.n_prebuilt = src.n_prebuilt;
+    std::copy(src.prebuilt, src.prebuilt + src.n_prebuilt, m.prebuilt);
+    out.push_back(m);
+  }
+  return out;
+}
+
+const std::vector<MapDef>& all_maps() {
+  static const std::vector<MapDef> maps = build_maps();
+  return maps;
 }
 
 using ShapeKey = std::vector<std::pair<int, int>>;
@@ -128,7 +128,7 @@ std::vector<ShapeKey> orientations(const ShapeKey& base) {
   return out;
 }
 
-std::vector<ShapePosition> compute_positions(const ShapeKey& base) {
+std::vector<ShapePosition> compute_positions(const ShapeKey& base, const MapDef& md) {
   const MapData& m = map_data();
   std::vector<ShapePosition> out;
   std::vector<CellMask> seen;
@@ -148,16 +148,16 @@ std::vector<ShapePosition> compute_positions(const ShapeKey& base) {
       seen.push_back(fs);
       ShapePosition p;
       p.cells = fs;
-      p.plain = (fs & m.buildable) == fs;
+      p.plain = (fs & md.buildable) == fs;
       CellMask near = neighbor_mask(fs);
       for (int c = 0; c < kMapCells; ++c) {
         if (fs >> c & 1) {
-          p.has_build2 |= m.cells[c].build2_only;
+          p.has_build2 |= md.cells[c].build2_only;
           p.on_border += m.cells[c].border;
         }
         if (near >> c & 1) {
-          p.rock += m.cells[c].terrain == Terrain::kRock;
-          p.water += m.cells[c].terrain == Terrain::kWater;
+          p.rock += md.cells[c].terrain == Terrain::kRock;
+          p.water += md.cells[c].terrain == Terrain::kWater;
         }
       }
       out.push_back(p);
@@ -178,7 +178,7 @@ Shape make_shape(std::initializer_list<std::pair<int, int>> cells) {
 
 struct ShapeTables {
   std::map<std::pair<int, int>, Shape> standard;  // (kind, size) -> shape
-  std::map<ShapeKey, std::unique_ptr<std::vector<ShapePosition>>> positions;
+  std::map<ShapeKey, std::vector<std::vector<ShapePosition>>> positions;  // per map
 };
 
 const ShapeTables& shape_tables() {
@@ -197,7 +197,9 @@ const ShapeTables& shape_tables() {
     put(BuildingKind::kAviary, 5, make_shape({{0, 0}, {-1, 0}, {1, -1}, {-1, 1}, {0, 1}}));
     auto add = [&](const Shape& s) {
       ShapeKey k = shape_key(s);
-      if (!t.positions.count(k)) t.positions[k] = std::make_unique<std::vector<ShapePosition>>(compute_positions(k));
+      if (t.positions.count(k)) return;
+      auto& per_map = t.positions[k];
+      for (const MapDef& md : all_maps()) per_map.push_back(compute_positions(k, md));
     };
     for (auto& [_, s] : t.standard) add(s);
     for (int c = 0; c < num_cards(); ++c) {
@@ -211,6 +213,17 @@ const ShapeTables& shape_tables() {
 }  // namespace
 
 const MapCell& map_cell(int i) { return map_data().cells.at(i); }
+
+int num_maps() { return static_cast<int>(all_maps().size()); }
+
+const MapDef& map_def(int m) { return all_maps().at(m); }
+
+int map_by_key(const std::string& key) {
+  for (int m = 0; m < num_maps(); ++m) {
+    if (key == map_def(m).key) return m;
+  }
+  return -1;
+}
 
 int cell_index(int q, int r) {
   const auto& idx = map_data().index;
@@ -229,8 +242,6 @@ CellMask neighbor_mask(CellMask cells) {
   }
   return out & ~cells;
 }
-
-CellMask buildable_mask() { return map_data().buildable; }
 
 int hex_distance(int a, int b) {
   const MapCell& x = map_cell(a);
@@ -265,11 +276,11 @@ Shape card_shape(CardIdx sponsor) {
   return s;
 }
 
-const std::vector<ShapePosition>& shape_positions(const Shape& base) {
+const std::vector<ShapePosition>& shape_positions(const Shape& base, int map) {
   const auto& pos = shape_tables().positions;
   auto it = pos.find(shape_key(base));
   if (it == pos.end()) throw std::runtime_error("arknova: shape positions not precomputed");
-  return *it->second;
+  return it->second.at(map);
 }
 
 int placement_orientation(const Shape& base, CellMask cells) {
@@ -318,7 +329,7 @@ std::vector<CellMask> Zoo::legal_placements(const PlacementQuery& q) const {
   }
   bool first = n_buildings == 0;
   std::vector<CellMask> found;
-  for (const ShapePosition& p : shape_positions(base)) {
+  for (const ShapePosition& p : shape_positions(base, map)) {
     if ((!p.plain && !q.any_terrain) || (p.has_build2 && !q.build2) || p.on_border < q.min_border) continue;
     if (need_rock > p.rock || need_water > p.water) continue;
     if (p.cells & owned) continue;
@@ -356,18 +367,20 @@ int Zoo::place(BuildingKind kind, int size, CellMask cells, CardIdx name, std::v
   b.size = static_cast<std::int8_t>(size);
   b.cells = cells;
   b.name = name;
+  const MapDef& md = def();
   for (int c = 0; c < kMapCells; ++c) {
     if (!(cells >> c & 1)) continue;
     cell_owner[c] = static_cast<std::int8_t>(id);
-    if (bonuses && map_cell(c).bonus != kPBNone) bonuses->push_back(map_cell(c).bonus);
+    if (bonuses && md.cells[c].bonus != kPBNone) bonuses->push_back(md.cells[c].bonus);
   }
   return id;
 }
 
 int Zoo::adjacent_terrain(CellMask cells, Terrain t) const {
   CellMask near = neighbor_mask(cells);
+  const MapDef& md = def();
   int n = 0;
-  for (int c = 0; c < kMapCells; ++c) n += (near >> c & 1) && map_cell(c).terrain == t;
+  for (int c = 0; c < kMapCells; ++c) n += (near >> c & 1) && md.cells[c].terrain == t;
   return n;
 }
 
@@ -403,7 +416,7 @@ int Zoo::kiosk_income() const {
   return total;
 }
 
-bool Zoo::is_fully_covered() const { return (buildable_mask() & ~covered()) == 0; }
+bool Zoo::is_fully_covered() const { return (def().buildable & ~covered()) == 0; }
 
 int Zoo::count(BuildingKind kind) const {
   int n = 0;

@@ -46,7 +46,8 @@ static_assert(cf::req_last - cf::req + 1 == kNumReqs);
 static_assert(cf::ability_last - cf::ability + 1 == kNumKeywords);
 static_assert(jf::icon_last - jf::icon + 1 == kNumProjIcons);
 static_assert(jf::category_last - jf::category + 1 == kNumProjCategories);
-static_assert(xf::bonus_last - xf::bonus + 1 == kNumPlacementBonuses);
+static_assert(ARKNOVA_EFFECT_WIDTH == static_cast<int>(EffectKind::kNumEffectKinds));
+static_assert(rf::index_last - rf::index + 1 == kNumMapTokens);
 static_assert(pf::buildings_last - pf::buildings + 1 == kNumBuildingKinds);
 static_assert(xf::kind_last - xf::kind + 1 == kNumBuildingKinds);
 static_assert(ef::kind_last - ef::kind + 1 == kNumBuildingKinds);
@@ -58,7 +59,7 @@ static_assert(static_cast<int>(jf::my_hand) == static_cast<int>(cf::my_hand) &&
               static_cast<int>(cf::unknown) == static_cast<int>(cf::in_range) + 1);
 static_assert(gf::kCount <= Enc::kFeatures && df::kCount <= Enc::kFeatures && pf::kCount <= Enc::kFeatures &&
               af::kCount <= Enc::kFeatures && jf::kCount <= Enc::kFeatures && xf::kCount <= Enc::kFeatures &&
-              ef::kCount <= Enc::kFeatures);
+              ef::kCount <= Enc::kFeatures && rf::kCount <= Enc::kFeatures);
 // The discard and unseen pools share one block layout.
 constexpr int kPoolWidth = gf::discard_conservation_last - gf::discard_type + 1;
 static_assert(gf::unseen_type == gf::discard_type + kPoolWidth &&
@@ -129,6 +130,25 @@ const std::vector<int>& final_columns() {
 }
 
 int lowest_cell(CellMask cells) { return __builtin_ctzll(cells); }
+
+// An effect block (ARKNOVA_EFFECT_WIDTH columns at f); amount 0 is nothing.
+void put_effect(float* f, const Effect& e) {
+  if (e.amount <= 0) return;
+  const float scale = e.kind == EffectKind::kEffMoney ? 10.0f : e.kind == EffectKind::kEffEnclosure ? 5.0f : 3.0f;
+  f[static_cast<int>(e.kind)] = e.amount / scale;
+}
+
+// Cells next to some cell of `cells`, those cells included when next to another one (the
+// adjacency the map rules test).
+CellMask touching(CellMask cells) {
+  CellMask out = 0;
+  for (CellMask m = cells; m; m &= m - 1) {
+    for (int n : map_cell(lowest_cell(m)).nbr) {
+      if (n >= 0) out |= CellMask{1} << n;
+    }
+  }
+  return out;
+}
 
 // The X of "keyword X", or -1. Iconic Animal stores a continent there, which is one of the card's
 // own continent icons (check_card_table), so it has no number of its own.
@@ -237,6 +257,7 @@ class Writer {
         add_pool(gf::unseen_type, c);
       }
     }
+    f[gf::trade_used] = s_.harbor_used ? 1.0f : 0.0f;
   }
 
   void decision_token() {
@@ -260,6 +281,8 @@ class Writer {
         f[df::chosen_position + (a - atom::kPosition)] = 1.0f;
       } else if (a >= atom::kMapToken && a < atom::kMapToken + kNumMapTokens) {
         f[df::chosen_map_token + (a - atom::kMapToken)] = 1.0f;
+      } else if (a == atom::kHarbor) {
+        f[df::chosen_harbor] = 1.0f;
       }
     }
     if (!top_) return;
@@ -384,6 +407,32 @@ class Writer {
     f[pf::appeal_income] = appeal_income(pl.appeal) / 40.0f;
     f[pf::display_range] = reputation_folders(pl.reputation) / static_cast<float>(kDisplaySize);
     for (const KindSize& ks : placeable_buildings(s_, p)) f[pf::placeable + building_type(ks.kind, ks.size)] = 1.0f;
+    // The side panel: what the next partner zoo, the next university and the last worker give.
+    const MapDef& md = pl.zoo.def();
+    if (pl.n_partner_zoos < kMaxPartnerZoos) put_effect(f + pf::next_partner_zoo, md.partner_zoo_slots[pl.n_partner_zoos]);
+    if (pl.n_universities < kNumUniversities) put_effect(f + pf::next_university, md.university_slots[pl.n_universities]);
+    if (pl.workers < kMaxWorkers) put_effect(f + pf::last_worker, md.last_worker);
+    // Where the map's special rule stands for this zoo.
+    f[pf::map_income] = map_break_money(pl) / 5.0f;
+    f[pf::can_trade] = harbor_active(pl) ? 1.0f : 0.0f;
+    f[pf::ignore_conditions] = static_cast<float>(map_condition_allowance(pl));
+    f[pf::sponsor_discount] = static_cast<float>(-map_sponsor_level_delta(pl));
+    if (md.rule == MapRule::kIceCream || md.rule == MapRule::kHollywood) {
+      f[pf::group_left] = popcount(md.rule_cells & ~pl.zoo.covered()) / 3.0f;
+    }
+  }
+
+  void reward_tokens() {
+    const MapDef& md = s_.players[me_].zoo.def();
+    for (int i = 0; i < kNumMapTokens; ++i) {
+      float* f = add(Enc::kRewardToken, 0, -1);
+      f[rf::index + i] = 1.0f;
+      put_effect(f + rf::effect, md.tokens[i].effect);
+      f[rf::repeats] = md.tokens[i].repeats ? 1.0f : 0.0f;
+      f[rf::taken_me] = s_.players[me_].tokens[i] ? 0.0f : 1.0f;
+      f[rf::taken_opp] = s_.players[opp_].tokens[i] ? 0.0f : 1.0f;
+      f[rf::chosen] = chosen(atom::kMapToken + i) ? 1.0f : 0.0f;
+    }
   }
 
   void action_card_tokens(int p) {
@@ -457,18 +506,51 @@ class Writer {
     const CellMask adjacent = neighbor_mask(covered);
     const bool build2 = pl.is_upgraded(kBuild);
     const bool any_terrain = sr::ignores_terrain(pl);
+    const MapDef& md = zoo.def();
+    const CellMask rule = md.rule_cells, near_rule = touching(rule);
+    const Zoo& opp_zoo = s_.players[opp_].zoo;
+    const CellMask opp_adjacent = neighbor_mask(opp_zoo.covered());
     for (int c = 0; c < kMapCells; ++c) {
       const MapCell& mc = map_cell(c);
+      const MapTerrain& mt = md.cells[c];
       float* f = add(Enc::kCellToken, Enc::kEntityCell + c, Enc::kAnchorCell + c, c);
       const CellMask bit = CellMask{1} << c;
-      f[xf::terrain + static_cast<int>(mc.terrain)] = 1.0f;
-      f[xf::build2_only] = mc.build2_only ? 1.0f : 0.0f;
+      f[xf::terrain + static_cast<int>(mt.terrain)] = 1.0f;
+      f[xf::build2_only] = mt.build2_only ? 1.0f : 0.0f;
       f[xf::border] = mc.border ? 1.0f : 0.0f;
-      f[xf::bonus + mc.bonus] = 1.0f;
+      if (mt.bonus != kPBNone) put_effect(f + xf::bonus, placement_bonus_effect(mt.bonus));
       f[xf::covered] = covered & bit ? 1.0f : 0.0f;
       f[xf::adjacent] = adjacent & bit ? 1.0f : 0.0f;
-      const bool free_terrain = mc.terrain == Terrain::kPlain || any_terrain;
-      f[xf::buildable] = !(covered & bit) && free_terrain && (!mc.build2_only || build2) ? 1.0f : 0.0f;
+      const bool free_terrain = mt.terrain == Terrain::kPlain || any_terrain;
+      f[xf::buildable] = !(covered & bit) && free_terrain && (!mt.build2_only || build2) ? 1.0f : 0.0f;
+      f[xf::landmark] = rule & bit ? 1.0f : 0.0f;
+      switch (md.rule) {
+        case MapRule::kObservationTower:
+          if (near_rule & bit) f[xf::fill_appeal] = kObservationAppeal / 2.0f;
+          break;
+        case MapRule::kOutdoorArea:
+          if (near_rule & bit) f[xf::extra_capacity] = kOutdoorExtraSize / 2.0f;
+          break;
+        case MapRule::kParkRestaurant:
+          f[xf::break_money] = static_cast<float>(popcount(neighbor_mask(bit) & rule));
+          break;
+        case MapRule::kHarbor:
+          if (rule & bit) f[xf::unlocks_trade] = 1.0f;
+          break;
+        case MapRule::kResearchInstitute:
+          if (rule & bit) f[xf::unlocks_condition] = 1.0f;
+          break;
+        case MapRule::kIceCream:
+          if (rule & bit) f[xf::group] = f[xf::group_kiosk_income] = 1.0f;
+          break;
+        case MapRule::kHollywood:
+          if (rule & bit) f[xf::cover_draw_sponsor] = f[xf::group] = f[xf::group_sponsor_discount] = 1.0f;
+          break;
+        case MapRule::kNone:
+          break;
+      }
+      if (opp_zoo.cell_owner[c] >= 0) f[xf::opp_kind + static_cast<int>(opp_zoo.buildings[opp_zoo.cell_owner[c]].kind)] = 1.0f;
+      f[xf::opp_adjacent] = opp_adjacent & bit ? 1.0f : 0.0f;
       const int b = zoo.cell_owner[c];
       if (b >= 0) {
         // The cells of one building share its kind and point at its lowest cell (where an
@@ -484,8 +566,8 @@ class Writer {
       int rock = 0, water = 0, kiosks = 0;
       for (int nb : mc.nbr) {
         if (nb < 0) continue;
-        rock += map_cell(nb).terrain == Terrain::kRock;
-        water += map_cell(nb).terrain == Terrain::kWater;
+        rock += md.cells[nb].terrain == Terrain::kRock;
+        water += md.cells[nb].terrain == Terrain::kWater;
         kiosks += zoo.cell_owner[nb] >= 0 && zoo.buildings[zoo.cell_owner[nb]].kind == BuildingKind::kKiosk;
       }
       f[xf::rock_neighbors] = rock / 6.0f;
@@ -612,7 +694,7 @@ class Writer {
       f[cf::affordable] = owner.money >= money ? 1.0f : 0.0f;
       bool req_ok, has_place;
       if (animal) {
-        req_ok = sr::requirements_ok(owner, c) && sr::animal_allowed(owner, c);
+        req_ok = sr::requirements_ok(s_, holder, c) && sr::animal_allowed(owner, c);
         has_place = !housings(owner, c).empty();
         f[cf::strength_short] = strength_short(holder, kAnimals, animals_strength_needed(owner));
       } else {
@@ -810,6 +892,7 @@ struct FeatureDesc {
 #define ARKNOVA_DESC_jf(name, width) {#name, jf::name, width},
 #define ARKNOVA_DESC_xf(name, width) {#name, xf::name, width},
 #define ARKNOVA_DESC_ef(name, width) {#name, ef::name, width},
+#define ARKNOVA_DESC_rf(name, width) {#name, rf::name, width},
 ARKNOVA_DESC_TABLE(kGlobalDesc, gf, ARKNOVA_GLOBAL_FEATURES)
 ARKNOVA_DESC_TABLE(kDecisionDesc, df, ARKNOVA_DECISION_FEATURES)
 ARKNOVA_DESC_TABLE(kPlayerDesc, pf, ARKNOVA_PLAYER_FEATURES)
@@ -818,6 +901,7 @@ ARKNOVA_DESC_TABLE(kCardDesc, cf, ARKNOVA_CARD_FEATURES)
 ARKNOVA_DESC_TABLE(kProjectDesc, jf, ARKNOVA_PROJECT_FEATURES)
 ARKNOVA_DESC_TABLE(kCellDesc, xf, ARKNOVA_CELL_FEATURES)
 ARKNOVA_DESC_TABLE(kEnclosureDesc, ef, ARKNOVA_ENCLOSURE_FEATURES)
+ARKNOVA_DESC_TABLE(kRewardDesc, rf, ARKNOVA_REWARD_FEATURES)
 #undef ARKNOVA_DESC_TABLE
 
 template <std::size_t N>
@@ -893,6 +977,8 @@ std::string ArknovaTokenEncoder::layout_json() {
   append_type(out, "cell", kCellDesc);
   out += ',';
   append_type(out, "enclosure", kEnclosureDesc);
+  out += ',';
+  append_type(out, "reward", kRewardDesc);
   out += "],\"entities\":[";
   append_range(out, "card", kEntityCard, kCardSlots);
   append_range(out, "cell", kEntityCell, kMapCells);
@@ -996,6 +1082,7 @@ void ArknovaTokenEncoder::encode_features(const IGameState& masked_state, int pe
   w.cell_tokens();
   w.enclosure_tokens(me);
   w.enclosure_tokens(opp);
+  w.reward_tokens();
 }
 
 }  // namespace board_ai::arknova

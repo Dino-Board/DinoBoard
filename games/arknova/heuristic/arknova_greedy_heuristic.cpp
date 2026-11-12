@@ -128,13 +128,13 @@ bool houses_standard(const Player& pl, CardIdx c, int building) {
 double placement_score(const Zoo& zoo, CellMask cells, bool enclosure) {
   double score = 0.0;
   for (CellMask m = cells; m; m &= m - 1) {
-    const MapCell& mc = map_cell(__builtin_ctzll(m));
-    if (mc.bonus != kPBNone) score += 2.0;
-    for (int n : mc.nbr) {
+    const int c = __builtin_ctzll(m);
+    if (zoo.cell(c).bonus != kPBNone) score += 2.0;
+    for (int n : map_cell(c).nbr) {
       if (n < 0) continue;
       if (zoo.cell_owner[n] != kNoBuilding) {
         score += 0.15;  // keep the zoo compact
-      } else if (enclosure && map_cell(n).terrain != Terrain::kPlain) {
+      } else if (enclosure && zoo.cell(n).terrain != Terrain::kPlain) {
         score += 0.3;  // rock and water neighbours keep animal options open
       }
     }

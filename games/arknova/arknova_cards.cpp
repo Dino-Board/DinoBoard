@@ -136,6 +136,14 @@ Effect placement_bonus_effect(PlacementBonus b) {
     case kPBRep2: return {EffectKind::kEffReputation, 2};
     case kPBCard: return {EffectKind::kEffCard, 1};
     case kPBClever: return {EffectKind::kEffClever, 1};
+    case kPBMoney2: return {EffectKind::kEffMoney, 2};
+    case kPBRep1: return {EffectKind::kEffReputation, 1};
+    case kPBKiosk: return {EffectKind::kEffKiosk, 1};
+    case kPBWorker1: return {EffectKind::kEffWorker, 1};
+    case kPBPartnerZoo: return {EffectKind::kEffPartnerZoo, 1};
+    case kPBUniversity: return {EffectKind::kEffUniversity, 1};
+    case kPBMultiplier: return {EffectKind::kEffMultiplier, 1};
+    case kPBSponsorForMoney: return {EffectKind::kEffSponsorForMoney, 1};
     default: throw std::invalid_argument("arknova: bad placement bonus");
   }
 }

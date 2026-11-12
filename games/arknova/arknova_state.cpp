@@ -14,7 +14,7 @@ namespace board_ai::arknova {
 
 namespace {
 
-constexpr int kPackVersion = 0xA44;
+constexpr int kPackVersion = 0xA45;
 
 void fill_slots(std::int16_t* first, int n, std::int16_t v) { std::fill(first, first + n, v); }
 
@@ -122,7 +122,9 @@ void ArknovaState::reset_with_seed(std::uint64_t seed) {
   IGameState::reset_step_count_base();
   *this = ArknovaState();
   std::mt19937_64 rng(seed);
-  new_game(core, rng);
+  // Both zoos use one map, drawn uniformly per game.
+  const int map = static_cast<int>(rng() % static_cast<std::uint64_t>(num_maps()));
+  new_game(core, rng, map);
   viz::init_viz(*this, schema());
   absorb_step(*this);
   advance_forced(*this, rng);
@@ -236,6 +238,7 @@ void ArknovaState::pack_public(std::vector<int>& out) const {
   const State& s = core;
   out.clear();
   out.push_back(kPackVersion);
+  out.insert(out.end(), {s.map, s.harbor_used});
   for (int p = 0; p < kPlayers; ++p) {
     const Player& pl = s.players[p];
     out.insert(out.end(), {pl.appeal, pl.money, pl.conservation, pl.reputation, pl.xtokens, pl.upgraded, pl.workers});
@@ -320,8 +323,12 @@ void ArknovaState::unpack_public(const std::vector<int>& in) {
   Reader r(in);
   if (r.next() != kPackVersion) throw std::runtime_error("arknova: packed public state has the wrong version");
   core = State{};
+  core.map = r.as<std::int8_t>();
+  if (core.map < 0 || core.map >= num_maps()) throw std::runtime_error("arknova: packed public state has a bad map");
+  core.harbor_used = r.next() != 0;
   for (int p = 0; p < kPlayers; ++p) {
     Player& pl = core.players[p];
+    pl.zoo.map = core.map;
     pl.appeal = r.as<std::int16_t>();
     pl.money = r.as<std::int16_t>();
     pl.conservation = r.as<std::int16_t>();

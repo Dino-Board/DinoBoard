@@ -175,7 +175,21 @@ bool can_take_partner_zoo(const State& s, int p, int continent);
 void take_partner_zoo(State& s, int p, int continent, Chance& ch);
 bool can_take_university(const State& s, int p, int university);
 void take_university(State& s, int p, int university, Chance& ch);
-int place_building(State& s, int p, BuildingKind kind, int size, CellMask cells, CardIdx name = kNoCard);
+int place_building(State& s, int p, BuildingKind kind, int size, CellMask cells, Chance& ch, CardIdx name = kNoCard);
+
+// ---- map rules (map_rules.py; each one only acts on its own map) --------------------------
+
+int map_condition_allowance(const Player& pl);  // Map 6: animal conditions that may be ignored
+int map_sponsor_level_delta(const Player& pl);  // Map 8: change to every sponsor's level
+void map_after_build(State& s, int p, int building, Chance& ch);  // Maps 8, 2 (AFTER_BUILD_HOOKS)
+void map_enclosure_filled(State& s, int p, int building);  // Map 1: an empty standard enclosure got an animal
+void map_break_income(State& s, int p);  // Maps 5, 7 (BREAK_INCOME_HOOKS)
+int map_break_money(const Player& pl);   // what map_break_income pays now
+// Map 4 harbour: the rule cell is covered; then once per turn, in any decision of the player's own
+// turn outside breaks, setup and final scoring, it may discard a hand card for 3 money.
+bool harbor_active(const Player& pl);
+void harbor_options(State& s, std::vector<Option>& out);  // added to the pending decision
+void harbor_apply(State& s, const Option& o);  // the decision stays pending
 
 // ---- engine (engine.py) ----------------------------------------------------------------
 
@@ -235,7 +249,7 @@ std::vector<CardIdx> releasable(const Player& pl, CardIdx project, int slot_inde
 int waza_kind(const Player& pl);  // 0, kWazaSmall or kWazaLarge
 bool animal_allowed(const Player& pl, CardIdx c);
 int animal_cost_reduction(const Player& pl, CardIdx c);
-bool requirements_ok(const Player& pl, CardIdx c);
+bool requirements_ok(const State& s, int p, CardIdx c);
 int sponsor_level(const State& s, int p, CardIdx c);
 void on_animal_played(State& s, int p, CardIdx c);
 bool has_small_program(const Player& pl);
@@ -271,7 +285,7 @@ bool has_income(CardIdx c);
 void income_effect(State& s, CardIdx c, int p);
 bool has_endgame(CardIdx c);
 void endgame_effect(State& s, CardIdx c, int p);
-void after_build_hooks(State& s, int p, int building);  // AFTER_BUILD_HOOKS, applied in reverse
+void after_build_hooks(State& s, int p, int building, Chance& ch);  // AFTER_BUILD_HOOKS, applied in reverse
 void after_special_built(State& s, int p, int building);  // relocate.py hook
 
 }  // namespace board_ai::arknova

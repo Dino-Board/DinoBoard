@@ -15,11 +15,11 @@ import dinoboard_engine as engine
 
 from arknova_reference import (ACTIONS, BUILD_ACTION, BUILDING_TYPES, DONATION_COSTS, GAME, SPONSOR_TRIGGERS,
                                TASKS, adjacent_terrain, animal_cost, appeal_income, atom_index, atom_names,
-                               building_cells, building_type, card_index, cards, decode, enums, final_card_points,
-                               final_scoring_cards, kiosk_income_of, known_to, layout, map0, neighbors, own_slots,
-                               pool_composition, project_count, regular_cards, reputation_folders, sponsor_endgame,
-                               sponsor_immediate, sponsor_income, strength_short, target_appeal, unmet_requirements,
-                               zoo_icons)
+                               PLACEMENT_BONUS_EFFECT, building_cells, building_type, card_index, cards, decode,
+                               effect_vector, enums, final_card_points, final_scoring_cards, kiosk_income_of, known_to,
+                               layout, map_rule_state, neighbors, own_slots, pool_composition, project_count,
+                               regular_cards, reputation_folders, sponsor_endgame, sponsor_immediate, sponsor_income,
+                               sponsor_level, strength_short, target_appeal, unmet_requirements, zoo_icons, zoo_map)
 
 AUTO_FRAMES = {"break", "extra_end", "final_scoring", "next_turn", "turn_end"}
 HOUSING = ("enclosure", "petting_zoo", "reptile_house", "aviary")
@@ -93,7 +93,9 @@ class HandTracker:
         self.maybe = {0: set(), 1: set()}
         self.hand = {q: own[q]["hand"] for q in (0, 1)}
 
-    def update(self, own_after, core_before, actor, name):
+    def update(self, own_after, core_before, actor, name, revealed=False, harbor=False):
+        """revealed: the move turned deck cards face up until one went to the hand (Waza, Hollywood);
+        harbor: the move completes a harbour trade (the card goes face up to the discard pile)."""
         idx = card_index()
         top = core_before["stack"][-1]["kind"]
         public = set(core_before["display"]) | set(core_before["base_project_deck"])
@@ -104,7 +106,7 @@ class HandTracker:
         after = {q: own_after[q]["hand"] for q in (0, 1)}
         for q in (0, 1):
             left, entered = self.hand[q] - after[q], after[q] - self.hand[q]
-            if actor == q and top == "ab_pouch" and name.startswith("hand_discard:"):
+            if actor == q and top == "ab_pouch" and name.startswith("hand_discard:") and not harbor:
                 seen = left & (self.known[q] | self.maybe[q])
                 self.maybe[q] |= self.known[q] & after[q]
                 self.maybe[q] = (self.maybe[q] - left) | seen
@@ -112,12 +114,24 @@ class HandTracker:
                 self.maybe[q] -= left
             self.known[q] -= left
             for c in entered:
-                if c in public or c in self.hand[1 - q] or top == "waza_kind":
+                if c in public or c in self.hand[1 - q] or revealed:
                     self.known[q].add(c)
         self.hand = after
 
     def shown(self, q):
         return self.known[q] - self.maybe[q]
+
+
+def hollywood_reveals(before, after, p) -> bool:
+    """Hollywood Hills (Map 8): every H space a building covers reveals deck cards until a sponsor,
+    which goes to the hand."""
+    m = zoo_map(before["map"])
+    if m["rule"] != "hollywood":
+        return False
+
+    def covered(core):
+        return {tuple(c) for b in core["players"][p]["buildings"] for c in b["cells"]} & m["rule_cells"]
+    return bool(covered(after) - covered(before))
 
 
 def turn_chain(core):
@@ -185,6 +199,7 @@ def check_state(ck: Checker, toks, me, core, own, state_dict, tracker, legal):
     for name, v in pool_composition(c for c in regular_cards() if c not in known).items():
         ck.eq(g, "unseen_" + name, v)
     ck.eq(g, "unseen_final", [c not in known for c in final_scoring_cards()])
+    ck.eq(g, "trade_used", core["turn_flags"].get("harbor", False))
 
     # ---- decision ----
     d = by_type["decision"][0]
@@ -251,10 +266,13 @@ def check_state(ck: Checker, toks, me, core, own, state_dict, tracker, legal):
             exp["offered"][building_type(k, size)] = 1
     for name, value in exp.items():
         ck.eq(d, name, value)
-    chosen = dict(chosen_verb=[0] * 3, chosen_type=[0] * 11, chosen_position=[0] * 3, chosen_map_token=[0] * 7)
+    chosen = dict(chosen_verb=[0] * 3, chosen_type=[0] * 11, chosen_position=[0] * 3, chosen_map_token=[0] * 7,
+                  chosen_harbor=0)
     for atom in prefix:
         head, _, arg = atom.partition(":")
-        if head in ("build", "engineer", "place"):
+        if head == "harbor":
+            chosen["chosen_harbor"] = 1
+        elif head in ("build", "engineer", "place"):
             chosen["chosen_verb"][("build", "engineer", "place").index(head)] = 1
             chosen["chosen_type"][BUILDING_TYPES.index(arg)] = 1
         elif head == "position":
@@ -307,6 +325,17 @@ def check_state(ck: Checker, toks, me, core, own, state_dict, tracker, legal):
                 assert placeable[i] == 0.0, f"player {p}: {name} placeable"
         assert placeable[BUILDING_TYPES.index("unique")] == 0.0
         ck.mark("player", "placeable", placeable.any())
+        zm = zoo_map(core["map"])
+        n_pz, n_uni = len(pl["partner_zoos"]), len(pl["universities"])
+        ck.eq(tok, "next_partner_zoo", effect_vector(zm["partner_zoo_slots"][n_pz] if n_pz < 4 else None))
+        ck.eq(tok, "next_university", effect_vector(zm["university_slots"][n_uni] if n_uni < 3 else None))
+        ck.eq(tok, "last_worker", effect_vector(zm["last_worker"] if pl["workers"] < 4 else None))
+        rs = map_rule_state(pl, core["map"])
+        ck.eq(tok, "map_income", rs["map_income"] / 5)
+        ck.eq(tok, "can_trade", rs["can_trade"])
+        ck.eq(tok, "ignore_conditions", rs["ignore_conditions"])
+        ck.eq(tok, "sponsor_discount", rs["sponsor_discount"])
+        ck.eq(tok, "group_left", rs["group_left"] / 3)
 
     # ---- action cards ----
     for i, tok in enumerate(by_type["action_card"]):
@@ -437,11 +466,14 @@ def check_state(ck: Checker, toks, me, core, own, state_dict, tracker, legal):
     named = {t.card() for t in cardish} - {None}
     assert not (named & hidden) - tracker.maybe[opp], "a token names a card hidden from the perspective"
 
-    # ---- my map ----
-    m = map0()
+    # ---- the map: what it prints, my buildings, the opponent's ----
+    m = zoo_map(core["map"])
     covered = {tuple(c): b for b in mine["buildings"] for c in b["cells"]}
-    near = neighbors(covered)
+    opp_covered = {tuple(c): b for b in theirs["buildings"] for c in b["cells"]}
+    near, opp_near = neighbors(covered), neighbors(opp_covered)
     kiosk_cells = {qr for qr, b in covered.items() if b["kind"] == "kiosk"}
+    special, rule = m["rule_cells"], m["rule"]
+    near_special = {n for r in special for n in m["cells"][r]["nbr"]}
     for i, tok in enumerate(by_type["cell"]):
         qr = m["order"][i]
         cell = m["cells"][qr]
@@ -449,7 +481,21 @@ def check_state(ck: Checker, toks, me, core, own, state_dict, tracker, legal):
         ck.eq(tok, "terrain", onehot(3, ["plain", "water", "rock"].index(cell["terrain"])))
         ck.eq(tok, "build2_only", cell["build2"])
         ck.eq(tok, "border", cell["border"])
-        ck.eq(tok, "bonus", onehot(7, e["placement_bonus"].index(cell["bonus"])))
+        assert cell["bonus"] in e["placement_bonus"]
+        ck.eq(tok, "bonus", effect_vector(PLACEMENT_BONUS_EFFECT.get(cell["bonus"])))
+        ck.eq(tok, "landmark", qr in special)
+        ck.eq(tok, "fill_appeal", rule == "observationtower" and qr in near_special)  # +2 appeal, / 2
+        ck.eq(tok, "extra_capacity", rule == "outdoorarea" and qr in near_special)  # +2 spaces, / 2
+        ck.eq(tok, "break_money", sum(r in special for r in cell["nbr"]) if rule == "parkrestaurant" else 0)
+        ck.eq(tok, "unlocks_trade", rule == "harbor" and qr in special)
+        ck.eq(tok, "unlocks_condition", rule == "researchinstitute" and qr in special)
+        ck.eq(tok, "cover_draw_sponsor", rule == "hollywood" and qr in special)
+        ck.eq(tok, "group", rule in ("icecream", "hollywood") and qr in special)
+        ck.eq(tok, "group_kiosk_income", rule == "icecream" and qr in special)
+        ck.eq(tok, "group_sponsor_discount", rule == "hollywood" and qr in special)
+        ob = opp_covered.get(qr)
+        ck.eq(tok, "opp_kind", onehot(7, e["building_kinds"].index(ob["kind"])) if ob else [0] * 7)
+        ck.eq(tok, "opp_adjacent", qr in opp_near)
         ck.eq(tok, "covered", qr in covered)
         ck.eq(tok, "adjacent", qr in near)
         free_terrain = cell["terrain"] == "plain" or "219" in mine["zoo_cards"]  # Diversity Researcher
@@ -486,13 +532,26 @@ def check_state(ck: Checker, toks, me, core, own, state_dict, tracker, legal):
         ck.eq(tok, "occupied", standard and b["occupied"])
         ck.eq(tok, "used", 0 if standard else b["used"] / 5)
         ck.eq(tok, "free", (0 if b["occupied"] else capacity) / 5 if standard else (b["size"] - b["used"]) / 5)
-        ck.eq(tok, "rock", adjacent_terrain(cells, "rock") / 6)
-        ck.eq(tok, "water", adjacent_terrain(cells, "water") / 6)
+        ck.eq(tok, "rock", adjacent_terrain(cells, "rock", core["map"]) / 6)
+        ck.eq(tok, "water", adjacent_terrain(cells, "water", core["map"]) / 6)
         near_b = neighbors(cells)
         ck.eq(tok, "kiosks_adjacent", sum(o["kind"] == "kiosk" and bool(near_b & set(building_cells(o)))
                                           for o in pl["buildings"]) / 3)
         ck.eq(tok, "animals", sum(h[0] == b["id"] for h in pl["housing"].values()) / 4)
         ck.eq(tok, "target", kind == "move_animals" and mover == p and data["building"] == b["id"])
+
+    # ---- the map's left-edge tokens ----
+    rewards = by_type["reward"]
+    assert len(rewards) == 7
+    for i, tok in enumerate(rewards):
+        effect, repeats = m["tokens"][i]
+        assert tok.entity == 0 and tok.anchor == 0 and tok.pos is None
+        ck.eq(tok, "index", onehot(7, i))
+        ck.eq(tok, "effect", effect_vector(effect))
+        ck.eq(tok, "repeats", repeats)
+        ck.eq(tok, "taken_me", not mine["tokens"][i])
+        ck.eq(tok, "taken_opp", not theirs["tokens"][i])
+        ck.eq(tok, "chosen", f"map_token:{i}" in prefix)
 
     # ---- header: anchors are unique, and every legal atom has its logit ----
     anchors = [t.anchor for t in toks if t.anchor]
@@ -506,7 +565,7 @@ def check_state(ck: Checker, toks, me, core, own, state_dict, tracker, legal):
                 assert source[0] in anchors, f"legal atom {name} has no anchor token"
             sources.add(source if source is not None else name)
         assert len(sources) == len(legal), "two legal atoms share a logit"
-        check_playable(ck, toks, legal, kind, data, prefix, mine, folders, side2)
+        check_playable(ck, toks, legal, kind, data, prefix, mine, folders, side2, core["map"])
 
 
 def check_card(ck, t, loc, display_i, take, discard, *, me, core, prefix, top):
@@ -551,7 +610,7 @@ def check_card(ck, t, loc, display_i, take, discard, *, me, core, prefix, top):
         ck.eq(t, "count_me", project_count(mine, c["proj_icon"]) / 8)
         ck.eq(t, "count_opp", project_count(theirs, c["proj_icon"]) / 8)
         ck.eq(t, "affordable", mine["money"] >= folder)
-        ck.eq(t, "strength_short", strength_short(holder, c))
+        ck.eq(t, "strength_short", strength_short(holder, c, core["map"]))
         return
     animal, sponsor = c["type"] == "animal", c["type"] == "sponsor"
     ck.eq(t, "type", [animal, sponsor, c["type"] == "endgame"])
@@ -599,7 +658,7 @@ def check_card(ck, t, loc, display_i, take, discard, *, me, core, prefix, top):
         money = folder + (animal_cost(holder, c) if animal else 0)
         ck.eq(t, "money_now", money / 36)
         ck.eq(t, "affordable", holder["money"] >= money)
-        ck.eq(t, "strength_short", strength_short(holder, c))
+        ck.eq(t, "strength_short", strength_short(holder, c, core["map"]))
     else:
         for name in ("money_now", "affordable", "req_ok", "has_place", "strength_short"):
             ck.eq(t, name, 0)
@@ -615,7 +674,7 @@ def check_card(ck, t, loc, display_i, take, discard, *, me, core, prefix, top):
         points = final_card_points(core, me, c["id"]) if loc in ("my_final", "private_list") else 0
         ck.eq(t, "yield", [points / 4, 0])
     elif sponsor and (held or loc == "private_list"):
-        conservation, appeal = sponsor_endgame(holder, c)
+        conservation, appeal = sponsor_endgame(holder, c, core["map"])
         ck.eq(t, "yield", [conservation / 4, appeal / 10])
     else:
         ck.eq(t, "yield", [0, 0])
@@ -628,7 +687,7 @@ def check_card(ck, t, loc, display_i, take, discard, *, me, core, prefix, top):
     def part(v, top):
         return min(max(v, 0), top) / top
 
-    imm = sponsor_immediate(holder, c) if not held else dict(money=0, appeal=0, conservation=0, other=0)
+    imm = sponsor_immediate(holder, c, core["map"]) if not held else dict(money=0, appeal=0, conservation=0, other=0)
     ck.eq(t, "immediate", [part(imm["money"], 20), part(imm["appeal"], 10), part(imm["conservation"], 5),
                            part(imm["other"], 2)])
     inc = sponsor_income(holder, c, held)
@@ -640,7 +699,7 @@ def check_card(ck, t, loc, display_i, take, discard, *, me, core, prefix, top):
     ck.eq(t, "trigger_gain", [money / 3, appeal / 2, triggered and not (money or appeal)])
 
 
-def check_playable(ck, toks, legal, kind, data, prefix, mine, folders, side2):
+def check_playable(ck, toks, legal, kind, data, prefix, mine, folders, side2, key):
     """The "can I play it now" flags against the rules: in a decision where cards are played, a card
     is a legal first atom exactly when its conditions, its place and its price are all fine."""
     if prefix:
@@ -670,7 +729,7 @@ def check_playable(ck, toks, legal, kind, data, prefix, mine, folders, side2):
                 ck.mark("card", name, t[name])
     elif kind in ("act_sponsors", "paid_sponsor"):
         for t, atom, reachable in each("sponsor"):
-            level = table[t.card()]["level"]
+            level = sponsor_level(mine, table[t.card()], key)
             if kind == "paid_sponsor":  # from the hand only, for its level in money
                 if not atom.startswith("hand"):
                     continue
@@ -744,14 +803,16 @@ class Episode:
             self.actions.append((me, action))
             gs.apply_action(action)
             self.own = {p: own_slots(gs, p) for p in (0, 1)}
-            self.tracker.update(self.own, core, me, name)
+            after = json.loads(gs.get_state_dict()["core_json"])
+            revealed = core["stack"][-1]["kind"] == "waza_kind" or hollywood_reveals(core, after, me)
+            self.tracker.update(self.own, core, me, name, revealed, harbor=state["prefix"].split()[-1:] == ["harbor"])
             # The replay in encode_state_for_perspective uses another step rng: it stays in step
-            # until a random outcome (Pilfering a card, Scavenging's shuffle, a deck reshuffle).
+            # until a random outcome (Pilfering a card, Scavenging's shuffle, a deck reshuffle, a
+            # reveal from the deck).
             if not gs.is_terminal:
-                after = json.loads(gs.get_state_dict()["core_json"])
                 played = set(after["players"][me]["zoo_cards"]) - zoo_before
                 if name == "give_card" or not after["deck"] or len(after["deck"]) > len(core["deck"]) or any(
-                        "SCAVENGING" in table[idx[c]]["abilities"] for c in played) or core["stack"][-1]["kind"] == "waza_kind":
+                        "SCAVENGING" in table[idx[c]]["abilities"] for c in played) or revealed:
                     self.rng_free = False
 
 

@@ -1,6 +1,7 @@
 add_library(game_arknova STATIC
     arknova_cards.cpp
     arknova_map.cpp
+    arknova_map_rules.cpp
     arknova_engine.cpp
     arknova_effects.cpp
     arknova_action_cards_build.cpp

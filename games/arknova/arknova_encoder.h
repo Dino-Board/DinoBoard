@@ -22,10 +22,15 @@
 //                 sponsor also what its effects would give (from the rules' effect code).
 //   project       the same for conservation project cards, plus the projects in play: who holds
 //                 which level, and which levels each player could support now
-//   cell    x58   my map, with its axial hex position (relative position bias in the network)
+//   cell    x58   the map both zoos are on, with its axial hex position (relative position bias in
+//                 the network): what the map prints there (terrain, placement bonus as an effect,
+//                 what the map's special rule makes of the cell), my buildings, the opponent's
 //   enclosure     one per standard or special enclosure of each zoo (the buildings that house
-//                 animals); mine sit at their lowest cell's position. The opponent's map is given
-//                 by its enclosures and the building counts on its player token only.
+//                 animals); mine sit at their lowest cell's position
+//   reward  x7    the map's left-edge tokens: what each gives, whether it pays again every break,
+//                 who has taken it
+// Nothing names the map: everything that differs between maps is in these features, so that
+// what is learnt on one map carries over to the others.
 // The full list of features is the ARKNOVA_*_FEATURES tables below; layout_json() exports it and
 // docs/games/arknova_api.md documents it (tests/arknova checks the two against each other).
 //
@@ -63,7 +68,11 @@ namespace board_ai::arknova {
   X(partner_zoo_available, 5) X(university_available, 3) X(bonus_tiles, 18) X(base_pile, 1)        \
   X(stack_depth, 1) X(pending, 42) X(pending_opponent, 1) X(after_clever, 1) X(after_boost, 1)     \
   X(after_extra_action, 1) ARKNOVA_POOL_FEATURES(X, discard) ARKNOVA_POOL_FEATURES(X, unseen)      \
-  X(unseen_final, 11)
+  X(unseen_final, 11) X(trade_used, 1)
+
+// What a map reward gives (a placement bonus, a left-edge token, a side-panel slot): per
+// EffectKind its amount, money / 10, an enclosure's size / 5, anything else / 3.
+#define ARKNOVA_EFFECT_WIDTH 16
 
 #define ARKNOVA_DECISION_FEATURES(X)                                                               \
   X(frame, 42) X(to_move, 1) X(prefix_len, 1) X(turn_action, 5) X(turn_strength, 1)                \
@@ -73,7 +82,7 @@ namespace board_ai::arknova {
   X(optional, 1) X(extra_actions, 5) X(extra_from_opponent, 1) X(boost_action, 5)                  \
   X(tile_space, 2) X(can_replenish, 1) X(replenish_between, 1) X(only_one, 1) X(built, 11)         \
   X(offered, 11) X(list_len, 1) X(chosen_verb, 3) X(chosen_type, 11) X(chosen_position, 3)         \
-  X(chosen_map_token, 7)
+  X(chosen_map_token, 7) X(chosen_harbor, 1)
 
 #define ARKNOVA_PLAYER_FEATURES(X)                                                                 \
   X(me, 1) X(opponent, 1) X(to_move, 1) X(appeal, 1) X(money, 1) X(conservation, 1)                \
@@ -81,7 +90,9 @@ namespace board_ai::arknova {
   X(hand_size, 1) X(hand_limit, 1) X(zoo_cards, 1) X(tucked, 1) X(final_cards, 1)                  \
   X(partner_zoos, 5) X(universities, 3) X(map_tokens, 7) X(icons, 15) X(victory_points, 1)         \
   X(poisoned, 1) X(covered_cells, 1) X(buildings, 7) X(kiosk_income, 1) X(appeal_income, 1)       \
-  X(display_range, 1) X(placeable, 11)
+  X(display_range, 1) X(placeable, 11) X(next_partner_zoo, ARKNOVA_EFFECT_WIDTH)                    \
+  X(next_university, ARKNOVA_EFFECT_WIDTH) X(last_worker, ARKNOVA_EFFECT_WIDTH) X(map_income, 1)    \
+  X(can_trade, 1) X(ignore_conditions, 1) X(sponsor_discount, 1) X(group_left, 1)
 
 #define ARKNOVA_ACTION_CARD_FEATURES(X)                                                            \
   X(mine, 1) X(opponent, 1) X(action, 5) X(slot, 5) X(strength, 1) X(effective_strength, 1)        \
@@ -109,14 +120,24 @@ namespace board_ai::arknova {
   X(occupied_me, 3) X(occupied_opp, 3) X(occupied_blocked, 3) X(can_me, 3) X(can_opp, 3)           \
   X(count_me, 1) X(count_opp, 1) X(affordable, 1) X(strength_short, 1)
 
+// A cell's map rule features say what covering it does under the map's special rule, in terms of
+// the effect rather than of the map: the rule cells themselves are landmarks.
 #define ARKNOVA_CELL_FEATURES(X)                                                                   \
-  X(terrain, 3) X(build2_only, 1) X(border, 1) X(bonus, 7) X(covered, 1) X(adjacent, 1)            \
-  X(buildable, 1) X(kind, 7) X(anchor, 1) X(anchor_dq, 1) X(anchor_dr, 1) X(rock_neighbors, 1)     \
-  X(water_neighbors, 1) X(kiosk_income, 1) X(kiosks_adjacent, 1)
+  X(terrain, 3) X(build2_only, 1) X(border, 1) X(bonus, ARKNOVA_EFFECT_WIDTH) X(covered, 1)        \
+  X(adjacent, 1) X(buildable, 1) X(kind, 7) X(anchor, 1) X(anchor_dq, 1) X(anchor_dr, 1)           \
+  X(rock_neighbors, 1) X(water_neighbors, 1) X(kiosk_income, 1) X(kiosks_adjacent, 1)              \
+  X(landmark, 1) X(fill_appeal, 1) X(extra_capacity, 1) X(break_money, 1) X(unlocks_trade, 1)      \
+  X(unlocks_condition, 1) X(cover_draw_sponsor, 1) X(group, 1) X(group_kiosk_income, 1)            \
+  X(group_sponsor_discount, 1) X(opp_kind, 7) X(opp_adjacent, 1)
 
 #define ARKNOVA_ENCLOSURE_FEATURES(X)                                                              \
   X(mine, 1) X(opponent, 1) X(kind, 7) X(size, 1) X(capacity, 1) X(occupied, 1) X(used, 1)         \
   X(free, 1) X(rock, 1) X(water, 1) X(kiosks_adjacent, 1) X(animals, 1) X(target, 1)
+
+// One per left-edge token of the map (taken when supporting a project; map_token:<index> atoms).
+#define ARKNOVA_REWARD_FEATURES(X)                                                                 \
+  X(index, 7) X(effect, ARKNOVA_EFFECT_WIDTH) X(repeats, 1) X(taken_me, 1) X(taken_opp, 1)         \
+  X(chosen, 1)
 
 // Offsets (relative to the first feature) as enumerators: gf::break_pos, df::frame, ...
 #define ARKNOVA_FEATURE_ENUM(name, width) name, name##_last = name + (width)-1,
@@ -128,13 +149,14 @@ namespace cf { enum : int { ARKNOVA_CARD_FEATURES(ARKNOVA_FEATURE_ENUM) kCount }
 namespace jf { enum : int { ARKNOVA_PROJECT_FEATURES(ARKNOVA_FEATURE_ENUM) kCount }; }
 namespace xf { enum : int { ARKNOVA_CELL_FEATURES(ARKNOVA_FEATURE_ENUM) kCount }; }
 namespace ef { enum : int { ARKNOVA_ENCLOSURE_FEATURES(ARKNOVA_FEATURE_ENUM) kCount }; }
+namespace rf { enum : int { ARKNOVA_REWARD_FEATURES(ARKNOVA_FEATURE_ENUM) kCount }; }
 #undef ARKNOVA_FEATURE_ENUM
 
 class ArknovaTokenEncoder final : public IFeatureEncoder {
  public:
   enum TokenType {
     kGlobalToken, kDecisionToken, kPlayerToken, kActionCardToken, kCardToken, kProjectToken, kCellToken,
-    kEnclosureToken, kTokenTypeCount
+    kEnclosureToken, kRewardToken, kTokenTypeCount
   };
 
   // Token header: valid, entity id, anchor id, token type, has position, q, r.

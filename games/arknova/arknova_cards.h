@@ -75,8 +75,11 @@ enum class Keyword : std::uint8_t {
 enum class EffectKind : std::uint8_t {
   kEffMoney, kEffAppeal, kEffXtoken, kEffConservation, kEffReputation, kEffWorker, kEffUpgrade,
   kEffCard, kEffClever, kEffEnclosure, kEffKiosk, kEffMultiplier, kEffPartnerZoo, kEffUniversity,
-  kEffSponsorForMoney,
+  kEffSponsorForMoney, kEffSpecialEnclosure, kNumEffectKinds
 };
+constexpr const char* kEffectKindNames[] = {
+    "money", "appeal", "xtoken", "conservation", "reputation", "worker", "upgrade", "card", "clever", "enclosure",
+    "kiosk", "multiplier", "partner_zoo", "university", "sponsor_for_money", "special_enclosure"};
 struct Effect {
   EffectKind kind = EffectKind::kEffMoney;
   std::int8_t amount = 0;
@@ -220,30 +223,16 @@ constexpr const char* kBonusTileNames[] = {"money10", "xtoken3", "reputation2", 
                                            "enclosure3", "cards3", "multiplier", "sponsor"};
 Effect bonus_tile_effect(BonusTile t);
 
+// Placement bonuses of all maps (tables.PLACEMENT_BONUS, then maps.EXTRA_PLACEMENT_BONUS).
 enum PlacementBonus : std::uint8_t {
-  kPBNone, kPBMoney5, kPBMoney10, kPBXtoken, kPBRep2, kPBCard, kPBClever, kNumPlacementBonuses
+  kPBNone, kPBMoney5, kPBMoney10, kPBXtoken, kPBRep2, kPBCard, kPBClever, kPBMoney2, kPBRep1, kPBKiosk,
+  kPBWorker1, kPBPartnerZoo, kPBUniversity, kPBMultiplier, kPBSponsorForMoney, kNumPlacementBonuses
 };
-constexpr const char* kPlacementBonusNames[] = {"", "money5", "money10", "xtoken", "rep2", "card", "clever"};
+constexpr const char* kPlacementBonusNames[] = {"", "money5", "money10", "xtoken", "rep2", "card", "clever",
+                                                "money2", "rep1", "kiosk", "worker1", "partner_zoo",
+                                                "university", "multiplier", "sponsor_for_money"};
 Effect placement_bonus_effect(PlacementBonus b);
 
-// Map 0 side panel. Slot bonuses are indexed by the slot being filled (0-based); an entry with
-// amount 0 is "nothing".
-constexpr Effect kMap0PartnerZooSlots[kMaxPartnerZoos] = {
-    {EffectKind::kEffMoney, 0}, {EffectKind::kEffUpgrade, 1}, {EffectKind::kEffWorker, 1},
-    {EffectKind::kEffConservation, 2}};
-constexpr Effect kMap0UniversitySlots[kNumUniversities] = {
-    {EffectKind::kEffMoney, 0}, {EffectKind::kEffUpgrade, 1}, {EffectKind::kEffConservation, 2}};
-constexpr Effect kMap0LastWorker = {EffectKind::kEffConservation, 2};
 constexpr int kNumMapTokens = 7;
-struct MapToken {
-  Effect effect;
-  bool repeats;
-};
-constexpr MapToken kMap0Tokens[kNumMapTokens] = {
-    {{EffectKind::kEffCard, 1}, true},    {{EffectKind::kEffEnclosure, 2}, true},
-    {{EffectKind::kEffMoney, 5}, true},   {{EffectKind::kEffConservation, 1}, true},
-    {{EffectKind::kEffWorker, 1}, false}, {{EffectKind::kEffMoney, 12}, false},
-    {{EffectKind::kEffXtoken, 3}, false},
-};
 
 }  // namespace board_ai::arknova

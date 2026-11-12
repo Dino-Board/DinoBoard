@@ -1,6 +1,7 @@
 #pragma once
 
-// Ark Nova rules core: a faithful C++ port of ark-nova-ai's Python engine (2 players, map 0).
+// Ark Nova rules core: a faithful C++ port of ark-nova-ai's Python engine (2 players, both zoos on
+// the same map: Map 0, 1-8 or A).
 //
 // The game is a stack of decision frames. The top frame is either a choice (its player picks one
 // Option) or an auto frame (resolved by the engine). `step` applies an option and then resolves
@@ -82,7 +83,7 @@ struct Frame {
   X(reputation) X(donate) X(support) X(play_project) X(play_project_display) X(release)            \
   X(play_release) X(play_release_display) X(break_) X(pick) X(take) X(target) X(move) X(boost)     \
   X(yes) X(no) X(replenish) X(kind) X(card) X(discard_display) X(discard_hand) X(tuck) X(sponsor)  \
-  X(project) X(stable) X(return_) X(sell)
+  X(project) X(stable) X(return_) X(sell) X(harbor)
 
 enum class Head : std::uint8_t {
 #define ARKNOVA_ENUM(k) k,
@@ -179,8 +180,10 @@ struct TurnCtx {
 };
 
 struct State {
+  std::int8_t map = 0;  // map_def index; every zoo is on this map (Zoo::map)
   Player players[kPlayers];
   std::int8_t current = 0;
+  bool harbor_used = false;  // turn_flags["harbor"]: the Map 4 harbour was used this turn
   std::vector<CardIdx> deck;  // hidden; drawn from the back
   std::vector<CardIdx> discard;
   CardIdx display[kDisplaySize] = {kNoCard, kNoCard, kNoCard, kNoCard, kNoCard, kNoCard};  // kNoCard = taken
@@ -243,8 +246,9 @@ class Chance {
 // occupied standard enclosure meeting its needs (pp. 12, 15).
 extern bool g_upstream_rules;
 
-// Python new_game with this engine's own shuffles (the differential test imports Python's setup).
-void new_game(State& s, std::mt19937_64& rng);
+// Python new_game on map `map` (map_def index) with this engine's own shuffles (the differential
+// test imports Python's setup).
+void new_game(State& s, std::mt19937_64& rng, int map = 0);
 std::vector<Option> legal_options(State& s);
 void step(State& s, const Option& option, Chance& chance);
 std::vector<int> winners(const State& s);

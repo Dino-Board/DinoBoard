@@ -82,9 +82,12 @@ std::vector<ActionId> ArknovaRules::legal_actions(const IGameState& state) const
 }
 
 ActionId ArknovaRules::public_action(const IGameState& state_before, ActionId action) const {
-  const State& s = checked_cast<ArknovaState>(state_before).core;
+  const auto& st = checked_cast<ArknovaState>(state_before);
+  const State& s = st.core;
   const bool tuck_atom = action >= atom::kHandDiscard && action < atom::kHandDiscard + kCardSlots;
-  if (tuck_atom && s.stack_n && s.top().kind == FrameKind::ab_pouch) return atom::kHiddenHandCard;
+  // After `harbor` the card goes face up to the discard pile, whatever decision is pending.
+  const bool harbor = !st.prefix.empty() && st.prefix.back() == atom::kHarbor;
+  if (tuck_atom && !harbor && s.stack_n && s.top().kind == FrameKind::ab_pouch) return atom::kHiddenHandCard;
   return action;
 }
 

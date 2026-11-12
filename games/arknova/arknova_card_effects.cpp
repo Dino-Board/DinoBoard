@@ -145,14 +145,18 @@ int animal_cost_reduction(const Player& pl, CardIdx c) {
   return reduction;
 }
 
-bool requirements_ok(const Player& pl, CardIdx c) {
+bool requirements_ok(const State& s, int p, CardIdx c) {
+  const Player& pl = s.players[p];
   int unmet = unmet_requirements(pl, c);
   if (unmet == 0) return true;
   int allowance = has(pl, 263) && is_large(c) ? 1 : 0;
+  allowance += map_condition_allowance(pl);
   return unmet <= allowance;
 }
 
-int sponsor_level(const State&, int, CardIdx c) { return std::max<int>(0, card(c).level); }
+int sponsor_level(const State& s, int p, CardIdx c) {
+  return std::max<int>(0, card(c).level + map_sponsor_level_delta(s.players[p]));
+}
 
 void on_animal_played(State& s, int p, CardIdx c) {
   int kind = waza_kind(s.players[p]);
@@ -206,7 +210,7 @@ bool next_to_building(const Zoo& zoo, int cell) {
 std::pair<int, int> connected_terrain(const Zoo& zoo, Terrain t) {
   int total = 0, connected = 0;
   for (int c = 0; c < kMapCells; ++c) {
-    if (map_cell(c).terrain != t) continue;
+    if (zoo.cell(c).terrain != t) continue;
     ++total;
     connected += next_to_building(zoo, c);
   }
@@ -216,7 +220,7 @@ std::pair<int, int> connected_terrain(const Zoo& zoo, Terrain t) {
 std::vector<int> empty_spaces(const Zoo& zoo) {
   std::vector<int> out;
   for (int c = 0; c < kMapCells; ++c) {
-    if (map_cell(c).terrain == Terrain::kPlain && zoo.cell_owner[c] == kNoBuilding) out.push_back(c);
+    if (zoo.cell(c).terrain == Terrain::kPlain && zoo.cell_owner[c] == kNoBuilding) out.push_back(c);
   }
   return out;
 }
@@ -237,7 +241,7 @@ bool all_border_connected(const Zoo& zoo) {
 std::pair<int, int> bonus_spaces(const Zoo& zoo) {
   int total = 0, connected = 0;
   for (int c : empty_spaces(zoo)) {
-    if (map_cell(c).bonus == kPBNone) continue;
+    if (zoo.cell(c).bonus == kPBNone) continue;
     ++total;
     connected += next_to_building(zoo, c);
   }
@@ -548,8 +552,9 @@ void income_effect(State& s, CardIdx c, int p) {
 
 // ---- build hooks -------------------------------------------------------------------------------
 
-void after_build_hooks(State& s, int p, int building) {
+void after_build_hooks(State& s, int p, int building, Chance& ch) {
   Player& pl = s.players[p];
+  map_after_build(s, p, building, ch);
   const Building& b = pl.zoo.buildings[building];
   for (auto [id, terrain] : {std::pair<int, Terrain>{241, Terrain::kWater}, {242, Terrain::kRock}}) {
     if (!sr::has(pl, id)) continue;
@@ -557,7 +562,7 @@ void after_build_hooks(State& s, int p, int building) {
     for (int c = 0; c < kMapCells; ++c) {
       if (!(b.cells >> c & 1)) continue;
       bool near = false;
-      for (int nb : map_cell(c).nbr) near |= nb >= 0 && map_cell(nb).terrain == terrain;
+      for (int nb : map_cell(c).nbr) near |= nb >= 0 && pl.zoo.cell(nb).terrain == terrain;
       n += near;
     }
     gain(s, p, EffectKind::kEffMoney, n);
@@ -566,8 +571,8 @@ void after_build_hooks(State& s, int p, int building) {
   if (sr::has(pl, 221)) {
     CellMask cells = pl.zoo.buildings[building].cells;
     for (int c = 0; c < kMapCells; ++c) {
-      if ((cells >> c & 1) && map_cell(c).bonus != kPBNone && map_cell(c).border) {
-        gain(s, p, placement_bonus_effect(map_cell(c).bonus));
+      if ((cells >> c & 1) && pl.zoo.cell(c).bonus != kPBNone && map_cell(c).border) {
+        gain(s, p, placement_bonus_effect(pl.zoo.cell(c).bonus));
       }
     }
   }

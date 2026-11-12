@@ -26,6 +26,8 @@
 //   play (sponsor)               hand              display / take_small / take (Snapping)  display
 //   sell / tuck / discard / discard_hand           hand_discard
 //   discard_display              display_discard   snap                         display_snap
+//   harbor (Map 4: discard a hand card for money, in any decision of the mover's turn)
+//                                [harbor, hand_discard]
 // Each remaining head is one global atom. kHiddenHandCard is never legal: it is what the
 // opponent observes for a Pouch tuck (ArknovaRules::public_action).
 
@@ -41,7 +43,7 @@ namespace atom {
 
 enum Simple : int {
   kSkip, kDone, kNo, kYes, kMoney, kDeck, kDonate, kReputation, kRepeat, kWorker, kReplenish, kGiveCard,
-  kBreak, kNoExtra, kHiddenHandCard, kGiveMoney, kNumSimple
+  kBreak, kNoExtra, kHiddenHandCard, kGiveMoney, kHarbor, kNumSimple
 };
 
 constexpr int kMaxX = kMaxXtokens + 1;

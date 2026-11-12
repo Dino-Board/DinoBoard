@@ -87,6 +87,7 @@ class Mapper {
       case Head::play_project_display: case Head::play_release_display:
         return project_atoms(display(atom::kDisplayTake, o.a[0]), o);
       case Head::build: case Head::engineer: case Head::place: return placement(o);
+      case Head::harbor: return {atom::kHarbor, hand_card(atom::kHandDiscard, o.a[0])};
       default: action_error(std::string("unsupported option head ") + head_name(o.head));
     }
   }
@@ -283,7 +284,8 @@ void canonicalize_prefix(ArknovaState& st) {
 std::string atom_name(ActionId a) {
   static const char* kSimpleNames[] = {"skip", "done", "no", "yes", "money", "deck", "donate",
                                        "reputation", "repeat", "worker", "replenish", "give_card", "break",
-                                       "no_extra", "hidden_hand_card", "give_money"};
+                                       "no_extra", "hidden_hand_card", "give_money", "harbor"};
+  static_assert(std::size(kSimpleNames) == atom::kNumSimple);
   static const char* kTypeNames[] = {"enclosure1", "enclosure2", "enclosure3", "enclosure4", "enclosure5", "kiosk",
                                      "pavilion", "petting_zoo", "reptile_house", "aviary", "unique"};
   static const char* kVerbNames[] = {"build", "engineer", "place"};

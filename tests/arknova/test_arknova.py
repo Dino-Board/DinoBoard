@@ -173,7 +173,8 @@ def test_variable_layout_binds_every_pointer_atom_by_anchor():
 
 
 def test_pouch_tuck_is_observed_as_a_hidden_card():
-    """A tucked card stays hidden: observers get the never-legal hidden_hand_card atom instead."""
+    """A tucked card stays hidden: observers get the never-legal hidden_hand_card atom instead. A
+    harbour discard (Map 4) during a Pouch decision is not a tuck: its card is shown."""
     tucks = 0
     for seed in range(6):
         gs = engine.GameSession(GAME, seed=seed)
@@ -183,9 +184,10 @@ def test_pouch_tuck_is_observed_as_a_hidden_card():
             legal = gs.get_legal_actions()
             action = rng.choice(legal)
             hidden = gs.get_action_info(action)["name"]
+            harbor = gs.get_state_dict()["prefix"].split() == ["harbor"]
             trace = gs.apply_action_with_trace(action, 1 - actor)
             if trace["action"] != action:
-                assert hidden.startswith("hand_discard:")
+                assert hidden.startswith("hand_discard:") and not harbor
                 assert gs.get_action_info(trace["action"])["name"] == "hidden_hand_card"
                 assert trace["action"] not in legal
                 tucks += 1
