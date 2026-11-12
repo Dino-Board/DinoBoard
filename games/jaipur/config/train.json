@@ -34,7 +34,7 @@
   },
   "mcts": {
     "selfplay": {
-      "dirichlet_alpha": 0.5,
+      "dirichlet_alpha": 1.0,
       "dirichlet_epsilon": 0.25,
       "simulations": 800,
       "temperature": 1.0,
@@ -42,7 +42,7 @@
         "enabled": true,
         "initial": 1.0,
         "final": 0.1,
-        "decay_plies": 50
+        "decay_plies": 30
       }
     },
     "eval": {
