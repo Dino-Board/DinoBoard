@@ -5,6 +5,8 @@
 #include <stdexcept>
 #include <string>
 
+#include "jaipur_rules.h"
+
 namespace board_ai::jaipur {
 
 namespace {
@@ -16,142 +18,129 @@ constexpr int kMemorySlots = kPlayers * kGoodTypes;
       " — the observer's public state / tracker memory is inconsistent "
       "(wrong perspective, or events were not streamed / restored)");
 }
+
+int int_field(const AnyMap& m, const char* key, const char* event) {
+  auto it = m.find(key);
+  if (it == m.end() || it->second.type() != typeid(int)) {
+    throw std::invalid_argument(std::string("JaipurBeliefTracker: event '") + event +
+                                "' needs an int '" + key + "'");
+  }
+  return std::any_cast<int>(it->second);
+}
 }  // namespace
 
 void JaipurBeliefTracker::init(IGameState& state, int perspective,
                                 const AnyMap& payload) {
-  auto& s = static_cast<JaipurState&>(state);
-  auto& d = s.data;
+  auto& d = static_cast<JaipurState&>(state).data;
 
   // Own hand (private bootstrap the public snapshot cannot carry). Payload is
   // a per-type count vector.
   auto it_hand = payload.find("own_hand");
-  if (it_hand != payload.end() && it_hand->second.type() == typeid(std::vector<int>)) {
-    const auto& own = std::any_cast<const std::vector<int>&>(it_hand->second);
-    d.hand_count[perspective].fill(0);
-    for (int g = 0; g < kGoodTypes && g < static_cast<int>(own.size()); ++g)
-      d.hand_count[perspective][g] = own[g];
+  if (it_hand != payload.end()) {
+    const auto own = any_int_list(it_hand->second, "JaipurBeliefTracker::init own_hand");
+    if (static_cast<int>(own.size()) != kGoodTypes) {
+      throw std::invalid_argument("JaipurBeliefTracker::init: 'own_hand' must hold 6 ints");
+    }
+    for (int g = 0; g < kGoodTypes; ++g) d.hand_count[perspective][g] = own[g];
   }
 
-  sold_ = {};
-  net_in_ = {};
-
+  known_ = {};
   // Mid-game bootstrap (belief_tracker.h contract): the payload carries the
   // complete goods-flow memory, so a session attached at ply N holds the
-  // same belief as one that streamed every action from ply 0. sold / net_in
-  // cannot be re-derived from the current public state.
-  auto it_sold = payload.find("sold");
-  auto it_net = payload.find("net_in");
-  if (it_sold != payload.end() || it_net != payload.end()) {
-    if (it_sold == payload.end() || it_net == payload.end()) {
+  // same belief as one that streamed every action from ply 0. It cannot be
+  // re-derived from the current public state.
+  auto it_known = payload.find("known");
+  if (it_known != payload.end()) {
+    const auto known = any_int_list(it_known->second, "JaipurBeliefTracker::init known");
+    if (static_cast<int>(known.size()) != kMemorySlots) {
       throw std::invalid_argument(
-          "JaipurBeliefTracker::init: payload must carry both 'sold' and 'net_in'");
-    }
-    const auto sold = any_int_list(it_sold->second, "JaipurBeliefTracker::init sold");
-    const auto net = any_int_list(it_net->second, "JaipurBeliefTracker::init net_in");
-    if (static_cast<int>(sold.size()) != kMemorySlots ||
-        static_cast<int>(net.size()) != kMemorySlots) {
-      throw std::invalid_argument(
-          "JaipurBeliefTracker::init: 'sold' / 'net_in' must hold " +
+          "JaipurBeliefTracker::init: 'known' must hold " +
           std::to_string(kMemorySlots) + " ints");
     }
     for (int p = 0; p < kPlayers; ++p)
       for (int g = 0; g < kGoodTypes; ++g) {
-        sold_[p][g] = sold[p * kGoodTypes + g] != 0;
-        net_in_[p][g] = net[p * kGoodTypes + g];
+        const int v = known[p * kGoodTypes + g];
+        if (v < 0 || v > kHandSize)
+          throw std::invalid_argument("JaipurBeliefTracker::init: 'known' entry out of range");
+        known_[p][g] = v;
       }
   }
 }
 
 AnyMap JaipurBeliefTracker::pack_init_payload(const IGameState& gt_state,
                                               int perspective) const {
-  const auto& s = static_cast<const JaipurState&>(gt_state);
-  const auto& d = s.data;
+  const auto& d = static_cast<const JaipurState&>(gt_state).data;
   AnyMap payload;
   std::vector<int> own(d.hand_count[perspective].begin(),
                        d.hand_count[perspective].end());
   payload["own_hand"] = std::any(own);
   // Complete tracker memory (public, perspective-agnostic): see init().
-  std::vector<int> sold_flat, net_flat;
-  for (int p = 0; p < kPlayers; ++p)
-    for (int g = 0; g < kGoodTypes; ++g) {
-      sold_flat.push_back(sold_[p][g] ? 1 : 0);
-      net_flat.push_back(net_in_[p][g]);
-    }
-  payload["sold"] = std::any(sold_flat);
-  payload["net_in"] = std::any(net_flat);
+  payload["known"] = serialize().at("known");
   return payload;
 }
 
 void JaipurBeliefTracker::observe_public_event(
-    int actor, ActionId /*action*/,
+    int /*actor*/, ActionId /*action*/,
     const std::vector<PublicEvent>& events) {
-  auto player_of = [&](const AnyMap& p) -> int {
-    auto it = p.find("player");
-    return (it != p.end() && it->second.type() == typeid(int))
-               ? std::any_cast<int>(it->second) : -1;
+  auto player_of = [](const AnyMap& m, const char* event) {
+    const int p = int_field(m, "player", event);
+    if (p < 0 || p >= kPlayers)
+      throw std::invalid_argument("JaipurBeliefTracker: event player out of range");
+    return p;
   };
+  auto spend = [](int& known, int k) { known = std::max(known, k) - k; };
   for (const auto& [kind, payload] : events) {
     if (kind == "goods_taken") {
-      // Public: player took one goods card of type g from the market.
-      int p = player_of(payload);
-      auto it = payload.find("good_type");
-      if (p >= 0 && p < kPlayers && it != payload.end() &&
-          it->second.type() == typeid(int)) {
-        int g = std::any_cast<int>(it->second);
-        if (g >= 0 && g < kGoodTypes) net_in_[p][g] += 1;
-      }
+      const int p = player_of(payload, "goods_taken");
+      known_[p][int_field(payload, "good_type", "goods_taken")] +=
+          int_field(payload, "count", "goods_taken");
     } else if (kind == "goods_sold") {
-      // Public: player sold all of type g → strong signal. Mark sold and
-      // zero net_in: from now net_in exactly tracks their held count.
-      int p = player_of(payload);
-      auto it = payload.find("good_type");
-      if (p >= 0 && p < kPlayers && it != payload.end() &&
-          it->second.type() == typeid(int)) {
-        int g = std::any_cast<int>(it->second);
-        if (g >= 0 && g < kGoodTypes) { sold_[p][g] = true; net_in_[p][g] = 0; }
-      }
-    } else if (kind == "exchange_resolved") {
-      // Public: player's exchange completed. Per type, net_in += (take_count
-      // - give_count), then clamp ≥ 0 (a negative means they gave more than
-      // they took of that type — only possible from starting-hand cards,
-      // which the lower-bound invariant already absorbs).
-      int p = player_of(payload);
-      if (p < 0 || p >= kPlayers) continue;
-      auto take_it = payload.find("take_types");
-      auto give_it = payload.find("give_types");
-      if (take_it == payload.end() || give_it == payload.end()) continue;
-      // any_int_list: over the wire an EMPTY list (an exchange paid with
-      // camels only has no give_types) arrives as vector<any>, not
-      // vector<int>; skipping it would silently drop the whole exchange.
-      const auto takes = any_int_list(
-          take_it->second, "JaipurBeliefTracker exchange_resolved take_types");
-      const auto gives = any_int_list(
-          give_it->second, "JaipurBeliefTracker exchange_resolved give_types");
-      int delta[kGoodTypes] = {0};
-      for (int g : takes) if (g >= 0 && g < kGoodTypes) ++delta[g];
-      for (int g : gives) if (g >= 0 && g < kGoodTypes) --delta[g];
+      const int p = player_of(payload, "goods_sold");
+      spend(known_[p][int_field(payload, "good_type", "goods_sold")],
+            int_field(payload, "count", "goods_sold"));
+    } else if (kind == "trade_resolved") {
+      const int p = player_of(payload, "trade_resolved");
+      auto take_it = payload.find("take");
+      auto give_it = payload.find("give");
+      if (take_it == payload.end() || give_it == payload.end())
+        throw std::invalid_argument("JaipurBeliefTracker: trade_resolved needs 'take' and 'give'");
+      const auto take = any_int_list(take_it->second, "JaipurBeliefTracker trade_resolved take");
+      const auto give = any_int_list(give_it->second, "JaipurBeliefTracker trade_resolved give");
+      if (static_cast<int>(take.size()) != kGoodTypes ||
+          static_cast<int>(give.size()) != kGoodTypes + 1)
+        throw std::invalid_argument("JaipurBeliefTracker: trade_resolved count vectors have the wrong size");
       for (int g = 0; g < kGoodTypes; ++g) {
-        net_in_[p][g] += delta[g];
-        if (net_in_[p][g] < 0) net_in_[p][g] = 0;
+        spend(known_[p][g], give[g]);
+        known_[p][g] += take[g];
       }
     }
   }
-  (void)actor;
 }
 
 // Fills EVERY slot hidden from `observer` — opponent hand, draw-pile
 // composition, opponent bonus values, bonus-pile composition — from what the
-// observer knows, and touches no public slot. All inputs are exact public
-// counts (plus the observer's own private slots), so the sampled world
-// conserves every card and token by construction; an input that does not add
-// up is reported, not clamped.
+// observer knows, and touches no public slot. While the opponent is in the
+// middle of a trade, its public prefix must stay completable in the sampled
+// world (factored-actions skill): goods it already gave are placed in its
+// hand, and worlds where the trade cannot be finished are redrawn.
 void JaipurBeliefTracker::randomize_unseen(IGameState& state, int observer,
                                             std::mt19937_64& rng) const {
   auto& s = static_cast<JaipurState&>(state);
-  auto& d = s.data;
   if (observer < 0 || observer >= kPlayers) return;
-  int opp = 1 - observer;
+  const bool opp_mid_trade =
+      s.data.current_player != observer && !jaipur_trade_idle(s.data) && !s.data.terminal;
+  constexpr int kMaxTries = 1000;
+  for (int t = 0; t < kMaxTries; ++t) {
+    sample_world(s, observer, rng);
+    if (!opp_mid_trade || !JaipurRules().legal_actions(s).empty()) return;
+  }
+  inconsistent("no sampled world lets the opponent finish its chosen trade atoms");
+}
+
+void JaipurBeliefTracker::sample_world(JaipurState& s, int observer,
+                                       std::mt19937_64& rng) const {
+  auto& d = s.data;
+  const int opp = 1 - observer;
 
   // --- Unseen goods: every goods card that is not face up in the market,
   // in the observer's hand, or on the (public) discard pile. They are split
@@ -167,7 +156,7 @@ void JaipurBeliefTracker::randomize_unseen(IGameState& state, int observer,
   // Camels are fully public (market + both herds), so the pile's camel count
   // and hence the opponent's hand size are known exactly.
   const int deck_size = kTotalDeckSize - d.deck_pos;
-  const int camels_in_deck = kCamelCardCount - d.market_count[kGoodTypes] -
+  const int camels_in_deck = kCamelCardCount - d.market_count[kCamel] -
                              d.camel_count[0] - d.camel_count[1];
   const int deck_goods = deck_size - camels_in_deck;
   const int opp_hand_goods = unseen_goods - deck_goods;
@@ -176,36 +165,27 @@ void JaipurBeliefTracker::randomize_unseen(IGameState& state, int observer,
     inconsistent("public card counts do not add up");
   }
 
-  // --- Opponent hand contents, via the net-inflow bookkeeping ---
-  // For each type g:
-  //   - if sold_[opp][g]: opponent holds EXACTLY net_in_[opp][g] of type g.
-  //   - else: opponent holds AT LEAST net_in_[opp][g]; the surplus is unknown
-  //     starting-hand, sampled from the unsold-types unseen pool.
+  // --- Opponent hand: the known lower bounds (raised by goods it already
+  // gave in a pending trade), the rest drawn uniformly from the unseen pool.
+  const bool opp_moves = d.current_player == opp;
   d.hand_count[opp].fill(0);
   int placed = 0;
   for (int g = 0; g < kGoodTypes; ++g) {
-    const int n = net_in_[opp][g];
-    if (n < 0 || n > unseen[g]) inconsistent("net_in exceeds the unseen pool");
+    int n = known_[opp][g];
+    if (opp_moves) n = std::max(n, d.trade_give[g]);
+    if (n > unseen[g]) inconsistent("known cards exceed the unseen pool");
     d.hand_count[opp][g] = n;
     placed += n;
   }
-  int residual = opp_hand_goods - placed;
-  if (residual < 0) inconsistent("net_in exceeds the opponent's hand size");
-
+  const int residual = opp_hand_goods - placed;
+  if (residual < 0) inconsistent("known cards exceed the opponent's hand size");
   if (residual > 0) {
-    // Unsold-types unseen pool: per unsold type g, the unseen cards not
-    // already placed in the opponent's hand.
-    std::vector<std::int8_t> start_pool;
-    for (int g = 0; g < kGoodTypes; ++g) {
-      if (sold_[opp][g]) continue;
-      for (int k = 0; k < unseen[g] - net_in_[opp][g]; ++k)
-        start_pool.push_back(static_cast<std::int8_t>(g));
-    }
-    if (static_cast<int>(start_pool.size()) < residual) {
-      inconsistent("not enough unseen cards for the opponent's hand");
-    }
-    std::shuffle(start_pool.begin(), start_pool.end(), rng);
-    for (int k = 0; k < residual; ++k) d.hand_count[opp][start_pool[k]]++;
+    std::vector<std::int8_t> pool;
+    for (int g = 0; g < kGoodTypes; ++g)
+      for (int k = d.hand_count[opp][g]; k < unseen[g]; ++k)
+        pool.push_back(static_cast<std::int8_t>(g));
+    std::shuffle(pool.begin(), pool.end(), rng);
+    for (int k = 0; k < residual; ++k) d.hand_count[opp][pool[k]]++;
   }
 
   // --- Draw pile (hidden composition): exactly the unseen cards the sampled
@@ -214,7 +194,7 @@ void JaipurBeliefTracker::randomize_unseen(IGameState& state, int observer,
   // so no sim can follow the true draw sequence.
   for (int g = 0; g < kGoodTypes; ++g)
     d.deck_count[g] = unseen[g] - d.hand_count[opp][g];
-  d.deck_count[kGoodTypes] = camels_in_deck;
+  d.deck_count[kCamel] = camels_in_deck;
 
   // --- Bonus tokens (face down). Per tier the observer knows the full value
   // multiset and its own draws; the rest is split between the opponent's
@@ -249,18 +229,13 @@ void JaipurBeliefTracker::randomize_unseen(IGameState& state, int observer,
 }
 
 AnyMap JaipurBeliefTracker::serialize() const {
-  // Expose the perspective-AGNOSTIC net-inflow bookkeeping (it is derived
-  // purely from public goods-flow events, so two trackers fed the same event
-  // stream produce equal output — BUG-017 safe).
-  AnyMap m;
-  std::vector<int> sold_flat, net_flat;
+  // Perspective-AGNOSTIC: derived purely from public goods-flow events, so
+  // two trackers fed the same event stream produce equal output (BUG-017).
+  std::vector<int> flat;
   for (int p = 0; p < kPlayers; ++p)
-    for (int g = 0; g < kGoodTypes; ++g) {
-      sold_flat.push_back(sold_[p][g] ? 1 : 0);
-      net_flat.push_back(net_in_[p][g]);
-    }
-  m["sold"] = std::any(sold_flat);
-  m["net_in"] = std::any(net_flat);
+    for (int g = 0; g < kGoodTypes; ++g) flat.push_back(known_[p][g]);
+  AnyMap m;
+  m["known"] = std::any(flat);
   return m;
 }
 

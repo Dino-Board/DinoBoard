@@ -21,7 +21,20 @@
 }
 .jp-card.empty-slot { background: transparent; border: 2px dashed #ccc; }
 .jp-card.back { background: #455a64; color: #cfd8dc; border-color: #263238; font-weight: 700; }
-.jp-card.giving { opacity: 0.45; border-color: #ff6b35; }
+.jp-card.selected { transform: translateY(-8px); border-color: #ff6b35; box-shadow: 0 0 10px rgba(255,107,53,0.55); background: #fff3e0; }
+.self .jp-card.selected:hover { transform: translateY(-10px); }
+
+/* Own herd: camels are selectable as payment in a trade */
+.jaipur-herd { display: flex; gap: 4px; margin-top: 8px; flex-wrap: wrap; }
+.jp-camel {
+  width: 34px; height: 42px; border-radius: 6px; border: 2px solid #8BC34A; background: #f1f8e9;
+  display: flex; align-items: center; justify-content: center; font-size: 18px; user-select: none;
+  transition: transform 0.12s, box-shadow 0.12s;
+}
+.jp-camel.clickable { cursor: pointer; }
+.jp-camel.clickable:hover { transform: translateY(-3px); }
+.jp-camel.selected { transform: translateY(-6px); border-color: #ff6b35; box-shadow: 0 0 8px rgba(255,107,53,0.55); background: #fff3e0; }
+.jaipur-hint { align-self: center; color: #555; font-size: 13px; padding: 0 8px; }
 .self .jp-card:not(.empty-slot):not(.back) { cursor: pointer; }
 .self .jp-card:not(.empty-slot):not(.back):hover { transform: translateY(-3px); box-shadow: 0 4px 10px rgba(0,0,0,0.18); }
 
@@ -72,9 +85,6 @@
 .jp-token.bonus { background: #f3e5f5; border-color: #ce93d8; }
 .jp-token .val { font-weight: 700; font-size: 18px; color: #2e7d32; }
 .jp-token .rem { font-size: 11px; color: #666; }
-
-/* Exchange phase indicator */
-.jaipur-ex-phase { text-align: center; font-weight: 700; color: #e65100; background: #fff3e0; padding: 8px; border-radius: 8px; font-size: 14px; }
 
 /* Actions */
 .jaipur-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; padding: 8px; }

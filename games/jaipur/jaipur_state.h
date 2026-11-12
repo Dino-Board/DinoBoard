@@ -29,7 +29,10 @@ constexpr int kGoodCardCounts[kGoodTypes] = {6, 6, 6, 8, 8, 10};
 constexpr int kCamelCardCount = 11;
 constexpr int kTotalDeckSize = 55;
 constexpr int kInitialDealPerPlayer = 5;
-constexpr int kMaxExchange = 5;      // at most 5 cards swapped (market size)
+constexpr int kMarketSize = 5;
+constexpr int kMaxTrade = 5;         // at most 5 cards swapped (market size)
+constexpr int kMaxSell = kHandSize;  // a sale holds at most a full hand
+constexpr int kCamel = kGoodTypes;   // market / trade index of camels
 
 // Face-down bonus tokens (rulebook): per tier (3 / 4 / 5+ cards sold) the
 // distinct face values and how many tokens of each value exist.
@@ -40,39 +43,44 @@ constexpr int kBonusValue[kBonusTiers][kBonusValues] = {
 constexpr int kBonusInitCount[kBonusTiers][kBonusValues] = {
     {2, 3, 2}, {2, 2, 2}, {2, 1, 2}};
 
-// Exchange phases (intra-turn state machine, see phase-state-machine skill).
-constexpr int kExchPhaseIdle   = 0;
-constexpr int kExchPhaseMarket = 1;  // selecting market goods to take
-constexpr int kExchPhaseCamel  = 2;  // selecting how many camels to give
-constexpr int kExchPhaseHand   = 3;  // selecting hand goods to give
+// ---- Action encoding: one turn = one BGA request ----
+//   0..5     take one good of type g from the market
+//   6        take all camels
+//   7..48    sell k cards of type g: 7 + g*7 + (k-1), k = 1..7 (partial
+//            sales allowed; diamond / gold / silver need k >= 2)
+//   49..78   trade, take k market goods of type g: 49 + g*5 + (k-1)
+//   79..113  trade, give k cards of type x: 79 + x*5 + (k-1), x = 0..5 goods
+//            from hand, x = 6 camels from the herd
+// A trade is a factored action (factored-actions skill): take atoms in
+// strictly ascending g, then give atoms in strictly ascending x; it resolves
+// on the give atom that makes the given count equal the taken count. The
+// chosen atoms are public state (trade_take / trade_give) and in the hash.
+// Every legal atom keeps the trade completable, so a started trade never
+// dead-ends and needs no cancel.
+constexpr int kActTakeBase       = 0;
+constexpr int kActTakeCamels     = 6;
+constexpr int kActSellBase       = 7;
+constexpr int kActTradeTakeBase  = kActSellBase + kGoodTypes * kMaxSell;           // 49
+constexpr int kActTradeGiveBase  = kActTradeTakeBase + kGoodTypes * kMaxTrade;     // 79
+constexpr int kActionSpace       = kActTradeGiveBase + (kGoodTypes + 1) * kMaxTrade;  // 114
 
-// ---- Action encoding (type-based, no positional slots) ----
-//   Idle phase:
-//     0..5   sell good type g (sell all of type g)
-//     6..11  take good type g (take ONE card of type g from market)
-//     12     take all camels
-//     13     enter exchange
-//   Exchange market phase (select market goods to take, +1 type g per action):
-//     14..19 select market good type g
-//     20     confirm market selection
-//   Exchange camel phase (pick number of camels to give):
-//     21..28 give K camels (K = action - 21, 0..7)
-//   Exchange hand phase (select hand goods to give, +1 type g per action):
-//     29..34 select hand good type g
-// NOTE: there is no "cancel exchange" action. Once a player enters exchange
-// they MUST complete it. Adding a cancel would create an infinite enter ↔
-// cancel loop in MCTS (every cancel returns to idle where enter_exchange is
-// scored highly again — selfplay never terminates). The web frontend's
-// "cancel" button is implemented via step-back, not via a game action.
-constexpr int kActSellBase      = 0;   // 0..5
-constexpr int kActTakeBase      = 6;   // 6..11
-constexpr int kActTakeCamels    = 12;
-constexpr int kActEnterExchange = 13;
-constexpr int kActExchMktBase   = 14;  // 14..19
-constexpr int kActExchMktDone   = 20;
-constexpr int kActExchCamelBase = 21;  // 21..28 (K = action - 21)
-constexpr int kActExchHandBase  = 29;  // 29..34
-constexpr int kActionSpace      = 35;
+constexpr ActionId sell_action(int g, int k) { return kActSellBase + g * kMaxSell + (k - 1); }
+constexpr ActionId trade_take_action(int g, int k) { return kActTradeTakeBase + g * kMaxTrade + (k - 1); }
+constexpr ActionId trade_give_action(int x, int k) { return kActTradeGiveBase + x * kMaxTrade + (k - 1); }
+constexpr bool is_take_action(ActionId a) { return a >= kActTakeBase && a < kActTakeBase + kGoodTypes; }
+constexpr bool is_sell_action(ActionId a) { return a >= kActSellBase && a < kActTradeTakeBase; }
+constexpr bool is_trade_take_action(ActionId a) { return a >= kActTradeTakeBase && a < kActTradeGiveBase; }
+constexpr bool is_trade_give_action(ActionId a) { return a >= kActTradeGiveBase && a < kActionSpace; }
+// (type, count) of a sell / trade-take / trade-give atom.
+constexpr int sell_type(ActionId a) { return (a - kActSellBase) / kMaxSell; }
+constexpr int sell_count(ActionId a) { return (a - kActSellBase) % kMaxSell + 1; }
+constexpr int trade_take_type(ActionId a) { return (a - kActTradeTakeBase) / kMaxTrade; }
+constexpr int trade_take_count(ActionId a) { return (a - kActTradeTakeBase) % kMaxTrade + 1; }
+constexpr int trade_give_type(ActionId a) { return (a - kActTradeGiveBase) / kMaxTrade; }
+constexpr int trade_give_count(ActionId a) { return (a - kActTradeGiveBase) % kMaxTrade + 1; }
+
+// Diamond / gold / silver sell in sets of at least two.
+constexpr int min_sell_count(int g) { return g <= 2 ? 2 : 1; }
 
 struct JaipurData {
   int current_player = 0;
@@ -123,14 +131,10 @@ struct JaipurData {
 
   int piles_exhausted = 0;
 
-  // Exchange state machine (per-turn scratch). All in count form.
-  int exchange_phase = kExchPhaseIdle;
-  std::array<int, kGoodTypes> exchange_take_count{};   // market goods selected to take
-  std::array<int, kGoodTypes> exchange_give_count{};   // hand goods selected to give
-  int exchange_camel_count = 0;   // camels to give
-  int exchange_max_camels = 0;    // upper bound (computed at market confirm)
-  int exchange_min_camels = 0;    // lower bound (computed at market confirm)
-  int exchange_total = 0;         // total market goods selected to take
+  // Trade prefix (public): atoms chosen so far this turn, in count form.
+  // Market and hand only change when the trade resolves.
+  std::array<int, kGoodTypes> trade_take{};      // market goods to take
+  std::array<int, kGoodTypes + 1> trade_give{};  // hand goods / camels to give
 };
 
 // Draw one card from the draw pile: weighted by `deck_count`, consuming the

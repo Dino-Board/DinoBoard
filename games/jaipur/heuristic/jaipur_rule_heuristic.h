@@ -2,26 +2,27 @@
 #include <string>
 #include "../../../engine/core/heuristic.h"
 
-// Forward declaration - JaipurData struct defined in jaipur_state.h
+// Forward declarations - defined in jaipur_state.h / jaipur_rules.h
 namespace board_ai::jaipur {
 struct JaipurData;
+struct JaipurTrade;
 }
 
 namespace board_ai::jaipur {
 
 // Expected value of one face-down bonus token of `tier` from `observer`'s
 // knowledge only (full multiset minus the observer's own draws). Shared by
-// the rule heuristic and the heuristic PV evaluator.
+// the rule heuristic, the heuristic PV evaluator and the token encoder.
 double jaipur_bonus_expected(int tier, const JaipurData& d, int observer);
 
 // Rule-based heuristic for Jaipur. Scores the current legal actions from the
 // acting player's perspective using public info + the actor's own hand:
-//  - sell: sum of the top value tokens + expected bonus value (pile mean)
+//  - sell k of g: sum of the top k value tokens + expected bonus value
 //  - take good: prefer expensive goods + type synergy with hand
 //  - take camels: conditional on herd size / opponent hand fullness (rulebook
 //    advice 1-2)
-//  - exchange sub-actions: greedily steer toward taking high-value market
-//    goods while surrendering the cheapest hand goods and fewest camels
+//  - trade atoms: the best complete trade below the atom (value of the goods
+//    taken minus the goods / camels paid)
 //
 // Bonus token values are estimated by the mean of the residual value pool
 // the acting player knows (they are face-down; the pile's real composition
@@ -40,8 +41,10 @@ class JaipurRuleHeuristic final : public IHeuristic {
 
  private:
   std::string name_;
-  double score_sell(int good_type, const JaipurData& d) const;
-  double score_take(int slot, const JaipurData& d) const;
+  double score_sell(int good_type, int count, const JaipurData& d) const;
+  double score_take(int good_type, const JaipurData& d) const;
+  double score_camels(const JaipurData& d) const;
+  double score_trade(const JaipurTrade& trade, const JaipurData& d) const;
 };
 
 }  // namespace board_ai::jaipur

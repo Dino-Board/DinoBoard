@@ -13,15 +13,14 @@ namespace board_ai::jaipur {
 
 namespace {
 
-// events_only_extractor: per-perspective events derived from the before/after
-// state diff + action. Emits:
-//   - "goods_taken"  (public): a player took a goods card of type g from the
-//     market (take action). Lets every tracker update that player's net_in.
-//   - "goods_sold"   (public): a player sold all of type g. Triggers the
-//     strong sell signal (sold=true, net_in=0 for that type/player).
-//   - "exchange_resolved" (public): an exchange completed, carrying the goods
-//     types taken from the market and the goods types given to it, so trackers
-//     update net_in per type (take-give, clamped ≥ 0).
+// events_only_extractor: public goods-flow events, the same for every
+// perspective:
+//   - "goods_taken"    {player, good_type, count}: a single take.
+//   - "goods_sold"     {player, good_type, count}: a sale of `count` cards.
+//   - "trade_resolved" {player, take[6], give[7]}: the give atom that
+//     completed a trade; per-type counts taken from the market and given to
+//     it (give[6] = camels).
+// Trade atoms before the last one emit nothing: the prefix is public state.
 // There is no private event: the value of a bonus token the actor drew is
 // perspective-private knowledge and rides the snapshot as the owner-only
 // state slot `bonus_taken` (not tracker memory).
@@ -32,36 +31,28 @@ std::vector<PublicEvent> extract_events_only(
   const auto& db = static_cast<const JaipurState&>(before).data;
   const auto& da = static_cast<const JaipurState&>(after).data;
   const int actor = db.current_player;
+  auto flow = [&](const char* kind, int good, int count) {
+    AnyMap p;
+    p["player"] = std::any(actor);
+    p["good_type"] = std::any(good);
+    p["count"] = std::any(count);
+    events.emplace_back(kind, std::move(p));
+  };
 
-  // --- Public goods-flow events (every perspective sees these) ---
-  if (action >= kActSellBase && action < kActSellBase + kGoodTypes) {
-    AnyMap p; p["player"] = std::any(actor);
-    p["good_type"] = std::any(action - kActSellBase);
-    events.emplace_back("goods_sold", std::move(p));
-  } else if (action >= kActTakeBase && action < kActTakeBase + kGoodTypes) {
-    AnyMap p; p["player"] = std::any(actor);
-    p["good_type"] = std::any(action - kActTakeBase);
-    events.emplace_back("goods_taken", std::move(p));
-  } else if (db.exchange_phase != kExchPhaseIdle &&
-             da.exchange_phase == kExchPhaseIdle) {
-    // Exchange COMMITTED (phase → idle via a final commit). There is no
-    // cancel action — once an exchange begins it must complete — so any
-    // phase→idle transition is a commit. Derive moved goods from the
-    // MARKET count delta (robust to which sub-action triggered the commit):
-    // a good whose market count dropped was taken into the actor's hand;
-    // a good whose market count rose was given from hand.
-    std::vector<int> take_types, give_types;
-    for (int g = 0; g < kGoodTypes; ++g) {
-      int delta = da.market_count[g] - db.market_count[g];
-      for (int i = 0; i < -delta; ++i) take_types.push_back(g);  // left market → taken
-      for (int i = 0; i < delta; ++i) give_types.push_back(g);   // entered market → given
-    }
-    AnyMap p; p["player"] = std::any(actor);
-    p["take_types"] = std::any(take_types);
-    p["give_types"] = std::any(give_types);
-    events.emplace_back("exchange_resolved", std::move(p));
+  if (is_take_action(action)) {
+    flow("goods_taken", action - kActTakeBase, 1);
+  } else if (is_sell_action(action)) {
+    flow("goods_sold", sell_type(action), sell_count(action));
+  } else if (is_trade_give_action(action) && jaipur_trade_idle(da)) {
+    std::vector<int> take(db.trade_take.begin(), db.trade_take.end());
+    std::vector<int> give(db.trade_give.begin(), db.trade_give.end());
+    give[trade_give_type(action)] += trade_give_count(action);
+    AnyMap p;
+    p["player"] = std::any(actor);
+    p["take"] = std::any(take);
+    p["give"] = std::any(give);
+    events.emplace_back("trade_resolved", std::move(p));
   }
-
   return events;
 }
 
@@ -73,7 +64,7 @@ GameBundle make_jaipur(std::uint64_t seed) {
   b.state = std::move(s);
   b.rules = std::make_unique<JaipurRules>();
   b.value_model = std::make_unique<DefaultStateValueModel>();
-  b.encoder = std::make_unique<JaipurFeatureEncoder>();
+  b.encoder = std::make_unique<JaipurTokenEncoder>();
   b.belief_tracker = std::make_unique<JaipurBeliefTracker>();
   b.state_serializer = make_jaipur_serializer();
   b.action_descriptor = make_jaipur_descriptor();
@@ -95,8 +86,8 @@ GameBundle make_jaipur(std::uint64_t seed) {
       board_ai::heuristic::MctsPVHeuristic::make_from_evaluator(
           "rule_mcts", pv_eval_ptr, b.value_model.get(),
           hc.simulations, hc.c_puct, hc.world_cap, hc.leaf_batch_size));
-  // Composite: MCTS for idle-phase decisions (sell/take/exchange choice),
-  // fast rule heuristic for exchange sub-actions (no 20k MCTS per sub-action).
+  // Composite: MCTS for the first decision of a turn (sell/take/trade
+  // choice), fast rule heuristic for the later atoms of a trade.
   const auto& mcts_base = b.heuristics.get("rule_mcts");
   const auto* mcts_ptr = dynamic_cast<const board_ai::heuristic::MctsPVHeuristic*>(
       &mcts_base);

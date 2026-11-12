@@ -6,11 +6,10 @@
 
 namespace board_ai::jaipur {
 
-// Composite heuristic: uses MCTS (rule_mcts) for idle-phase decisions where
-// deep search matters (sell/take/exchange choice), but falls back to the fast
-// rule heuristic for intra-turn exchange sub-actions (market/camel/hand phase)
-// where MCTS is prohibitively slow (20k sims per sub-action × 3-4 sub-actions)
-// and the rule heuristic is already good enough (greedy exchange completion).
+// Composite heuristic: uses MCTS (rule_mcts) for the first decision of a turn
+// where deep search matters (sell/take/trade choice), but falls back to the
+// fast rule heuristic for the later atoms of a trade, where a full search per
+// atom is slow and the best trade below the prefix is good enough.
 class JaipurSmartHeuristic final : public IHeuristic {
  public:
   JaipurSmartHeuristic(std::string name,

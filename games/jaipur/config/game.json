@@ -9,8 +9,8 @@
   "max_game_plies": 200,
   "variants": {
     "jaipur": {
-      "feature_dim": 75,
-      "action_space": 35,
+      "feature_dim": 242,
+      "action_space": 114,
       "num_players": 2
     }
   }

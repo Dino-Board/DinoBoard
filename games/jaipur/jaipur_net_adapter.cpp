@@ -1,116 +1,184 @@
 #include "jaipur_net_adapter.h"
-#include "../../engine/core/masked_state.h"  // kPlaceholderInt8
 
+#include <algorithm>
 #include <any>
+#include <numeric>
+#include <stdexcept>
+#include <string>
+
+#include "../../engine/core/masked_state.h"  // kPlaceholderInt8
+#include "jaipur_belief_tracker.h"
+#include "heuristic/jaipur_rule_heuristic.h"
 
 namespace board_ai::jaipur {
 
-// Perspective-rotated count encoding. See plan §3.3 for block layout.
-// 74 dims total. Self is always written before opp so the network's
-// weights see the same layout regardless of which seat the perspective is.
-void JaipurFeatureEncoder::encode_features(const IGameState& state,
+namespace {
+// Value of the top `k` goods tokens of type g (fewer if the pile runs out).
+int top_tokens_value(const JaipurData& d, int g, int k) {
+  const auto& pile = d.value_tokens[g];
+  const int n = std::min(k, static_cast<int>(pile.size()));
+  int v = 0;
+  for (int i = 0; i < n; ++i) v += pile[pile.size() - 1 - i];
+  return v;
+}
+int sale_tier(int k) { return k >= 5 ? 2 : k == 4 ? 1 : k == 3 ? 0 : -1; }
+float clip_unit(float v) { return std::max(-1.0f, std::min(1.0f, v)); }
+}  // namespace
+
+JaipurTokenEncoder::JaipurTokenEncoder() {
+  layout_.num_tokens = kNumTokens;
+  layout_.token_dim = kTokenDim;
+  layout_.num_token_types = kTokenTypeCount;
+  layout_.num_entity_ids = 1 + kNumTokens;
+  layout_.num_pointer_heads = kPointerHeadCount;
+  layout_.token_types.assign(kNumTokens, kGoodToken);
+  layout_.token_types[kCamelSlot] = kCamelToken;
+  for (int t = 0; t < kBonusTiers; ++t) layout_.token_types[kBonusBase + t] = kBonusToken;
+  layout_.token_types[kGlobalSlot] = kGlobalToken;
+
+  layout_.action_token.assign(kActionSpace, -1);
+  layout_.action_head.assign(kActionSpace, -1);
+  auto bind = [this](ActionId action, int token, int head) {
+    layout_.action_token[static_cast<std::size_t>(action)] = token;
+    layout_.action_head[static_cast<std::size_t>(action)] = head;
+  };
+  for (int g = 0; g < kGoodTypes; ++g) {
+    bind(kActTakeBase + g, kGoodBase + g, kTakeHead);
+    for (int k = 1; k <= kMaxSell; ++k) bind(sell_action(g, k), kGoodBase + g, kSellHead + k - 1);
+    for (int k = 1; k <= kMaxTrade; ++k)
+      bind(trade_take_action(g, k), kGoodBase + g, kTradeTakeHead + k - 1);
+  }
+  bind(kActTakeCamels, kCamelSlot, kTakeHead);
+  for (int x = 0; x <= kCamel; ++x)
+    for (int k = 1; k <= kMaxTrade; ++k)
+      bind(trade_give_action(x, k), x == kCamel ? kCamelSlot : kGoodBase + x, kTradeGiveHead + k - 1);
+}
+
+void JaipurTokenEncoder::encode_features(const IGameState& state,
     int perspective_player, const IBeliefTracker* tracker,
     std::vector<float>* out) const {
   const auto* s = dynamic_cast<const JaipurState*>(&state);
-  if (!s || !out) return;
+  if (!s) throw std::runtime_error("JaipurTokenEncoder: state is not a JaipurState");
+  if (!out) throw std::runtime_error("JaipurTokenEncoder: out is null");
+  if (perspective_player < 0 || perspective_player >= kPlayers)
+    throw std::runtime_error("JaipurTokenEncoder: perspective_player out of range");
+  const JaipurBeliefTracker* jt = nullptr;
+  if (tracker) {
+    jt = dynamic_cast<const JaipurBeliefTracker*>(tracker);
+    if (!jt) throw std::runtime_error("JaipurTokenEncoder: tracker is not a JaipurBeliefTracker");
+  }
   const auto& d = s->data;
   const int me = perspective_player;
   const int opp = 1 - me;
 
-  auto push_hand = [&](int pp) {
-    // Owner-only viz: own row is truth, opponent row is kPlaceholderInt8.
-    for (int g = 0; g < kGoodTypes; ++g) {
-      int c = d.hand_count[pp][g];
-      out->push_back(c == kPlaceholderInt8 ? 0.0f
-                                           : static_cast<float>(c) / 7.0f);
-    }
+  // Public / own counts only: the opponent's hand row and bonus values are
+  // placeholders in the masked state and are never read.
+  const int my_hand = std::accumulate(d.hand_count[me].begin(), d.hand_count[me].end(), 0);
+  int hands_total = d.deck_pos;
+  for (int c : d.market_count) hands_total -= c;
+  for (int p = 0; p < kPlayers; ++p) hands_total -= d.camel_count[p];
+  for (int c : d.discard_count) hands_total -= c;
+  const int opp_hand = hands_total - my_hand;
+  std::array<int, kGoodTypes> opp_known{};
+  int known_total = 0;
+  for (int g = 0; g < kGoodTypes; ++g) {
+    opp_known[g] = jt ? jt->known(opp, g) : 0;
+    known_total += opp_known[g];
+  }
+  const int opp_unknown = std::max(0, opp_hand - known_total);
+  double bonus_mean[kBonusTiers];
+  for (int t = 0; t < kBonusTiers; ++t) bonus_mean[t] = jaipur_bonus_expected(t, d, me);
+  double opp_bonus = 0.0;
+  for (int t = 0; t < kBonusTiers; ++t) opp_bonus += d.bonus_count[opp][t] * bonus_mean[t];
+  const int take_total = std::accumulate(d.trade_take.begin(), d.trade_take.end(), 0);
+  const int give_total = std::accumulate(d.trade_give.begin(), d.trade_give.end(), 0);
+
+  const std::size_t base = out->size();
+  out->resize(base + static_cast<std::size_t>(kFeatureDim), 0.0f);
+  auto token = [&](int i, int entity) {
+    float* t = out->data() + base + static_cast<std::size_t>(i) * kTokenDim;
+    t[0] = 1.0f;
+    t[1] = static_cast<float>(entity);
+    return t + 2;
   };
 
-  // --- Block 1: market (7) ---
-  for (int i = 0; i < kGoodTypes + 1; ++i)
-    out->push_back(static_cast<float>(d.market_count[i]) / 5.0f);
-
-  // --- Block 2: hand_count, self then opp (12) ---
-  push_hand(me);
-  push_hand(opp);
-
-  // --- Block 3: camels, self then opp (2) ---
-  out->push_back(static_cast<float>(d.camel_count[me]) / 11.0f);
-  out->push_back(static_cast<float>(d.camel_count[opp]) / 11.0f);
-
-  // --- Block 4: rupees, self then opp (2) ---
-  out->push_back(static_cast<float>(d.rupees[me]) / 100.0f);
-  out->push_back(static_cast<float>(d.rupees[opp]) / 100.0f);
-
-  // --- Block 5: value-token pile sizes per good (6) ---
-  for (int g = 0; g < kGoodTypes; ++g)
-    out->push_back(static_cast<float>(d.value_tokens[g].size()) / 10.0f);
-
-  // --- Block 6: bonus pile sizes per tier (3) ---
-  out->push_back(static_cast<float>(d.bonus_pile_size[0]) / 7.0f);
-  out->push_back(static_cast<float>(d.bonus_pile_size[1]) / 6.0f);
-  out->push_back(static_cast<float>(d.bonus_pile_size[2]) / 5.0f);
-
-  // --- Block 7: misc public (3) ---
-  // Dropped: camel_bonus_token (≈ constant 1 until terminal — no signal),
-  //          current_player==me (framework handles perspective; no signal).
-  // plies/kMaxPlies tells V how close we are to the rule-induced terminal
-  // (rupees tiebreak fires at d.plies == kMaxPlies). Without this the
-  // network can't tell "ply 50, lots of game left" from "ply 199, rupees
-  // tiebreak imminent" — and a winning lead in rupees should weight V
-  // very differently in those two cases.
-  out->push_back(static_cast<float>(d.piles_exhausted) / 6.0f);
-  out->push_back(static_cast<float>(kTotalDeckSize - d.deck_pos) / 55.0f);
-  out->push_back(static_cast<float>(d.plies) / static_cast<float>(kMaxPlies));
-
-  // --- Block 8: exchange scratch (16) ---
-  // Dropped: exchange_total (== sum(take_count[6]); pure redundant).
-  out->push_back(static_cast<float>(d.exchange_phase) / 3.0f);
-  for (int g = 0; g < kGoodTypes; ++g)
-    out->push_back(static_cast<float>(d.exchange_take_count[g]) / 5.0f);
-  for (int g = 0; g < kGoodTypes; ++g)
-    out->push_back(static_cast<float>(d.exchange_give_count[g]) / 5.0f);
-  out->push_back(static_cast<float>(d.exchange_camel_count) / 7.0f);
-  out->push_back(static_cast<float>(d.exchange_max_camels) / 7.0f);
-  out->push_back(static_cast<float>(d.exchange_min_camels) / 7.0f);
-
-  // --- Block 9: tracker summary (24) ---
-  // Order: sold[me], sold[opp], net_in[me], net_in[opp] (each 6 dims).
-  // tracker.serialize() returns the perspective-agnostic flat layout
-  // [sold[0][0..5], sold[1][0..5], net_in[0][0..5], net_in[1][0..5]] —
-  // we rotate to put `me` first. If no tracker (snapshot-only sessions
-  // that bypass tracker), emit zeros.
-  std::array<int, 12> sold_flat{}, net_flat{};
-  if (tracker) {
-    AnyMap m = tracker->serialize();
-    auto it_sold = m.find("sold");
-    auto it_net = m.find("net_in");
-    if (it_sold != m.end() && it_sold->second.type() == typeid(std::vector<int>)) {
-      const auto& v = std::any_cast<const std::vector<int>&>(it_sold->second);
-      for (size_t i = 0; i < v.size() && i < sold_flat.size(); ++i)
-        sold_flat[i] = v[i];
-    }
-    if (it_net != m.end() && it_net->second.type() == typeid(std::vector<int>)) {
-      const auto& v = std::any_cast<const std::vector<int>&>(it_net->second);
-      for (size_t i = 0; i < v.size() && i < net_flat.size(); ++i)
-        net_flat[i] = v[i];
-    }
-  }
-  // sold[me] then sold[opp]
-  for (int g = 0; g < kGoodTypes; ++g)
-    out->push_back(sold_flat[me * kGoodTypes + g] ? 1.0f : 0.0f);
-  for (int g = 0; g < kGoodTypes; ++g)
-    out->push_back(sold_flat[opp * kGoodTypes + g] ? 1.0f : 0.0f);
-  // net_in[me] then net_in[opp], clamp to [0,7] then ÷7
   for (int g = 0; g < kGoodTypes; ++g) {
-    int v = net_flat[me * kGoodTypes + g];
-    if (v < 0) v = 0; if (v > 7) v = 7;
-    out->push_back(static_cast<float>(v) / 7.0f);
+    float* f = token(kGoodBase + g, 1 + kGoodBase + g);
+    const int mine = d.hand_count[me][g];
+    const int unseen = kGoodCardCounts[g] - d.market_count[g] - mine - d.discard_count[g];
+    const int pile = static_cast<int>(d.value_tokens[g].size());
+    f[0] = d.market_count[g] / 5.0f;
+    f[1] = mine / 7.0f;
+    f[2] = opp_known[g] / 7.0f;
+    f[3] = unseen / 10.0f;
+    f[4] = std::min(unseen, opp_known[g] + opp_unknown) / 7.0f;
+    f[5] = d.discard_count[g] / 10.0f;
+    f[6] = kGoodCardCounts[g] / 10.0f;
+    f[7] = pile / 9.0f;
+    for (int k = 1; k <= kMaxSell; ++k) f[7 + k] = top_tokens_value(d, g, k) / 30.0f;
+    f[15] = min_sell_count(g) > 1 ? 1.0f : 0.0f;
+    f[16] = d.trade_take[g] / 5.0f;
+    f[17] = d.trade_give[g] / 5.0f;
+    if (mine >= min_sell_count(g)) {
+      const int tier = sale_tier(mine);
+      const double bonus = tier >= 0 && d.bonus_pile_size[tier] > 0 ? bonus_mean[tier] : 0.0;
+      f[18] = static_cast<float>((top_tokens_value(d, g, mine) + bonus) / 40.0);
+    }
+    f[19] = top_tokens_value(d, g, opp_known[g]) / 40.0f;
   }
-  for (int g = 0; g < kGoodTypes; ++g) {
-    int v = net_flat[opp * kGoodTypes + g];
-    if (v < 0) v = 0; if (v > 7) v = 7;
-    out->push_back(static_cast<float>(v) / 7.0f);
+
+  {
+    float* f = token(kCamelSlot, 1 + kCamelSlot);
+    const int deck_camels = kCamelCardCount - d.market_count[kCamel] - d.camel_count[0] - d.camel_count[1];
+    f[0] = d.market_count[kCamel] / 5.0f;
+    f[1] = d.camel_count[me] / 11.0f;
+    f[2] = d.camel_count[opp] / 11.0f;
+    f[3] = deck_camels / 11.0f;
+    f[4] = (d.camel_count[me] - d.camel_count[opp]) / 11.0f;
+    f[5] = d.camel_bonus_token ? 1.0f : 0.0f;
+    f[6] = d.trade_give[kCamel] / 5.0f;
+    f[7] = std::max(0, std::min(d.camel_count[me], kHandSize - my_hand)) / 7.0f;
+  }
+
+  for (int t = 0; t < kBonusTiers; ++t) {
+    float* f = token(kBonusBase + t, 1 + kBonusBase + t);
+    int init = 0, my_value = 0;
+    for (int v = 0; v < kBonusValues; ++v) {
+      init += kBonusInitCount[t][v];
+      my_value += d.bonus_taken[me][t][v] * kBonusValue[t][v];
+    }
+    f[0] = static_cast<float>(d.bonus_pile_size[t]) / init;
+    f[1] = static_cast<float>(bonus_mean[t] / 10.0);
+    f[2] = d.bonus_count[me][t] / 5.0f;
+    f[3] = d.bonus_count[opp][t] / 5.0f;
+    f[4] = my_value / 30.0f;
+    f[5] = static_cast<float>(d.bonus_count[opp][t] * bonus_mean[t] / 30.0);
+  }
+
+  {
+    float* f = token(kGlobalSlot, 1 + kGlobalSlot);
+    const int my_bonus_n = d.bonus_count[me][0] + d.bonus_count[me][1] + d.bonus_count[me][2];
+    const int opp_bonus_n = d.bonus_count[opp][0] + d.bonus_count[opp][1] + d.bonus_count[opp][2];
+    f[0] = d.rupees[me] / 100.0f;
+    f[1] = d.rupees[opp] / 100.0f;
+    f[2] = d.bonus_total[me] / 60.0f;
+    f[3] = static_cast<float>(opp_bonus / 60.0);
+    f[4] = clip_unit(static_cast<float>((d.rupees[me] + d.bonus_total[me] - d.rupees[opp] - opp_bonus) / 50.0));
+    f[5] = my_hand / 7.0f;
+    f[6] = opp_hand / 7.0f;
+    f[7] = (kTotalDeckSize - d.deck_pos) / 55.0f;
+    f[8] = d.piles_exhausted / 3.0f;
+    f[9] = std::min(d.plies, kMaxPlies) / static_cast<float>(kMaxPlies);
+    f[10] = d.goods_tokens_taken[me] / 20.0f;
+    f[11] = d.goods_tokens_taken[opp] / 20.0f;
+    f[12] = my_bonus_n / 10.0f;
+    f[13] = opp_bonus_n / 10.0f;
+    f[14] = take_total > 0 && give_total == 0 ? 1.0f : 0.0f;
+    f[15] = give_total > 0 ? 1.0f : 0.0f;
+    f[16] = take_total / 5.0f;
+    f[17] = (take_total - give_total) / 5.0f;
+    f[18] = d.current_player == me ? 1.0f : 0.0f;
+    f[19] = opp_unknown / 7.0f;
   }
 }
 
@@ -121,6 +189,7 @@ StateSerializer make_jaipur_serializer() {
     m["current_player"] = std::any(d.current_player);
     m["is_terminal"] = std::any(d.terminal);
     m["winner"] = std::any(d.winner);
+    m["plies"] = std::any(d.plies);
     // Market as a flat count list [g0..g5, camels].
     std::vector<int> mkt(d.market_count.begin(), d.market_count.end());
     m["market_count"] = std::any(mkt);
@@ -176,43 +245,31 @@ StateSerializer make_jaipur_serializer() {
     m["discard_count"] = std::any(dc);
     m["piles_exhausted"] = std::any(d.piles_exhausted);
     m["deck_remaining"] = std::any(kTotalDeckSize - d.deck_pos);
-    m["exch_phase"] = std::any(d.exchange_phase);
-    std::vector<int> tk(d.exchange_take_count.begin(), d.exchange_take_count.end());
-    std::vector<int> gv(d.exchange_give_count.begin(), d.exchange_give_count.end());
-    m["exch_take_count"] = std::any(tk);
-    m["exch_give_count"] = std::any(gv);
-    m["exch_camel_count"] = std::any(d.exchange_camel_count);
-    m["exch_max_camels"] = std::any(d.exchange_max_camels);
-    m["exch_min_camels"] = std::any(d.exchange_min_camels);
-    m["exch_total"] = std::any(d.exchange_total);
+    m["camel_bonus_token"] = std::any(d.camel_bonus_token);
+    std::vector<int> tt(d.trade_take.begin(), d.trade_take.end());
+    std::vector<int> tg(d.trade_give.begin(), d.trade_give.end());
+    m["trade_take"] = std::any(tt);
+    m["trade_give"] = std::any(tg);
     return m;
   };
 }
 
 ActionDescriptor make_jaipur_descriptor() {
-  static const char* kGoodNames[kGoodTypes] = {
-      "diamond", "gold", "silver", "spice", "cloth", "leather"};
   return [](ActionId action) -> AnyMap {
     AnyMap m;
     m["action_id"] = std::any(static_cast<int>(action));
-    auto type_str = [&](const char* s) { m["type"] = std::any(std::string(s)); };
-    if (action >= kActSellBase && action < kActSellBase + kGoodTypes) {
-      type_str("sell"); m["good_type"] = std::any(action - kActSellBase);
-    } else if (action >= kActTakeBase && action < kActTakeBase + kGoodTypes) {
-      type_str("take"); m["good_type"] = std::any(action - kActTakeBase);
-    } else if (action == kActTakeCamels) {
-      type_str("take_camels");
-    } else if (action == kActEnterExchange) {
-      type_str("enter_exchange");
-    } else if (action >= kActExchMktBase && action < kActExchMktBase + kGoodTypes) {
-      type_str("exch_take"); m["good_type"] = std::any(action - kActExchMktBase);
-    } else if (action == kActExchMktDone) {
-      type_str("exch_mkt_done");
-    } else if (action >= kActExchCamelBase && action < kActExchCamelBase + 8) {
-      type_str("exch_camel"); m["camels"] = std::any(action - kActExchCamelBase);
-    } else if (action >= kActExchHandBase && action < kActExchHandBase + kGoodTypes) {
-      type_str("exch_give"); m["good_type"] = std::any(action - kActExchHandBase);
-    }
+    auto set = [&](const char* type, int good, int count) {
+      m["type"] = std::any(std::string(type));
+      if (good >= 0) m["good_type"] = std::any(good);
+      if (count > 0) m["count"] = std::any(count);
+    };
+    if (is_take_action(action)) set("take", action - kActTakeBase, 1);
+    else if (action == kActTakeCamels) set("take_camels", -1, 0);
+    else if (is_sell_action(action)) set("sell", sell_type(action), sell_count(action));
+    else if (is_trade_take_action(action))
+      set("trade_take", trade_take_type(action), trade_take_count(action));
+    else if (is_trade_give_action(action))
+      set("trade_give", trade_give_type(action), trade_give_count(action));
     return m;
   };
 }

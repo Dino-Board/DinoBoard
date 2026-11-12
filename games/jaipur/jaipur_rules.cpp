@@ -13,38 +13,28 @@ static JaipurData& cast_data_mut(IGameState& state) {
 }
 
 // ---- Count helpers ----
-static int hand_total(const JaipurData& d, int p) {
-  return std::accumulate(d.hand_count[p].begin(), d.hand_count[p].end(), 0);
+template <std::size_t N>
+static int sum_of(const std::array<int, N>& a) {
+  return std::accumulate(a.begin(), a.end(), 0);
 }
-static int market_goods_total(const JaipurData& d) {
-  int n = 0;
-  for (int g = 0; g < kGoodTypes; ++g) n += d.market_count[g];
-  return n;
+// Highest index holding a non-zero count, -1 if none.
+template <std::size_t N>
+static int last_nonzero(const std::array<int, N>& a) {
+  for (int i = static_cast<int>(N) - 1; i >= 0; --i)
+    if (a[i] != 0) return i;
+  return -1;
 }
-static int take_count_total(const JaipurData& d) {
-  return std::accumulate(d.exchange_take_count.begin(),
-                         d.exchange_take_count.end(), 0);
-}
-static int give_count_total(const JaipurData& d) {
-  return std::accumulate(d.exchange_give_count.begin(),
-                         d.exchange_give_count.end(), 0);
-}
+static int hand_total(const JaipurData& d, int p) { return sum_of(d.hand_count[p]); }
 
 // ---- Terminal / scoring ----
 // Full score = public rupees (goods + camel token) + private bonus total.
 // Tie-break per rulebook: richer total → most bonus tokens → most goods tokens.
-static int count_bonus_tokens_taken(const JaipurData& d, int p) {
-  return d.bonus_count[p][0] + d.bonus_count[p][1] + d.bonus_count[p][2];
-}
-static int count_goods_tokens_taken(const JaipurData& d, int p) {
-  return d.goods_tokens_taken[p];
-}
 static int decide_winner(const JaipurData& d) {
   auto score = [&](int p) { return d.rupees[p] + d.bonus_total[p]; };
   if (score(0) != score(1)) return score(0) > score(1) ? 0 : 1;
-  int b0 = count_bonus_tokens_taken(d, 0), b1 = count_bonus_tokens_taken(d, 1);
+  const int b0 = sum_of(d.bonus_count[0]), b1 = sum_of(d.bonus_count[1]);
   if (b0 != b1) return b0 > b1 ? 0 : 1;
-  int g0 = count_goods_tokens_taken(d, 0), g1 = count_goods_tokens_taken(d, 1);
+  const int g0 = d.goods_tokens_taken[0], g1 = d.goods_tokens_taken[1];
   if (g0 != g1) return g0 > g1 ? 0 : 1;
   return -1;
 }
@@ -54,10 +44,9 @@ static void check_terminal(JaipurData& d) {
   // Rulebook: the round ends when the market cannot be refilled, not when the
   // deck merely runs out. Refills happen after every take, so a short market
   // with an empty deck means a refill just failed; a full market with an
-  // empty deck keeps the round going (sells and exchanges need no refill).
+  // empty deck keeps the round going (sells and trades need no refill).
   const bool deck_empty = (d.deck_pos >= kTotalDeckSize);
-  const bool refill_failed =
-      deck_empty && market_goods_total(d) + d.market_count[6] < 5;
+  const bool refill_failed = deck_empty && sum_of(d.market_count) < kMarketSize;
   int exhausted = 0;
   for (int g = 0; g < kGoodTypes; ++g)
     if (d.value_tokens[g].empty()) ++exhausted;
@@ -85,8 +74,8 @@ static void check_terminal(JaipurData& d) {
 // draw from deck_count with the caller's rng (draw_deck_card, jaipur_state):
 // the pile has no stored order, so nothing can know the next card early.
 static void refill_market(JaipurData& d, std::mt19937_64& rng) {
-  int total = market_goods_total(d) + d.market_count[6];
-  while (total < 5) {
+  int total = sum_of(d.market_count);
+  while (total < kMarketSize) {
     const int c = draw_deck_card(d, rng);
     if (c < 0) break;
     d.market_count[c]++;
@@ -103,8 +92,6 @@ static void next_turn(JaipurData& d) {
 // ================================================================
 //  Sell
 // ================================================================
-static int min_sell_count(int g) { return (g <= 2) ? 2 : 1; }  // dia/gold/silv ≥2
-
 // Draw one face-down bonus token of `tier` for player p: weighted by the
 // values left in the pile, caller's rng. Same no-stored-order rule as the
 // draw pile; throws on a masked / stale pile instead of inventing a value.
@@ -138,19 +125,18 @@ static void draw_bonus_token(JaipurData& d, int p, int tier,
   }
 }
 
-static void apply_sell(JaipurData& d, int g, std::mt19937_64& rng) {
-  int p = d.current_player;
-  int count = d.hand_count[p][g];
-  d.hand_count[p][g] = 0;
-  d.discard_count[g] += count;  // sold cards go face up on the discard pile
-  for (int i = 0; i < count; ++i) {
+static void apply_sell(JaipurData& d, int g, int k, std::mt19937_64& rng) {
+  const int p = d.current_player;
+  d.hand_count[p][g] -= k;
+  d.discard_count[g] += k;  // sold cards go face up on the discard pile
+  for (int i = 0; i < k; ++i) {
     if (!d.value_tokens[g].empty()) {
       d.rupees[p] += d.value_tokens[g].back();
       d.value_tokens[g].pop_back();
       ++d.goods_tokens_taken[p];
     }
   }
-  const int tier = (count >= 5) ? 2 : (count == 4) ? 1 : (count == 3) ? 0 : -1;
+  const int tier = (k >= 5) ? 2 : (k == 4) ? 1 : (k == 3) ? 0 : -1;
   if (tier >= 0 && d.bonus_pile_size[tier] > 0) draw_bonus_token(d, p, tier, rng);
 }
 
@@ -158,344 +144,220 @@ static void apply_sell(JaipurData& d, int g, std::mt19937_64& rng) {
 //  Take one good / take all camels
 // ================================================================
 static void apply_take_good(JaipurData& d, int g, std::mt19937_64& rng) {
-  int p = d.current_player;
+  const int p = d.current_player;
   d.market_count[g]--;
   d.hand_count[p][g]++;
   refill_market(d, rng);
 }
 static void apply_take_camels(JaipurData& d, std::mt19937_64& rng) {
-  int p = d.current_player;
-  d.camel_count[p] += d.market_count[6];
-  d.market_count[6] = 0;
+  const int p = d.current_player;
+  d.camel_count[p] += d.market_count[kCamel];
+  d.market_count[kCamel] = 0;
   refill_market(d, rng);
 }
 
 // ================================================================
-//  Exchange feasibility & bounds (count form)
+//  Trades (factored: ascending take atoms, then ascending give atoms)
 // ================================================================
-// Goods types present in the take selection.
-static int take_types_bitset(const JaipurData& d) {
-  int b = 0;
-  for (int g = 0; g < kGoodTypes; ++g)
-    if (d.exchange_take_count[g] > 0) b |= (1 << g);
-  return b;
-}
-// Hand goods whose type is NOT in the take selection — eligible to surrender.
-static int available_non_overlap(const JaipurData& d, int take_bits) {
-  int p = d.current_player;
-  int avail = 0;
-  for (int g = 0; g < kGoodTypes; ++g)
-    if (!(take_bits & (1 << g))) avail += d.hand_count[p][g];
-  return avail;
-}
-// Is the current take selection feasible to complete? Need ≥2 taken, enough
-// non-overlapping hand goods + camels to cover, and hand limit at min camels.
-static bool take_feasible(const JaipurData& d) {
-  int p = d.current_player;
-  int tc = take_count_total(d);
-  if (tc < 2) return false;
-  int take_bits = take_types_bitset(d);
-  int avail = available_non_overlap(d, take_bits);
-  if (avail + d.camel_count[p] < tc) return false;
-  int min_camels = std::max(0, tc - avail);
-  if (hand_total(d, p) + min_camels > kHandSize) return false;
-  return true;
-}
-// Resource-only feasibility check (no rulebook tc≥2 constraint). Returns
-// true iff the GIVE side can be satisfied for a hypothetical state — used
-// as a building block by take_g_safe. User-derived (审稿): use as many
-// camels as possible (minimum hand-good demand), then check hand covers
-// the residual.
-static bool give_resources_ok(int new_tc, int new_take_bits,
-                               const JaipurData& d) {
-  int p = d.current_player;
-  if (new_tc > kMaxExchange) return false;
-  int avail = 0;
-  for (int gg = 0; gg < kGoodTypes; ++gg)
-    if (!(new_take_bits & (1 << gg))) avail += d.hand_count[p][gg];
-  int K_max = std::min({d.camel_count[p],
-                        kHandSize - hand_total(d, p),
-                        new_tc});
-  if (K_max < 0) K_max = 0;
-  int need_from_hand = new_tc - K_max;
-  if (need_from_hand < 0) need_from_hand = 0;
-  return need_from_hand <= avail;
+namespace {
+struct Prefix {
+  std::array<int, kGoodTypes> take{};
+  std::array<int, kGoodTypes + 1> give{};
+};
+Prefix prefix_of(const JaipurData& d) { return {d.trade_take, d.trade_give}; }
+}  // namespace
+
+// Most camels a trade can pay with: the herd, and the hand limit (each camel
+// given leaves one more good in the hand after the swap).
+static int camel_cap(const JaipurData& d, int p) {
+  return std::max(0, std::min(d.camel_count[p], kHandSize - hand_total(d, p)));
 }
 
-// "Is it safe to take one more of type g?" — guarantees that after taking
-// g, the player can complete the exchange (reach a feasible mkt_done state
-// without escape). Two conditions:
-//   1. Resources after the take cover the give side (give_resources_ok).
-//   2. The resulting tc reaches ≥2 — either directly (new_tc ≥ 2) or via
-//      at least one further safe take (recursive 1-level: only needed
-//      when new_tc == 1, since tc ≥ 2 + resources_ok ⇒ take_feasible).
-static bool take_g_safe(const JaipurData& d, int g) {
-  if (d.exchange_take_count[g] + 1 > d.market_count[g]) return false;
-  int new_tc = take_count_total(d) + 1;
-  int new_take_bits = take_types_bitset(d) | (1 << g);
-  if (!give_resources_ok(new_tc, new_take_bits, d)) return false;
-  if (new_tc >= 2) return true;  // resources + tc≥2 ⇒ commit-feasible
-  // new_tc == 1: must still have at least one further safe take so we can
-  // reach tc=2. Probe each candidate g' in the post-take state.
-  JaipurData trial = d;
-  trial.exchange_take_count[g] += 1;
-  for (int gp = 0; gp < kGoodTypes; ++gp) {
-    if (trial.exchange_take_count[gp] >= trial.market_count[gp]) continue;
-    int next_tc = new_tc + 1;  // = 2
-    int next_take_bits = new_take_bits | (1 << gp);
-    if (give_resources_ok(next_tc, next_take_bits, trial)) return true;
+// Cards p can still give from the give types after `after` (hand goods of a
+// type not taken, then camels).
+static int give_capacity(const JaipurData& d, int p,
+                         const std::array<int, kGoodTypes>& take, int after) {
+  int cap = 0;
+  for (int x = after + 1; x < kGoodTypes; ++x)
+    if (take[x] == 0) cap += d.hand_count[p][x];
+  if (after < kCamel) cap += camel_cap(d, p);
+  return cap;
+}
+
+// A take set can be paid for: 2..5 goods, enough cards of other types.
+static bool take_set_payable(const JaipurData& d, int p,
+                             const std::array<int, kGoodTypes>& take) {
+  const int total = sum_of(take);
+  return total >= 2 && total <= kMaxTrade && give_capacity(d, p, take, -1) >= total;
+}
+
+// Taking k of type g next keeps the trade completable. A single taken card
+// needs one more take type above g: adding takes only makes paying harder,
+// so one extra card is the cheapest completion to probe.
+static bool take_atom_ok(const JaipurData& d, const Prefix& pre, int g, int k) {
+  if (sum_of(pre.give) > 0 || g <= last_nonzero(pre.take)) return false;
+  if (k < 1 || k > d.market_count[g]) return false;
+  const int total = sum_of(pre.take) + k;
+  if (total > kMaxTrade) return false;
+  const int p = d.current_player;
+  auto take = pre.take;
+  take[g] += k;
+  if (total >= 2) return take_set_payable(d, p, take);
+  for (int g2 = g + 1; g2 < kGoodTypes; ++g2) {
+    if (d.market_count[g2] == 0) continue;
+    auto more = take;
+    ++more[g2];
+    if (take_set_payable(d, p, more)) return true;
   }
   return false;
 }
 
-static int compute_min_camels(const JaipurData& d) {
-  int tc = take_count_total(d);
-  int avail = available_non_overlap(d, take_types_bitset(d));
-  return std::min(std::max(0, tc - avail), d.camel_count[d.current_player]);
-}
-static int compute_max_camels(const JaipurData& d) {
-  int p = d.current_player;
-  int tc = take_count_total(d);
-  int by_count = std::min(tc, d.camel_count[p]);
-  int by_hand = kHandSize - hand_total(d, p);
-  return std::min({by_count, by_hand, tc});
+// Giving k of type x next (x = kCamel: camels) leaves a payable remainder.
+static bool give_atom_ok(const JaipurData& d, const Prefix& pre, int x, int k) {
+  const int taken = sum_of(pre.take);
+  if (taken < 2 || x <= last_nonzero(pre.give)) return false;
+  const int owed = taken - sum_of(pre.give);
+  if (k < 1 || k > owed) return false;
+  const int p = d.current_player;
+  if (x < kGoodTypes) {
+    if (pre.take[x] > 0 || k > d.hand_count[p][x]) return false;
+  } else if (k > camel_cap(d, p)) {
+    return false;
+  }
+  const int rest = owed - k;
+  return rest == 0 || give_capacity(d, p, pre.take, x) >= rest;
 }
 
-static void reset_exchange_state(JaipurData& d) {
-  d.exchange_phase = kExchPhaseIdle;
-  d.exchange_take_count.fill(0);
-  d.exchange_give_count.fill(0);
-  d.exchange_camel_count = 0;
-  d.exchange_max_camels = 0;
-  d.exchange_min_camels = 0;
-  d.exchange_total = 0;
+static void push_trade_atoms(const JaipurData& d, const Prefix& pre,
+                             std::vector<ActionId>& out) {
+  for (int g = 0; g < kGoodTypes; ++g)
+    for (int k = 1; k <= kMaxTrade; ++k)
+      if (take_atom_ok(d, pre, g, k)) out.push_back(trade_take_action(g, k));
+  for (int x = 0; x <= kCamel; ++x)
+    for (int k = 1; k <= kMaxTrade; ++k)
+      if (give_atom_ok(d, pre, x, k)) out.push_back(trade_give_action(x, k));
 }
 
-// Apply the fully-built exchange (count form).
-static void apply_exchange(JaipurData& d) {
-  int p = d.current_player;
-  int camels_give = d.exchange_camel_count;
-  // Take selected market goods into hand.
+static void apply_trade(JaipurData& d) {
+  const int p = d.current_player;
   for (int g = 0; g < kGoodTypes; ++g) {
-    int n = d.exchange_take_count[g];
-    d.market_count[g] -= n;
-    d.hand_count[p][g] += n;
+    d.market_count[g] += d.trade_give[g] - d.trade_take[g];
+    d.hand_count[p][g] += d.trade_take[g] - d.trade_give[g];
   }
-  // Give selected hand goods to market.
-  for (int g = 0; g < kGoodTypes; ++g) {
-    int n = d.exchange_give_count[g];
-    d.hand_count[p][g] -= n;
-    d.market_count[g] += n;
-  }
-  // Give camels to market.
-  d.market_count[6] += camels_give;
-  d.camel_count[p] -= camels_give;
-  // No refill — exchange keeps the market at the same size (give == take).
+  d.market_count[kCamel] += d.trade_give[kCamel];
+  d.camel_count[p] -= d.trade_give[kCamel];
+  d.trade_take.fill(0);
+  d.trade_give.fill(0);
+  // No refill: a trade keeps the market at five cards (give == take).
+}
+
+bool jaipur_trade_idle(const JaipurData& d) { return sum_of(d.trade_take) == 0; }
+
+std::vector<JaipurTrade> jaipur_trades(const JaipurData& d) {
+  std::vector<JaipurTrade> out;
+  std::vector<ActionId> atoms;
+  // Depth-first over the trade atoms: every legal atom keeps the trade
+  // completable, so each branch ends in a complete trade.
+  auto walk = [&](auto&& self, const Prefix& pre) -> void {
+    const int taken = sum_of(pre.take);
+    if (taken >= 2 && sum_of(pre.give) == taken) {
+      out.push_back({pre.take, pre.give});
+      return;
+    }
+    atoms.clear();
+    push_trade_atoms(d, pre, atoms);
+    const std::vector<ActionId> next = atoms;
+    for (ActionId a : next) {
+      Prefix child = pre;
+      if (is_trade_take_action(a)) child.take[trade_take_type(a)] += trade_take_count(a);
+      else child.give[trade_give_type(a)] += trade_give_count(a);
+      self(self, child);
+    }
+  };
+  walk(walk, prefix_of(d));
+  return out;
+}
+
+ActionId jaipur_trade_next_atom(const JaipurData& d, const JaipurTrade& t) {
+  const Prefix pre = prefix_of(d);
+  const int last_take = last_nonzero(pre.take);
+  for (int g = 0; g <= last_take; ++g)
+    if (t.take[g] != pre.take[g])
+      throw std::logic_error("jaipur_trade_next_atom: trade does not extend the prefix");
+  for (int x = 0; x <= kCamel; ++x)
+    if (pre.give[x] != 0 && t.give[x] != pre.give[x])
+      throw std::logic_error("jaipur_trade_next_atom: trade does not extend the prefix");
+  if (sum_of(pre.give) == 0)
+    for (int g = last_take + 1; g < kGoodTypes; ++g)
+      if (t.take[g] > 0) return trade_take_action(g, t.take[g]);
+  for (int x = last_nonzero(pre.give) + 1; x <= kCamel; ++x)
+    if (t.give[x] > 0) return trade_give_action(x, t.give[x]);
+  throw std::logic_error("jaipur_trade_next_atom: trade is already complete");
 }
 
 // ================================================================
-//  validate_action (phase-aware)
+//  validate_action / legal_actions (same predicates)
 // ================================================================
 bool JaipurRules::validate_action(const IGameState& state, ActionId action) const {
   const auto& d = cast_data(state);
-  if (d.terminal) return false;
-  int ph = d.exchange_phase;
-
-  if (ph == kExchPhaseIdle) {
-    if (action >= kActSellBase && action < kActSellBase + kGoodTypes) {
-      int g = action - kActSellBase;
-      return d.hand_count[d.current_player][g] >= min_sell_count(g);
-    }
-    if (action >= kActTakeBase && action < kActTakeBase + kGoodTypes) {
-      int g = action - kActTakeBase;
-      return d.market_count[g] > 0 && hand_total(d, d.current_player) < kHandSize;
-    }
-    if (action == kActTakeCamels) return d.market_count[6] > 0;
-    if (action == kActEnterExchange) {
-      // Legal iff phase=1 will have ≥1 legal take. Probe by trying each
-      // candidate first-take g with take_g_safe (the same forward-progress
-      // condition used in phase=1 legal_actions). If any g works as a
-      // starting move, the whole phase chain is guaranteed deadlock-free.
-      JaipurData trial = d;
-      trial.exchange_take_count.fill(0);
-      for (int g = 0; g < kGoodTypes; ++g) {
-        if (trial.market_count[g] > 0 && take_g_safe(trial, g)) return true;
-      }
-      return false;
-    }
-    return false;
-  }
-
-  if (ph == kExchPhaseMarket) {
-    if (action >= kActExchMktBase && action < kActExchMktBase + kGoodTypes) {
-      int g = action - kActExchMktBase;
-      if (d.exchange_take_count[g] >= d.market_count[g]) return false;
-      if (take_count_total(d) >= kMaxExchange) return false;
-      return take_g_safe(d, g);  // forward-progress guard
-    }
-    if (action == kActExchMktDone) return take_feasible(d);
-    return false;
-  }
-
-  if (ph == kExchPhaseCamel) {
-    if (action >= kActExchCamelBase && action < kActExchCamelBase + 8) {
-      int k = action - kActExchCamelBase;
-      return k >= d.exchange_min_camels && k <= d.exchange_max_camels;
-    }
-    return false;
-  }
-
-  if (ph == kExchPhaseHand) {
-    if (action >= kActExchHandBase && action < kActExchHandBase + kGoodTypes) {
-      int g = action - kActExchHandBase;
-      int take_bits = take_types_bitset(d);
-      if (take_bits & (1 << g)) return false;  // can't give a type you're taking
-      if (d.exchange_give_count[g] >= d.hand_count[d.current_player][g]) return false;
-      return true;
-    }
-    return false;
-  }
-  return false;
+  if (d.terminal || action < 0 || action >= kActionSpace) return false;
+  const int p = d.current_player;
+  const Prefix pre = prefix_of(d);
+  if (is_trade_take_action(action))
+    return take_atom_ok(d, pre, trade_take_type(action), trade_take_count(action));
+  if (is_trade_give_action(action))
+    return give_atom_ok(d, pre, trade_give_type(action), trade_give_count(action));
+  if (!jaipur_trade_idle(d)) return false;
+  if (is_take_action(action))
+    return d.market_count[action - kActTakeBase] > 0 && hand_total(d, p) < kHandSize;
+  if (action == kActTakeCamels) return d.market_count[kCamel] > 0;
+  const int g = sell_type(action), k = sell_count(action);
+  return k >= min_sell_count(g) && k <= d.hand_count[p][g];
 }
 
-// ================================================================
-//  legal_actions (phase-aware) — same graph as do_action
-// ================================================================
 std::vector<ActionId> JaipurRules::legal_actions(const IGameState& state) const {
   const auto& d = cast_data(state);
   std::vector<ActionId> r;
   if (d.terminal) return r;
-  int ph = d.exchange_phase;
-
-  if (ph == kExchPhaseIdle) {
-    int p = d.current_player;
+  const int p = d.current_player;
+  if (jaipur_trade_idle(d)) {
+    if (hand_total(d, p) < kHandSize)
+      for (int g = 0; g < kGoodTypes; ++g)
+        if (d.market_count[g] > 0) r.push_back(kActTakeBase + g);
+    if (d.market_count[kCamel] > 0) r.push_back(kActTakeCamels);
     for (int g = 0; g < kGoodTypes; ++g)
-      if (d.hand_count[p][g] >= min_sell_count(g)) r.push_back(kActSellBase + g);
-    for (int g = 0; g < kGoodTypes; ++g)
-      if (d.market_count[g] > 0 && hand_total(d, p) < kHandSize)
-        r.push_back(kActTakeBase + g);
-    if (d.market_count[6] > 0) r.push_back(kActTakeCamels);
-    if (validate_action(state, kActEnterExchange)) r.push_back(kActEnterExchange);
-    return r;
+      for (int k = min_sell_count(g); k <= d.hand_count[p][g]; ++k)
+        r.push_back(sell_action(g, k));
   }
-
-  if (ph == kExchPhaseMarket) {
-    // A take_g is legal ONLY if the resulting selection still has a path
-    // forward (i.e. some camel/hand combo can satisfy the give side once
-    // we mkt_done). take_g_safe is the user-derived sufficient check:
-    // pretend we take g, use max camels, see if hand can cover residual.
-    // This guarantees legal_actions never empties out mid-phase — no
-    // deadlock, no escape needed.
-    for (int g = 0; g < kGoodTypes; ++g) {
-      if (d.exchange_take_count[g] < d.market_count[g] &&
-          take_count_total(d) < kMaxExchange &&
-          take_g_safe(d, g))
-        r.push_back(kActExchMktBase + g);
-    }
-    // mkt_done strictly iff feasible. Enter_exchange's pre-check + take_g
-    // gating jointly ensure that some take→take_g_safe path to feasible
-    // always exists, so this is safe (legal won't empty out).
-    if (take_feasible(d)) r.push_back(kActExchMktDone);
-    return r;
-  }
-
-  if (ph == kExchPhaseCamel) {
-    for (int k = d.exchange_min_camels; k <= d.exchange_max_camels; ++k)
-      r.push_back(kActExchCamelBase + k);
-    return r;
-  }
-
-  if (ph == kExchPhaseHand) {
-    int take_bits = take_types_bitset(d);
-    int p = d.current_player;
-    for (int g = 0; g < kGoodTypes; ++g) {
-      if ((take_bits & (1 << g))) continue;
-      if (d.exchange_give_count[g] < d.hand_count[p][g])
-        r.push_back(kActExchHandBase + g);
-    }
-    return r;
-  }
+  push_trade_atoms(d, prefix_of(d), r);
   return r;
 }
 
 // ================================================================
-//  do_action_fast_impl (phase-aware)
+//  do_action_fast_impl
 // ================================================================
 void JaipurRules::do_action_fast_impl(IGameState& state, ActionId action,
                                        std::mt19937_64& rng) const {
   auto& d = cast_data_mut(state);
   if (d.terminal) return;
-  int ph = d.exchange_phase;
-
-  if (ph == kExchPhaseIdle) {
-    if (action >= kActSellBase && action < kActSellBase + kGoodTypes) {
-      apply_sell(d, action - kActSellBase, rng);
-    } else if (action >= kActTakeBase && action < kActTakeBase + kGoodTypes) {
-      apply_take_good(d, action - kActTakeBase, rng);
-    } else if (action == kActTakeCamels) {
-      apply_take_camels(d, rng);
-    } else if (action == kActEnterExchange) {
-      reset_exchange_state(d);
-      d.exchange_phase = kExchPhaseMarket;
-      return;  // no turn advance
-    }
-  } else if (ph == kExchPhaseMarket) {
-    if (action >= kActExchMktBase && action < kActExchMktBase + kGoodTypes) {
-      d.exchange_take_count[action - kActExchMktBase]++;
-      return;
-    }
-    if (action == kActExchMktDone) {
-      // legal_actions/validate gate mkt_done strictly by take_feasible —
-      // the take_g_safe gating on take_g ensures phase=1 always has a path
-      // to a feasible selection, so an infeasible mkt_done is a contract
-      // violation. No escape needed; treat as no-op rather than corrupting.
-      if (!take_feasible(d)) return;
-      d.exchange_total = take_count_total(d);
-      d.exchange_max_camels = compute_max_camels(d);
-      d.exchange_min_camels = compute_min_camels(d);
-      d.exchange_camel_count = d.exchange_min_camels;  // start at lower bound
-      d.exchange_phase = kExchPhaseCamel;
-      // If camels already cover the full take, commit now (no hand goods needed).
-      if (d.exchange_camel_count == d.exchange_total) {
-        d.exchange_give_count.fill(0);
-        apply_exchange(d);
-        reset_exchange_state(d);
-        next_turn(d);
-      }
-      return;
-    }
-  } else if (ph == kExchPhaseCamel) {
-    if (action >= kActExchCamelBase && action < kActExchCamelBase + 8) {
-      // Picking the camel count is a single decision. Set K, then either
-      // commit immediately (K covers the whole take, no hand goods needed) or
-      // advance to the hand phase to pick the remaining goods to give.
-      d.exchange_camel_count = action - kActExchCamelBase;
-      if (d.exchange_camel_count == d.exchange_total) {
-        d.exchange_give_count.fill(0);
-        apply_exchange(d);
-        reset_exchange_state(d);
-        next_turn(d);
-      } else {
-        d.exchange_phase = kExchPhaseHand;
-      }
-      return;
-    }
-  } else if (ph == kExchPhaseHand) {
-    if (action >= kActExchHandBase && action < kActExchHandBase + kGoodTypes) {
-      d.exchange_give_count[action - kActExchHandBase]++;
-      int given = give_count_total(d) + d.exchange_camel_count;
-      if (given == d.exchange_total) {
-        apply_exchange(d);
-        reset_exchange_state(d);
-        next_turn(d);
-        return;
-      }
-      return;
-    }
+  if (is_trade_take_action(action)) {
+    d.trade_take[trade_take_type(action)] += trade_take_count(action);
+    return;
   }
-
-  if (d.exchange_phase == kExchPhaseIdle)
-    next_turn(d);
+  if (is_trade_give_action(action)) {
+    d.trade_give[trade_give_type(action)] += trade_give_count(action);
+    if (sum_of(d.trade_give) < sum_of(d.trade_take)) return;
+    apply_trade(d);
+  } else if (is_take_action(action)) {
+    apply_take_good(d, action - kActTakeBase, rng);
+  } else if (action == kActTakeCamels) {
+    apply_take_camels(d, rng);
+  } else if (is_sell_action(action)) {
+    apply_sell(d, sell_type(action), sell_count(action), rng);
+  } else {
+    throw std::invalid_argument("jaipur: action id out of range");
+  }
+  next_turn(d);
 }
 
 UndoToken JaipurRules::do_action_deterministic_impl(IGameState& state, ActionId action) const {

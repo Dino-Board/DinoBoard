@@ -28,13 +28,8 @@ enum : viz::FieldId {
   kPilesExhausted,
   kBonusCount,     // all_public {kPlayers, 3}
   kBonusTotal,     // owner_only_first_axis {kPlayers}
-  kExchPhase,
-  kExchTakeCount,  // all_public {kGoodTypes}
-  kExchGiveCount,  // all_public {kGoodTypes}
-  kExchCamelCount,
-  kExchMaxCamels,
-  kExchMinCamels,
-  kExchTotal,
+  kTradeTake,      // all_public {kGoodTypes}
+  kTradeGive,      // all_public {kGoodTypes + 1}
   kGoodsTokensTaken,  // all_public {kPlayers}
   kDiscardCount,   // all_public {kGoodTypes}
   kDeckCount,      // all_hidden {kGoodTypes + 1}
@@ -74,17 +69,11 @@ const viz::VisibilitySchema& JaipurState::schema() {
     viz::declare_field(
         schema, "bonus_total",
         viz::owner_only_first_axis({kPlayers}, kPlayers));
-    // Exchange scratch (all public — it's the active player's in-progress
-    // selection, visible to all).
-    viz::declare_field(schema, "exch_phase",       viz::all_public({}, kPlayers));
-    viz::declare_field(schema, "exch_take_count",
+    // Trade prefix: the mover's chosen trade atoms (factored-actions skill).
+    viz::declare_field(schema, "trade_take",
                        viz::all_public({kGoodTypes}, kPlayers));
-    viz::declare_field(schema, "exch_give_count",
-                       viz::all_public({kGoodTypes}, kPlayers));
-    viz::declare_field(schema, "exch_camel_count", viz::all_public({}, kPlayers));
-    viz::declare_field(schema, "exch_max_camels",  viz::all_public({}, kPlayers));
-    viz::declare_field(schema, "exch_min_camels",  viz::all_public({}, kPlayers));
-    viz::declare_field(schema, "exch_total",       viz::all_public({}, kPlayers));
+    viz::declare_field(schema, "trade_give",
+                       viz::all_public({kGoodTypes + 1}, kPlayers));
     viz::declare_field(schema, "goods_tokens_taken",
                        viz::all_public({kPlayers}, kPlayers));
     // Sold goods cards lie face up on the discard pile.
@@ -218,13 +207,8 @@ void JaipurState::hash_field_slot(Hasher& h, viz::FieldId fid,
     case kPilesExhausted: h.add(data.piles_exhausted); return;
     case kBonusCount:     h.add(data.bonus_count[idx[0]][idx[1]]); return;
     case kBonusTotal:     h.add(data.bonus_total[idx[0]]); return;
-    case kExchPhase:      h.add(data.exchange_phase); return;
-    case kExchTakeCount:  h.add(data.exchange_take_count[idx[0]]); return;
-    case kExchGiveCount:  h.add(data.exchange_give_count[idx[0]]); return;
-    case kExchCamelCount: h.add(data.exchange_camel_count); return;
-    case kExchMaxCamels:  h.add(data.exchange_max_camels); return;
-    case kExchMinCamels:  h.add(data.exchange_min_camels); return;
-    case kExchTotal:      h.add(data.exchange_total); return;
+    case kTradeTake:      h.add(data.trade_take[idx[0]]); return;
+    case kTradeGive:      h.add(data.trade_give[idx[0]]); return;
     case kGoodsTokensTaken: h.add(data.goods_tokens_taken[idx[0]]); return;
     case kDiscardCount:   h.add(data.discard_count[idx[0]]); return;
     case kDeckCount:      h.add(data.deck_count[idx[0]]); return;
@@ -253,13 +237,8 @@ std::any JaipurState::read_field_slot(viz::FieldId fid,
     case kPilesExhausted: return std::any(data.piles_exhausted);
     case kBonusCount:     return std::any(data.bonus_count[idx[0]][idx[1]]);
     case kBonusTotal:     return std::any(data.bonus_total[idx[0]]);
-    case kExchPhase:      return std::any(data.exchange_phase);
-    case kExchTakeCount:  return std::any(data.exchange_take_count[idx[0]]);
-    case kExchGiveCount:  return std::any(data.exchange_give_count[idx[0]]);
-    case kExchCamelCount: return std::any(data.exchange_camel_count);
-    case kExchMaxCamels:  return std::any(data.exchange_max_camels);
-    case kExchMinCamels:  return std::any(data.exchange_min_camels);
-    case kExchTotal:      return std::any(data.exchange_total);
+    case kTradeTake:      return std::any(data.trade_take[idx[0]]);
+    case kTradeGive:      return std::any(data.trade_give[idx[0]]);
     case kGoodsTokensTaken: return std::any(data.goods_tokens_taken[idx[0]]);
     case kDiscardCount:   return std::any(data.discard_count[idx[0]]);
     case kDeckCount:      return std::any(data.deck_count[idx[0]]);
@@ -294,13 +273,8 @@ void JaipurState::write_field_slot(viz::FieldId fid,
     case kPilesExhausted: data.piles_exhausted = v; return;
     case kBonusCount:     data.bonus_count[idx[0]][idx[1]] = v; return;
     case kBonusTotal:     data.bonus_total[idx[0]] = v; return;
-    case kExchPhase:      data.exchange_phase = v; return;
-    case kExchTakeCount:  data.exchange_take_count[idx[0]] = v; return;
-    case kExchGiveCount:  data.exchange_give_count[idx[0]] = v; return;
-    case kExchCamelCount: data.exchange_camel_count = v; return;
-    case kExchMaxCamels:  data.exchange_max_camels = v; return;
-    case kExchMinCamels:  data.exchange_min_camels = v; return;
-    case kExchTotal:      data.exchange_total = v; return;
+    case kTradeTake:      data.trade_take[idx[0]] = v; return;
+    case kTradeGive:      data.trade_give[idx[0]] = v; return;
     case kGoodsTokensTaken: data.goods_tokens_taken[idx[0]] = v; return;
     case kDiscardCount:   data.discard_count[idx[0]] = v; return;
     case kDeckCount:      data.deck_count[idx[0]] = v; return;

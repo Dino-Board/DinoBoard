@@ -36,7 +36,19 @@ TOKENS = [[7, 7, 5, 5, 5], [6, 6, 5, 5, 5], [5, 5, 5, 5, 5],
           [5, 3, 3, 2, 2, 1, 1], [5, 3, 3, 2, 2, 1, 1], [4, 3, 2, 1, 1, 1, 1, 1, 1]]
 BONUS_VALUE = [[1, 2, 3], [4, 5, 6], [8, 9, 10]]
 BONUS_INIT = [[2, 3, 2], [2, 2, 2], [2, 1, 2]]
-A_SELL, A_TAKE, A_CAMELS, A_ENTER = 0, 6, 12, 13
+A_TAKE, A_CAMELS, A_SELL, A_TRADE = 0, 6, 7, 49
+
+
+def _sell(g, k):
+    return A_SELL + g * 7 + (k - 1)
+
+
+def _is_sell(a):
+    return A_SELL <= a < A_TRADE
+
+
+def _idle(sd):
+    return sum(sd["trade_take"]) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +66,7 @@ def _play_to_take_position(seed, rng, model, deck_pred):
         sd = gt.get_state_dict()
         legal = gt.get_legal_actions()
         takes = [a for a in legal if A_TAKE <= a < A_TAKE + 6]
-        if sd["exch_phase"] == 0 and takes and deck_pred(sd["deck_remaining"]):
+        if _idle(sd) and takes and deck_pred(sd["deck_remaining"]):
             return gt, actions
         a = rng.choice(takes) if (takes and rng.random() < 0.6) else rng.choice(legal)
         gt.apply_action(a)
@@ -86,8 +98,7 @@ def _revealed_refills(searcher, me, market, sims):
     after the root take, that type can only be the refill card."""
     opp = 1 - me
     tr = searcher._debug_run_mcts_with_sim_traces(sims)
-    root_net = list(tr["root_tracker"]["net_in"])
-    root_sold = list(tr["root_tracker"]["sold"])
+    root_net = list(tr["root_tracker"]["known"])
     by_sim = {}
     for e in tr["sim_traces"]:
         by_sim.setdefault(e["sim"], {})[e["step"]] = e["tracker"]
@@ -95,16 +106,16 @@ def _revealed_refills(searcher, me, market, sims):
     for steps in by_sim.values():
         if 0 not in steps or 1 not in steps:
             continue
-        n0, s0 = list(steps[0]["net_in"]), list(steps[0]["sold"])
-        n1, s1 = list(steps[1]["net_in"]), list(steps[1]["sold"])
+        n0 = list(steps[0]["known"])
+        n1 = list(steps[1]["known"])
         d0 = [n0[i] - root_net[i] for i in range(12)]
-        if s0 != root_sold or sum(abs(x) for x in d0) != 1 or 1 not in d0:
+        if sum(abs(x) for x in d0) != 1 or 1 not in d0:
             continue
         i0 = d0.index(1)
         if i0 // 6 != me:
             continue
         d1 = [n1[i] - n0[i] for i in range(12)]
-        if s1 != s0 or sum(abs(x) for x in d1) != 1 or 1 not in d1:
+        if sum(abs(x) for x in d1) != 1 or 1 not in d1:
             continue
         i1 = d1.index(1)
         if i1 // 6 != opp:
@@ -115,7 +126,7 @@ def _revealed_refills(searcher, me, market, sims):
     return revealed
 
 
-def _leak_stats(api: bool, positions=10, sims=600):
+def _leak_stats(api: bool, positions=10, sims=2500):
     """(#positions, #positions with >1 distinct refill card, reveal events,
     events equal to the true next card) over late positions."""
     model = get_test_model(GAME)
@@ -206,8 +217,7 @@ def test_initial_deal_is_a_legal_jaipur_setup():
 PUBLIC_KEYS = (
     ["market_count", "deck_remaining", "piles_exhausted",
      "bonus_remaining_3", "bonus_remaining_4", "bonus_remaining_5",
-     "exch_phase", "exch_take_count", "exch_give_count", "exch_camel_count",
-     "exch_max_camels", "exch_min_camels", "exch_total"]
+     "trade_take", "trade_give"]
     + [f"{k}_{p}" for p in (0, 1)
        for k in ("camel_count", "rupees", "bonus_count", "goods_tokens_taken")]
     + [f"price_remaining_{g}" for g in range(6)]
@@ -254,8 +264,7 @@ def test_randomize_unseen_conserves_cards_and_bonus_tokens():
     worlds = 0
     for ctx, r in _tracker_states():
         o = r["original_state"]
-        net = list(r["belief_snapshot"]["net_in"])
-        sold = list(r["belief_snapshot"]["sold"])
+        known = list(r["belief_snapshot"]["known"])
         for t in r["trial_states"]:
             worlds += 1
             assert t["discard_count"] == o["discard_count"], ctx
@@ -266,9 +275,7 @@ def test_randomize_unseen_conserves_cards_and_bonus_tokens():
                         + t["deck_count"][g] + t["discard_count"][g]) == TOTAL[g], (
                     f"{ctx}: goods type {g} not conserved in a sampled world")
                 # known information about the opponent is respected
-                if sold[6 + g]:
-                    assert t["hand_count_1"][g] == o["hand_count_1"][g], ctx
-                assert t["hand_count_1"][g] >= net[6 + g], ctx
+                assert t["hand_count_1"][g] >= known[6 + g], ctx
             assert (t["market_count"][6] + t["camel_count_0"] + t["camel_count_1"]
                     + t["deck_count"][6]) == CAMELS, ctx
             opp_total = 0
@@ -296,7 +303,7 @@ def test_sampled_worlds_vary_and_are_not_the_truth():
         o = r["original_state"]
         # Only positions where the observer does NOT know the opponent's
         # whole hand (otherwise the pile composition is fully determined).
-        unknown = sum(o["hand_count_1"]) - sum(r["belief_snapshot"]["net_in"][6:12])
+        unknown = sum(o["hand_count_1"]) - sum(r["belief_snapshot"]["known"][6:12])
         if o["is_terminal"] or unknown < 2:
             continue
         eligible += 1
@@ -430,10 +437,10 @@ def test_discard_count_tracks_sold_cards():
             a = rng.choice(s.get_legal_actions())
             s.apply_action(a)
             st = s.get_state_dict()
-            if before["exch_phase"] == 0 and a < 6:
-                n = before[f"hand_count_{p}"][a]
-                tally[a] += n
-                oversold_sales += n > before[f"price_remaining_{a}"]
+            if _is_sell(a):
+                g, n = (a - A_SELL) // 7, (a - A_SELL) % 7 + 1
+                tally[g] += n
+                oversold_sales += n > before[f"price_remaining_{g}"]
             assert st["discard_count"] == tally
             for g in range(6):
                 assert (st["market_count"][g] + st["hand_count_0"][g] + st["hand_count_1"][g]
@@ -472,21 +479,22 @@ def test_rule_heuristic_bonus_estimate_uses_public_pool_only():
             st = gt.get_state_dict()
             p = s["player"]
             assert p == gt.current_player
-            if st["exch_phase"] == 0:
+            if _idle(st):
                 visits = dict(zip(s["policy_action_ids"], s["policy_action_visits"]))
                 hand = st[f"hand_count_{p}"]
                 takes = [(visits[a], a) for a in visits if A_TAKE <= a < A_TAKE + 6]
                 for g in range(6):
                     n = hand[g]
-                    if n < 3 or g not in visits or not takes:
+                    sell_all = _sell(g, n)
+                    if n < 3 or sell_all not in visits or not takes:
                         continue
                     v_ref, a_ref = max(takes)
-                    if visits[g] < 300 or v_ref < 300:
+                    if visits[sell_all] < 300 or v_ref < 300:
                         continue        # rounding of the visit counts too coarse
                     gr = a_ref - A_TAKE
                     rem = st[f"price_remaining_{gr}"]
                     score_ref = (6.0 - gr) + hand[gr] + (0.15 * TOKENS[gr][len(TOKENS[gr]) - rem] if rem else 0.0)
-                    score_sell = score_ref + T * math.log(visits[g] / v_ref)
+                    score_sell = score_ref + T * math.log(visits[sell_all] / v_ref)
                     tier = 2 if n >= 5 else (1 if n == 4 else 0)
                     used = score_sell / (0.8 if g >= 3 else 1.0) - _tokens_gained(g, n, st[f"price_remaining_{g}"])
                     full_sum = sum(c * v for c, v in zip(BONUS_INIT[tier], BONUS_VALUE[tier]))
@@ -507,7 +515,7 @@ def test_rule_heuristic_bonus_estimate_uses_public_pool_only():
             before = st
             gt.apply_action(a)
             after = gt.get_state_dict()
-            if before["exch_phase"] == 0 and a < 6:
+            if _is_sell(a):
                 for tier in range(3):
                     if after[f"bonus_count_{p}"][tier] > before[f"bonus_count_{p}"][tier]:
                         drawn[p][tier].append(after[f"bonus_total_{p}"] - before[f"bonus_total_{p}"])
@@ -546,7 +554,7 @@ def test_midgame_bootstrap_matches_streamed_session(seed):
         assert snap == streamed.get_belief_snapshot(), (
             f"seed={seed} ply={ply}: tracker memory lost by a mid-game bootstrap")
         assert snap == gt.get_belief_snapshot()
-        nontrivial += any(snap["sold"]) or any(snap["net_in"])
+        nontrivial += any(snap["known"])
         assert attached.get_legal_actions() == gt.get_legal_actions()
     assert nontrivial >= 5
 
