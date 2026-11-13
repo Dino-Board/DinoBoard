@@ -364,6 +364,14 @@ HeuristicResult pick_impl(IGameState& state, const IGameRules& rules) {
       }
       if (opp_estimate == 0) opp_estimate = my_card;
     }
+    // A row is chosen with every card of the round face up: with two players
+    // the other card is known, and it is placed right after the row is taken.
+    if constexpr (NPlayers == 2) {
+      if (d.small_player == 0 || d.small_player == 1) {
+        int c = d.pending_commits[static_cast<size_t>(1 - d.small_player)];
+        if (c >= 1 && c <= kNumCards) opp_estimate = c;
+      }
+    }
 
     int chosen_row = findsmall_index<NPlayers>(stacks, my_card, opp_estimate);
     for (size_t i = 0; i < legal.size(); ++i) {
