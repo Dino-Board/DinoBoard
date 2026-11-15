@@ -8,7 +8,7 @@
       "model_path": "games/azul/model/azul_2p.onnx",
       "simulations": 1000,
       "c_puct": 1.4,
-      "leaf_batch_size": 8
+      "leaf_batch_size": 32
     }
   },
   "selectors": {

@@ -17,6 +17,9 @@
     },
     "train_batches_per_step": 12,
     "replay_buffer_size": 200000,
+    "compact_replay": {
+      "features_dtype": "float16"
+    },
     "playout_cap": {
       "full_simulations": 800,
       "fast_simulations": 150,
@@ -47,9 +50,9 @@
       "enabled": true,
       "leaf_batch_size": 16,
       "evaluator": {
-        "batch_size": 1024,
+        "batch_size": 2048,
         "batch_timeout_us": 30,
-        "max_queue_size": 8192,
+        "max_queue_size": 16384,
         "intra_op_num_threads": 1,
         "num_inference_threads": 2,
         "providers": []

@@ -208,6 +208,8 @@ P = 玩家数，F = 工厂数。2p / 3p / 4p 分别是 43 / 59 / 75 个 token，
 | 权重滑动平均 | `training.ema` | 0.99 |
 | FPU 降低 | `train.json::mcts.selfplay` / `mcts.eval` 的 `fpu_reduction` | 0.2 |
 
+吞吐（`.agents/skills/training/performance.md`，4070 Ti SUPER + 32 线程，400 局并发）：引导阶段由旧网络搜索，MLP 很小，瓶颈在凑批：`heuristic.json` 里 `pv_512x4.leaf_batch_size` 从 8 提到 32，每步自我对弈 36.6 s → 16.5 s（56 万 → 125 万次模拟/秒），再提到 64 只快 10%，但 1000 次模拟里同时展开的叶子太多，老师变弱。之后由 transformer 搜索时显卡跑满（约 20 万次模拟/秒、210 W），`leaf_batch_size` 16、批 1024 或 2048 都在 ±3% 内；`evaluator` 取批 2048、队列 16384，两个阶段共用。回放池用 `compact_replay` 存 fp16 特征。
+
 自我对弈的探索（`.agents/skills/training/exploration.md`）：
 
 | 项 | 配置 | 值 |
@@ -221,7 +223,7 @@ P = 玩家数，F = 工厂数。2p / 3p / 4p 分别是 43 / 59 / 75 个 token，
 为了和 Splendor 一致，Azul 的公共配置也改了三处，它们同样作用于扁平变体 `azul` 的训练和评估（网页对局读 `web.json`，不受影响）：
 
 - `train.json::mcts`：`selfplay` 和 `eval` 加 `fpu_reduction` 0.2；`eval.simulations` 400 → 2000。改动前后的评估胜率不能直接比较。
-- `heuristic.json`：`pv_512x4` 加 `leaf_batch_size` 8（引导阶段旧网络的搜索按批送显卡）。
+- `heuristic.json`：`pv_512x4` 加 `leaf_batch_size` 32（引导阶段旧网络的搜索按批送显卡，见上面的吞吐一段）。
 
 ```bash
 python3 -m training.cli --game azul_tok \
