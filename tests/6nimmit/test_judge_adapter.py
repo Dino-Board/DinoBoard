@@ -60,11 +60,13 @@ class _InProcSessionStore:
         self.store = SessionStore()
 
     def create(self, payload: dict) -> dict:
+        from conftest import get_test_model  # no deployed model is needed: random weights
         sess = self.store.create(
             game_id=payload["game_id"],
             seed=12345,
             my_seat=payload["my_seat"],
             initial_observation=payload.get("initial_observation"),
+            model_path_override=get_test_model(payload["game_id"]),
         )
         st = sess.status()
         return {"session_id": sess.session_id,
@@ -218,7 +220,7 @@ class FakeJudge:
 
         sd = self.gt.get_state_dict()
         table_after = [list(row) for row in sd["table"]]
-        self.scores = [-sd["players"][p]["bullhead_count"]
+        self.scores = [-sd["players"][p]["hand_heads"]
                        for p in range(self.num_players)]
         self.history.append({"lastc": in_flight_lastc, "table_after": table_after})
 

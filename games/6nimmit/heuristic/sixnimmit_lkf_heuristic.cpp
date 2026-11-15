@@ -397,12 +397,10 @@ void build_ecb(const SixNimmtState<NPlayers>& s,
       if (c >= 1 && c <= kNumCards) (*ecb_local)[static_cast<size_t>(c)] = true;
     }
   }
-  for (int p = 0; p < NPlayers; ++p) {
-    for (int c = 1; c <= kNumCards; ++c) {
-      if (d.bullhead_pile[static_cast<size_t>(p)]
-                          [static_cast<size_t>(c - 1)] == 1) {
-        (*ecb_local)[static_cast<size_t>(c)] = true;
-      }
+  // Every card shown is out of play: the cards taken.
+  for (int c = 1; c <= kNumCards; ++c) {
+    if (d.used[static_cast<size_t>(c - 1)] == 1) {
+      (*ecb_local)[static_cast<size_t>(c)] = true;
     }
   }
   // After seal, every committed seat's pending_commits is viz=public

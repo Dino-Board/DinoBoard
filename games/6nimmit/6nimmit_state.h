@@ -1,10 +1,10 @@
 #pragma once
 
+#include <algorithm>
 #include <any>
 #include <array>
 #include <cstdint>
-#include <memory>
-#include <string>
+#include <random>
 #include <vector>
 
 #include "../../engine/core/game_interfaces.h"
@@ -12,132 +12,101 @@
 
 namespace board_ai::sixnimmt {
 
-// Game constants — DinoBoard 6 nimmt! ships ONE rule version only:
-// 104-card full deck (1..104), 10 cards per hand, 4 row heads on table,
-// row capacity 5 (6th card triggers "eat the row"), 10 rounds total.
-// No Tactics/Logic/Professional/Tournament/long-game variants.
+// 6 nimmt!, one hand, for two to four players.
+//
+// Four row starters on the table, ten cards each from all 104, ten rounds
+// of simultaneous play; the game ends with the hand. `used` holds every card
+// shown so far; the cards the other players can hold are the ones neither
+// used, nor in my hand, nor lying face up.
+//
+// A match to 66 points (Board Game Arena) shuffles all 104 cards before
+// every hand, so nothing but the score carries over from one hand to the
+// next: it is played one hand at a time, each a game of its own. The value
+// of a hand is its bullhead margin (SixNimmtMarginValueModel), not who won
+// it.
 constexpr int kNumCards = 104;
 constexpr int kNumRows = 4;
-constexpr int kRowCapacity = 5;     // 6th card triggers eat-the-row
-constexpr int kNumRounds = 10;
-constexpr int kHandSize = 10;
+constexpr int kRowCapacity = 5;  // the sixth card takes the row
+constexpr int kHandSize = 10;    // cards per player = rounds
+constexpr int kMaxPlayers = 4;
 
-// Action space (global, shared across all variants):
-//   action_id ∈ [0, 103]   COMMIT_CARD   (card_number = action_id + 1)
-//   action_id ∈ [104, 107] SMALL_CHOOSE_ROW (row = action_id - 104)
+// Bullheads of margin that count as a whole win or loss (value +-1). Between
+// the heuristics a hand's margin is beyond 25 in 1-3.5% of the hands
+// (2-4 players).
+constexpr float kMarginScale = 25.0f;
+
+// Action space, shared by all player counts:
+//   [0, 103]    play card (card = action + 1)
+//   [104, 107]  take row (row = action - 104), for a card below every row end
 constexpr int kCommitOffset = 0;
 constexpr int kSmallChooseRowOffset = kNumCards;
 constexpr int kActionSpace = kNumCards + kNumRows;  // 108
 
-// What every seat observes in place of a COMMIT_CARD action that leaves
-// the round open (SixNimmtRules::public_action): the committed card stays
-// face down until all seats have committed, so its id must not travel
-// with the action. Outside the action space — never legal, never a
-// policy target. The card becomes public through the `card_played` event
-// and the table / pending_commits snapshot once it is revealed.
+// What the other seats observe in place of a card played face down
+// (SixNimmtRules::public_action). Outside the action space.
 constexpr int kHiddenCommitAction = kActionSpace;
 
-// Bullhead (head) value per card (1-indexed). The judge formula
-// (`%5→2 / %10→1 / %11→5 / default 1`) is reproduced exactly so
-// our scoring matches `games/6nimmit/参考/main.cpp::compute_heads()`.
+// Bullheads on a card: 55 has 7, other multiples of 11 have 5, multiples of
+// 10 have 3, other multiples of 5 have 2, the rest 1.
 inline int head_value(int card) {
   if (card < 1 || card > kNumCards) return 0;
   int h = 0;
   if (card % 5 == 0) h += 2;
   if (card % 10 == 0) h += 1;
   if (card % 11 == 0) h += 5;
-  if (h == 0) h = 1;
-  return h;
+  return h == 0 ? 1 : h;
 }
 
 template <int NPlayers>
 struct SixNimmtConfig {
-  static_assert(NPlayers >= 2 && NPlayers <= 4);
+  static_assert(NPlayers >= 2 && NPlayers <= kMaxPlayers);
   static constexpr int kPlayers = NPlayers;
-  // Encoder feature dim breakdown (§1.5):
-  //   own_hand          : 104
-  //   table dense       : 12  (4 row-tail card_ids + 4 row lengths + 4 row heads)
-  //   bullhead counts   : N   (per-player accumulated heads, normalized)
-  //   meta              : 10 (current_round one-hot) + 1 (small_phase_active)
-  //                      + N (small_player one-hot)
-  //   pending per seat  : N * 105   (1 hidden flag + 104 one-hot per seat,
-  //                                  rotated own-first; viz=0 → flag=1, all
-  //                                  one-hot=0; viz=1 → flag=0, one-hot of
-  //                                  the revealed card. Owner sees own
-  //                                  pending pre-seal; everyone sees all
-  //                                  pendings post-seal during apply phase.)
-  //   = 104 + 12 + N + 10 + 1 + N + N*105
-  //   = 127 + N*107
-  // 2p → 341, 3p → 448, 4p → 555.
-  // Note: bullhead pile one-hot (N*104) used to live here; dropped because
-  // which specific cards landed in which pile is irrelevant to value
-  // (head_value is determined by card_id alone) and irrelevant to belief
-  // (the tracker's played_by_ already records "this card is out of play").
-  // Counts are kept because they ARE the score: value head needs them.
-  static constexpr int kFeatureDim = 127 + NPlayers * 107;
 };
 
 template <int NPlayers>
 struct SixNimmtData {
   using Cfg = SixNimmtConfig<NPlayers>;
 
-  // Public scalars. `current_player` is the round-internal scan cursor:
-  // points at the seat that should act next. Rules advance it on every
-  // commit (and on phase transitions). Combined with `acts_mask` and the
-  // `pending_commits` placeholder it drives the two-stage current_player()
-  // scan that gives 6 nimmt!'s simultaneous-action semantics without any
-  // framework-level change. See .claude/skills/game-rules/simultaneous.md
-  // ("The three slots").
+  // Seat to act: the commit cursor, see current_player() below and
+  // .claude/skills/game-rules/simultaneous.md.
   int current_player = 0;
   bool terminal = false;
   int winner = -1;
   int ply = 0;
 
-  // Round state.
-  int current_round = 0;
-  bool small_phase_active = false;
+  int current_round = 0;  // rounds finished, 0..10
+  bool small_phase_active = false;  // a player is choosing a row to take
   int small_player = -1;
-  int apply_cursor = 0;
+  int apply_cursor = 0;  // face-up cards of this round already placed
 
-  // Hand[p][c-1] = 1 iff player p holds card c (1..104). owner_only viz.
-  std::array<std::array<std::int8_t, kNumCards>, Cfg::kPlayers> hand{};
+  // Bullheads taken so far.
+  std::array<int, Cfg::kPlayers> hand_heads{};
 
-  // Table: 4 rows × up-to-5 slots. Cell value = card number (1..104), 0 = empty.
-  std::array<std::array<std::int8_t, kRowCapacity>, kNumRows> table{};
-
-  // bullhead_pile[p][c-1] = 1 iff card c is in player p's eaten pile. all_public.
-  std::array<std::array<std::int8_t, kNumCards>, Cfg::kPlayers> bullhead_pile{};
-
-  // Per-player commit-phase slots. owner_only viz at base.
-  // After all `acts_mask`-active seats commit, rules call viz::reveal_slot
-  // on each pending_commits[p] (all viewers) — the simultaneous reveal is
-  // the viz flip itself, no separate apply_queue field. apply_cursor walks
-  // pending_commits in ascending-card order. SMALL pause: cursor freezes
-  // on a pending slot whose card is smaller than every row tail.
-  //
-  // Placeholder convention: 0 = "this seat has not committed yet". A
-  // perspective whose viz=0 to opp's pending slot reads stale 0 in raw
-  // session state — naturally indistinguishable from "opp not yet
-  // committed", which is exactly what makes the sim unwind opp's commit
-  // as a decision node (.claude/skills/game-rules/simultaneous.md,
-  // "The sentinel convention").
-  std::array<std::int8_t, Cfg::kPlayers> pending_commits{};
-
-  // `acts_mask[p]` = "this seat must commit during the current phase".
-  // all_public, phase-constant (rules write it once at phase boundaries:
-  // commit phase = all-true; SMALL/apply phase = single 1 at small_player;
-  // terminal = all-false). Combined with `current_player` cursor and
-  // `pending_commits` placeholder gives the simultaneous-action scan.
+  // 1 = this seat still has to play a card (commit phase) or is the one
+  // choosing a row. Public.
   std::array<std::int8_t, Cfg::kPlayers> acts_mask{};
 
-  // Internal per-seat "this seat has committed this round" flag. NOT a
-  // schema slot — does not enter hash/snapshot/wire. Maintained by rules
-  // on the GT path (used by the web state serializer / heuristics that
-  // run on truth state). On a session state where rules never run
-  // do_action_fast (snapshot-driven path), this field stays at reset
-  // value (0) — that's fine, no consumer reads session-side `committed`.
-  std::array<std::int8_t, Cfg::kPlayers> committed{};
+  // Rows: card numbers, first card first, 0 = empty.
+  std::array<std::array<std::int8_t, kRowCapacity>, kNumRows> table{};
+
+  // used[c-1] = 1: card c has been shown (as a row starter or a played
+  // card). Public. The deck is the cards that are neither used nor in a hand
+  // nor lying face down.
+  std::array<std::int8_t, kNumCards> used{};
+
+  // hand[p][c-1] = 1: player p holds card c. Owner only.
+  std::array<std::array<std::int8_t, kNumCards>, Cfg::kPlayers> hand{};
+
+  // The card each player has played this round, 0 = none (not played yet, or
+  // already placed). Hidden from the other seats while it lies face down;
+  // turned face up for everyone once all have played, and cleared one by one
+  // as the cards are placed.
+  std::array<std::int8_t, Cfg::kPlayers> pending_commits{};
 };
+
+// Deal from all 104 cards: ten cards each and four row starters.
+template <int NPlayers>
+void deal_hand(SixNimmtData<NPlayers>& d, std::mt19937_64& rng);
 
 template <int NPlayers>
 struct SixNimmtState final : public CloneableState<SixNimmtState<NPlayers>> {
@@ -146,60 +115,31 @@ struct SixNimmtState final : public CloneableState<SixNimmtState<NPlayers>> {
 
   SixNimmtState();
 
-  // Schema declares 13 fields:
-  //   public scalars : current_player (cursor), terminal, winner, ply,
-  //                    current_round, small_phase_active, small_player,
-  //                    apply_cursor
-  //   public 1D/2D   : acts_mask[N], table[4][5], bullhead_pile[N][104]
-  //   private 1D     : hand[N][104]        owner_only_first_axis
-  //                    pending_commits[N]  owner_only_first_axis at base;
-  //                                        rules flip to all-public on
-  //                                        seal (simultaneous reveal)
   static const viz::VisibilitySchema& schema();
 
   void reset_with_seed(std::uint64_t seed) override;
 
   StateHash64 state_hash() const override;
-  void hash_field_slot(Hasher& h, viz::FieldId fid,
-                       const std::vector<int>& idx) const override;
-  // Per-field bulk hash override. The framework default body walks
-  // every slot of `v` and dispatches per-slot to `hash_field_slot`;
-  // for 6 nimmt!'s big fields (bullhead_pile, hand, table) we run a
-  // tight inlined loop over the underlying std::array, removing the
-  // per-slot virtual + switch + idx-vector construction. Behavior is
-  // bit-equal: same (fid + idx[]) structural mix + same value mix.
-  void hash_field_bulk(Hasher& h, viz::FieldId fid,
-                       const viz::VizTensor& v,
-                       int perspective) const override;
-  void mask_field_slot(viz::FieldId fid,
-                       const std::vector<int>& idx) override;
-  std::any read_field_slot(viz::FieldId fid,
-                           const std::vector<int>& idx) const override;
-  void write_field_slot(viz::FieldId fid,
-                        const std::vector<int>& idx,
-                        const std::any& value) override;
+  void hash_field_slot(Hasher& h, viz::FieldId fid, const std::vector<int>& idx) const override;
+  void hash_field_bulk(Hasher& h, viz::FieldId fid, const viz::VizTensor& v, int perspective) const override;
+  void mask_field_slot(viz::FieldId fid, const std::vector<int>& idx) override;
+  std::any read_field_slot(viz::FieldId fid, const std::vector<int>& idx) const override;
+  void write_field_slot(viz::FieldId fid, const std::vector<int>& idx, const std::any& value) override;
   const viz::VisibilitySchema& schema_ref() const override { return schema(); }
-  // Two-stage scan with cursor priority — see
-  // .claude/skills/game-rules/simultaneous.md ("current_player() override").
-  //   1. If `current_player` is still a placeholder in the active range,
-  //      return it (this lets a session whose owner_only opp pending is
-  //      stale 0 still align with GT's actual actor via the public
-  //      cursor).
-  //   2. Else scan the first acts_mask=1 ∧ pending=0 seat (sim naturally
-  //      walks into opp decision nodes after self commits).
-  //   3. Fallback to small_player for the brief window between commit
-  //      seal and acts_mask phase rewrite.
+
+  // The seat to act. The players play their cards "at the same time": the
+  // public cursor names the seat that plays next; a seat whose face-down
+  // card this state cannot see (stale 0) counts as not having played yet,
+  // which is what lets a search play the opponents' cards out itself.
   int current_player() const override {
     const auto& d = data;
-    int cur = d.current_player;
-    if (cur >= 0 && cur < Cfg::kPlayers
-        && d.acts_mask[static_cast<std::size_t>(cur)]
-        && d.pending_commits[static_cast<std::size_t>(cur)] == 0) {
+    const int cur = d.current_player;
+    if (cur >= 0 && cur < Cfg::kPlayers && d.acts_mask[static_cast<std::size_t>(cur)] &&
+        d.pending_commits[static_cast<std::size_t>(cur)] == 0) {
       return cur;
     }
     for (int p = 0; p < Cfg::kPlayers; ++p) {
-      if (d.acts_mask[static_cast<std::size_t>(p)]
-          && d.pending_commits[static_cast<std::size_t>(p)] == 0) {
+      if (d.acts_mask[static_cast<std::size_t>(p)] && d.pending_commits[static_cast<std::size_t>(p)] == 0) {
         return p;
       }
     }
@@ -207,46 +147,56 @@ struct SixNimmtState final : public CloneableState<SixNimmtState<NPlayers>> {
   }
   bool is_terminal() const override { return data.terminal; }
   int num_players() const override { return Cfg::kPlayers; }
+  // The only player with the fewest bullheads, -1 if that is shared.
   int winner() const override { return data.winner; }
 
+  // The players with the most bullheads lose, everybody else wins; nobody
+  // does when all are level.
   std::vector<int> losers() const override {
-    if (!data.terminal) return {};
-    int worst = -1;
-    for (int p = 0; p < Cfg::kPlayers; ++p) {
-      int s = 0;
-      for (int c = 1; c <= kNumCards; ++c) {
-        if (data.bullhead_pile[static_cast<size_t>(p)]
-                               [static_cast<size_t>(c - 1)])
-          s += head_value(c);
-      }
-      if (s > worst) worst = s;
+    std::vector<int> out;
+    if (!data.terminal) return out;
+    int low = data.hand_heads[0], high = data.hand_heads[0];
+    for (int p = 1; p < Cfg::kPlayers; ++p) {
+      low = std::min(low, data.hand_heads[static_cast<std::size_t>(p)]);
+      high = std::max(high, data.hand_heads[static_cast<std::size_t>(p)]);
     }
-    if (worst <= 0) return {};
-    std::vector<int> result;
+    if (low == high) return out;
     for (int p = 0; p < Cfg::kPlayers; ++p) {
-      int s = 0;
-      for (int c = 1; c <= kNumCards; ++c) {
-        if (data.bullhead_pile[static_cast<size_t>(p)]
-                               [static_cast<size_t>(c - 1)])
-          s += head_value(c);
-      }
-      if (s == worst) result.push_back(p);
+      if (data.hand_heads[static_cast<std::size_t>(p)] == high) out.push_back(p);
     }
-    if (static_cast<int>(result.size()) == Cfg::kPlayers) return {};
-    return result;
+    return out;
   }
-
   std::vector<int> winners() const override {
-    if (!data.terminal) return {};
-    auto lo = losers();
-    if (lo.empty()) return {};
-    std::vector<int> result;
+    std::vector<int> out;
+    const std::vector<int> lost = losers();
+    if (lost.empty()) return out;
     for (int p = 0; p < Cfg::kPlayers; ++p) {
       bool is_loser = false;
-      for (int x : lo) { if (x == p) { is_loser = true; break; } }
-      if (!is_loser) result.push_back(p);
+      for (int x : lost) is_loser = is_loser || x == p;
+      if (!is_loser) out.push_back(p);
     }
-    return result;
+    return out;
+  }
+};
+
+// The bullhead margin of a finished hand: the other players' average minus
+// mine, in units of kMarginScale, clipped to [-1, 1]. Zero-sum unless
+// clipped.
+template <int NPlayers>
+float margin_value(const SixNimmtData<NPlayers>& d, int player) {
+  int total = 0;
+  for (int p = 0; p < NPlayers; ++p) total += d.hand_heads[static_cast<std::size_t>(p)];
+  const int mine = d.hand_heads[static_cast<std::size_t>(player)];
+  const float others = static_cast<float>(total - mine) / static_cast<float>(NPlayers - 1);
+  return std::clamp((others - static_cast<float>(mine)) / kMarginScale, -1.0f, 1.0f);
+}
+
+template <int NPlayers>
+class SixNimmtMarginValueModel final : public IStateValueModel {
+ public:
+  float terminal_value_for_player(const IGameState& state, int player) const override {
+    if (!state.is_terminal()) return 0.0f;
+    return margin_value(checked_cast<SixNimmtState<NPlayers>>(state).data, player);
   }
 };
 

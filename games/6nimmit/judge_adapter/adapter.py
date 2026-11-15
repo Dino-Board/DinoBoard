@@ -25,9 +25,9 @@ State persistence between forks:
   /observe'd on the AI session — so partial-round progress (mid-round
   SMALL forks) is preserved without double-feeding actions.
 
-Single-game (-s 1) only — long-game variants carry scores across
-sub-games and stress score-aware policy that DinoBoard 6 nimmt! does
-not currently train for.
+Single-game (-s 1) only: a DinoBoard 6 nimmt! game is one hand, like the
+judge's single game. The judge's long-game variants carry scores across
+sub-games in their own way and are not mapped.
 """
 from __future__ import annotations
 
@@ -271,13 +271,23 @@ class SideGt:
     def apply(self, action_id: int) -> dict:
         """Apply on side GT and return the (events, public_snapshot)
         trace for perspective=0 (the AI's seat)."""
+        self._hold(self._sess, action_id)
         trace = self._sess.apply_action_with_trace(action_id, 0)
         self._actions.append(action_id)
         return trace
 
+    @staticmethod
+    def _hold(sess, action_id: int) -> None:
+        """The side GT does not know the other seats' hands (it was dealt
+        its own); the rules refuse a card its player does not hold. Put the
+        card the judge reports into the acting seat's hand first."""
+        if 0 <= action_id < 104 and not sess.is_terminal:
+            sess._force_write_field("hand", [sess.current_player, action_id], 1)
+
     def clone_replay(self) -> "SideGt":
         c = SideGt(self._num_players, self._hand, self._row_heads)
         for a in self._actions:
+            self._hold(c._sess, a)
             c._sess.apply_action_with_trace(a, 0)
             c._actions.append(a)
         return c

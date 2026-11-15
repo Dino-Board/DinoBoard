@@ -368,7 +368,7 @@ def play_one_game(*, num_players: int, my_seats: set[int], external_cmds: list[s
                 # Update bullhead-derived "scores" the way 6nimmt judge does
                 # (it tracks negative bullhead totals).
                 for p in range(num_players):
-                    scores_for_external[p] = -int(new_sd["players"][p]["bullhead_count"])
+                    scores_for_external[p] = -int(new_sd["players"][p]["hand_heads"])
 
             if verbose:
                 print(f"  ply {sd['ply']} actor={actor} action_id={action_id}")
@@ -376,7 +376,7 @@ def play_one_game(*, num_players: int, my_seats: set[int], external_cmds: list[s
         final = truth.get_state_dict()
         return {
             "winner": final["winner"],
-            "bullhead_counts": [int(final["players"][p]["bullhead_count"]) for p in range(num_players)],
+            "bullhead_counts": [int(final["players"][p]["hand_heads"]) for p in range(num_players)],
             "rest_decide_avg_ms": {p: 1000.0 * ai.decide_time / max(1, ai.decide_count) for p, ai in rest_ais.items()},
             "ext_decide_avg_ms": {p: 1000.0 * ext.decide_time / max(1, ext.decide_count) for p, ext in externals.items()},
         }

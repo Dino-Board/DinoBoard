@@ -4,10 +4,9 @@ import { t, register } from '/static/general/i18n.js';
 register({
   zh: {
     'sn.title': '牛头王',
-    'sn.intro': '点击手牌出牌；若你的牌比所有行尾都小，需选择一行吃下',
+    'sn.intro': '一局 10 轮，吃到牛头最少者胜。点击手牌出牌；若你的牌比所有行尾都小，需选择一行吃下',
     'sn.player_n': '玩家{n}',
     'sn.player_self_suffix': '（你）',
-    'sn.player_score_suffix': ' · 牛头：{n}',
     'sn.action_unknown': '动作 #{id}',
     'sn.action_start': '开局',
     'sn.action_commit': '出 {card}',
@@ -24,14 +23,13 @@ register({
     'sn.bullhead_short': '牛头 ×{n}',
     'sn.head_label': '牛',
     'sn.commit_area_label': '本轮出牌',
-    'sn.bullhead_pile_label': '牛头堆 ×{n}',
+    'sn.bullhead_pile_label': '牛头 ×{n}',
   },
   en: {
     'sn.title': '6 nimmt!',
-    'sn.intro': 'Click a hand card to play; if smaller than every row tail, pick a row to eat.',
+    'sn.intro': 'A game is 10 rounds; fewest bullheads wins. Click a hand card to play; if smaller than every row tail, pick a row to eat.',
     'sn.player_n': 'Player {n}',
     'sn.player_self_suffix': ' (you)',
-    'sn.player_score_suffix': ' · bullheads: {n}',
     'sn.action_unknown': 'Action #{id}',
     'sn.action_start': 'Game start',
     'sn.action_commit': 'play {card}',
@@ -48,7 +46,7 @@ register({
     'sn.bullhead_short': 'Heads x{n}',
     'sn.head_label': 'Bull',
     'sn.commit_area_label': 'This round',
-    'sn.bullhead_pile_label': 'Bullheads x{n}',
+    'sn.bullhead_pile_label': 'x{n} bullheads',
   },
 });
 
@@ -147,13 +145,21 @@ function makeFlyingCard(card) {
   return el;
 }
 
+// Bullheads taken (the taken cards themselves are not kept: they are out
+// of play).
 function bullheadCount(pd) {
-  return pd && pd.bullhead_count != null ? pd.bullhead_count : 0;
+  return pd && pd.hand_heads != null ? pd.hand_heads : 0;
 }
 
-function bullheadCards(pd) {
-  if (!pd || !Array.isArray(pd.bullhead_pile)) return [];
-  return pd.bullhead_pile.slice().sort((a, b) => a - b);
+// Add taken bullheads to a seat's counter in the middle of an animation;
+// the next render replaces both numbers from the state.
+function bumpHeads(seat, cards) {
+  const labelEl = document.querySelector('[data-pile="' + seat + '"] .sn-pile-label');
+  if (!labelEl) return;
+  const cur = parseInt(labelEl.getAttribute('data-heads') || '0', 10) || 0;
+  const now = cur + cards.reduce((a, c) => a + headValue(c), 0);
+  labelEl.setAttribute('data-heads', String(now));
+  labelEl.textContent = t('sn.bullhead_pile_label', { n: now });
 }
 
 // Render the persistent commit area at the top of the board.
@@ -375,8 +381,7 @@ function renderPlayerArea(container, gameState, ctx) {
     titleEl.className = 'sn-seat-title';
     const headsCount = bullheadCount(pd);
     titleEl.textContent = t('sn.player_n', { n: pi })
-      + (isHuman ? t('sn.player_self_suffix') : '')
-      + t('sn.player_score_suffix', { n: headsCount });
+      + (isHuman ? t('sn.player_self_suffix') : '');
     headerEl.appendChild(titleEl);
     seatEl.appendChild(headerEl);
 
@@ -428,29 +433,15 @@ function renderPlayerArea(container, gameState, ctx) {
     }
     seatEl.appendChild(handEl);
 
-    // Bullhead pile row — visible to everyone.
+    // Bullheads of this hand — visible to everyone; taken rows fly here.
     const pileWrap = document.createElement('div');
     pileWrap.className = 'sn-pile';
     pileWrap.setAttribute('data-pile', String(pi));
     const pileLabel = document.createElement('div');
     pileLabel.className = 'sn-pile-label';
+    pileLabel.setAttribute('data-heads', String(headsCount));
     pileLabel.textContent = t('sn.bullhead_pile_label', { n: headsCount });
     pileWrap.appendChild(pileLabel);
-    const pileCards = document.createElement('div');
-    pileCards.className = 'sn-pile-cards';
-    const eaten = bullheadCards(pd);
-    for (const c of eaten) {
-      const mini = makeCardEl(c, { mini: true });
-      mini.setAttribute('data-pile-card', String(c));
-      pileCards.appendChild(mini);
-    }
-    if (!eaten.length) {
-      const empty = document.createElement('div');
-      empty.className = 'sn-pile-empty';
-      empty.textContent = '—';
-      pileCards.appendChild(empty);
-    }
-    pileWrap.appendChild(pileCards);
     seatEl.appendChild(pileWrap);
 
     // SMALL phase prompt.
@@ -703,22 +694,7 @@ function describeTransition(prevFrame, newFrame, actionInfo, actionId) {
       steps.push({
         type: 'run',
         fn: () => {
-          const pileEl = document.querySelector('[data-pile="' + smallPlayer + '"] .sn-pile-cards');
-          if (pileEl) {
-            const ph = pileEl.querySelector('.sn-pile-empty');
-            if (ph) ph.remove();
-            for (const c of eatenLocal) {
-              const mini = makeCardEl(c, { mini: true });
-              mini.setAttribute('data-pile-card', String(c));
-              pileEl.appendChild(mini);
-            }
-          }
-          const labelEl = document.querySelector('[data-pile="' + smallPlayer + '"] .sn-pile-label');
-          if (labelEl) {
-            const cur = parseInt((labelEl.textContent.match(/\d+/) || ['0'])[0], 10) || 0;
-            const inc = eatenLocal.reduce((a, c) => a + headValue(c), 0);
-            labelEl.textContent = t('sn.bullhead_pile_label', { n: cur + inc });
-          }
+          bumpHeads(smallPlayer, eatenLocal);
           for (let s = 0; s < ROW_CAPACITY; s++) {
             const slot = document.querySelector('[data-row-slot="' + smallRow + '-' + s + '"]');
             if (!slot) continue;
@@ -791,22 +767,7 @@ function describeTransition(prevFrame, newFrame, actionInfo, actionId) {
           steps.push({
             type: 'run',
             fn: () => {
-              const pileEl = document.querySelector('[data-pile="' + playerLocal + '"] .sn-pile-cards');
-              if (pileEl) {
-                const ph = pileEl.querySelector('.sn-pile-empty');
-                if (ph) ph.remove();
-                for (const c of eatenCardsLocal) {
-                  const mini = makeCardEl(c, { mini: true });
-                  mini.setAttribute('data-pile-card', String(c));
-                  pileEl.appendChild(mini);
-                }
-              }
-              const labelEl = document.querySelector('[data-pile="' + playerLocal + '"] .sn-pile-label');
-              if (labelEl) {
-                const cur = parseInt((labelEl.textContent.match(/\d+/) || ['0'])[0], 10) || 0;
-                const inc = eatenCardsLocal.reduce((a, c) => a + headValue(c), 0);
-                labelEl.textContent = t('sn.bullhead_pile_label', { n: cur + inc });
-              }
+              bumpHeads(playerLocal, eatenCardsLocal);
               for (let s = 0; s < ROW_CAPACITY; s++) {
                 const slot = document.querySelector('[data-row-slot="' + rowLocal + '-' + s + '"]');
                 if (!slot) continue;
@@ -1084,22 +1045,7 @@ function describeTransition(prevFrame, newFrame, actionInfo, actionId) {
       steps.push({
         type: 'run',
         fn: () => {
-          const pileEl = document.querySelector('[data-pile="' + playerLocal + '"] .sn-pile-cards');
-          if (pileEl) {
-            const ph = pileEl.querySelector('.sn-pile-empty');
-            if (ph) ph.remove();
-            for (const c of eatenCardsLocal) {
-              const mini = makeCardEl(c, { mini: true });
-              mini.setAttribute('data-pile-card', String(c));
-              pileEl.appendChild(mini);
-            }
-          }
-          const labelEl = document.querySelector('[data-pile="' + playerLocal + '"] .sn-pile-label');
-          if (labelEl) {
-            const cur = parseInt((labelEl.textContent.match(/\d+/) || ['0'])[0], 10) || 0;
-            const inc = eatenCardsLocal.reduce((a, c) => a + headValue(c), 0);
-            labelEl.textContent = t('sn.bullhead_pile_label', { n: cur + inc });
-          }
+          bumpHeads(playerLocal, eatenCardsLocal);
           // Clear the eaten row so the placed card has empty slots to land into.
           // Also restore visibility — flyGroup's hideFrom set the slot
           // elements to visibility:hidden, and the framework only restores

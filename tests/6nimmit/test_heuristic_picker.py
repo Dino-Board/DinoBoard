@@ -162,8 +162,8 @@ class TestHeuristicQuality:
 # ---------------------------------------------------------------------------
 
 class TestForcedSingleton:
-    """At the very last commit ply of round 10, every player has exactly
-    one card left → legal commits has size 1 → picker MUST return it."""
+    """At the last commit ply of the tenth round of a hand, every player has
+    exactly one card left → legal commits has size 1 → picker MUST return it."""
 
     def test_last_card_is_forced(self):
         for seed in range(8):

@@ -60,13 +60,13 @@ def test_eval_vs_heuristic_draw_flag_needs_equal_values(batched):
         results = [engine.run_constrained_eval_vs_heuristic(
             game_id=game, seed=s, model_path=model, simulations=8, model_is_player=s % 3,
             constrained=False, heuristic_selector="rule_v1", max_game_plies=600) for s in seeds]
+    # 6 nimmt! values are clipped bullhead margins: not zero-sum once clipped,
+    # and a seat can come out level (0) in a game that is no draw.
     for r in results:
         z = [round(float(v), 4) for v in r["terminal_z_values"]]
-        assert len(z) == 3 and abs(sum(z)) < 1e-3
+        assert len(z) == 3 and all(-1.0 <= v <= 1.0 for v in z)
         assert r["draw"] == (len(set(z)) == 1), r
-    # 3 players: nobody ever gets 0 here, so no game is a draw for the candidate.
-    assert all(outcome_label(r["terminal_z_values"][s % 3]) != "draw"
-               for r, s in zip(results, seeds))
+    assert not all(r["draw"] for r in results)
 
 
 @pytest.mark.parametrize("game_id", ["tictactoe", "harmonies", "loveletter"])

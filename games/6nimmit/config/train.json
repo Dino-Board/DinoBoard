@@ -1,37 +1,30 @@
 {
   "network": {
-    "type": "mlp",
-    "hidden_layers": [
-      256,
-      256,
-      256,
-      256,
-      256,
-      256,
-      256,
-      256,
-      256,
-      256,
-      256,
-      256
-    ],
-    "activation": "relu",
-    "residual": true,
-    "block_size": 2
+    "type": "token_transformer",
+    "d_model": 128,
+    "num_layers": 4,
+    "num_heads": 4,
+    "ffn_dim": 256,
+    "attention": "fused",
+    "relative_position_radius": 8,
+    "anchor_embedding": false
   },
   "training": {
     "steps": 10000,
-    "episodes_per_step": 100,
+    "episodes_per_step": 16,
     "batch_size": 1024,
-    "learning_rate": 0.00015,
+    "learning_rate": 0.0002,
     "lr_schedule": {
       "type": "cosine",
-      "lr_min": 3e-06
+      "lr_min": 4e-06
     },
+    "grad_clip_norm": 1.0,
+    "weight_decay": 0.0001,
     "train_batches_per_step": 3,
     "simulations_start": 1000,
     "opponent_pool_enabled": true,
     "opponent_pool_self_ratio": 0.5,
+    "inference_precision": "fp16",
     "eval_benchmarks": [
       "heuristic_free"
     ],
@@ -59,7 +52,7 @@
         "enabled": true,
         "initial": 1.0,
         "final": 0.5,
-        "decay_plies": 23
+        "decay_plies": 20
       }
     },
     "eval": {
@@ -75,8 +68,8 @@
   },
   "runtime": {
     "eval_every": 100,
-    "eval_games": 100,
+    "eval_games": 50,
     "save_every": 25,
-    "seed": 20260515
+    "seed": 20261112
   }
 }

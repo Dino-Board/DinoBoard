@@ -345,12 +345,11 @@ HeuristicResult pick_impl(IGameState& state, const IGameRules& rules) {
           if (c >= 1 && c <= kNumCards) seen[static_cast<size_t>(c)] = true;
         }
       }
-      for (int p = 0; p < NPlayers; ++p) {
-        for (int c = 1; c <= kNumCards; ++c) {
-          if (d.bullhead_pile[static_cast<size_t>(p)]
-                              [static_cast<size_t>(c - 1)] == 1) {
-            seen[static_cast<size_t>(c)] = true;
-          }
+      // Every card shown is out of play: the cards taken and the face-up
+      // cards.
+      for (int c = 1; c <= kNumCards; ++c) {
+        if (d.used[static_cast<size_t>(c - 1)] == 1) {
+          seen[static_cast<size_t>(c)] = true;
         }
       }
       for (int c = 1; c <= kNumCards; ++c) {

@@ -62,6 +62,10 @@ def build_initial_observation(num_players: int, hand: list[int],
     game_id = f"6nimmit_{num_players}p"
     gs = engine.GameSession(game_id, seed=seed)
 
+    # The cards shown so far are exactly the judge's row heads.
+    for c in range(104):
+        gs._force_write_field("used", [c], 1 if (c + 1) in row_heads else 0)
+
     # Clear seat 0's hand (the C++ reset_with_seed dealt random cards)
     # and write the judge-supplied 10. Opponent hands stay as whatever
     # the C++ deal happened to give — irrelevant since they're viz=0 to

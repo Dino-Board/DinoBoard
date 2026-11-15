@@ -85,11 +85,8 @@ def test_mcts_runs_without_apply_loop_unknown_state():
     must not trip rules' apply-loop invariant. The randomize_unseen
     placeholder-→-0 normalize is the structural fix; this test wedges a
     full game through MCTS to catch any future regression."""
-    import os
-    m = "games/6nimmit/model/6nimmit_2p.onnx"
-    if not os.path.exists(m):
-        pytest.skip("deployed 6nimmit_2p.onnx not on disk")
-    gs = dinoboard_engine.GameSession(GAME, seed=42, model_path=m)
+    from conftest import get_test_model
+    gs = dinoboard_engine.GameSession(GAME, seed=42, model_path=get_test_model(GAME))
     plies = 0
     while not gs.is_terminal and plies < 50:
         result = gs.get_ai_action(simulations=20, temperature=0.0)
