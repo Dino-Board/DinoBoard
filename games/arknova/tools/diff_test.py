@@ -92,6 +92,112 @@ def export_state(s):
     }
 
 
+TUPLE_LIST_FIELDS = ("built", "kinds")  # frame data lists of (building kind, size)
+UNEXPORTED_STATE_FIELDS = ("rng", "log", "cache_options", "cached_options", "ledger", "causes")
+
+
+def import_frame_data(kind, data):
+    out = {k: [tuple(x) for x in v] if k in TUPLE_LIST_FIELDS else v for k, v in data.items()}
+    if kind == "ab_project" and "only" not in out:  # export drops None values; only this field is nullable
+        out["only"] = None
+    return out
+
+
+def import_turn(turn):
+    if not turn:
+        return {}
+    out = {"action": turn["action"], "xtoken": turn["xtoken"],
+           "after": [(kind, who, import_frame_data(kind, data)) for kind, who, data in turn["after"]]}
+    if "strength" in turn:
+        out["strength"] = turn["strength"]
+    if "outer" in turn:
+        out["outer"] = import_turn(turn["outer"])
+    return out
+
+
+def import_player(idx, pl, mapdef):
+    from arknova.hexmap import Building, Zoo
+    from arknova.state import Player
+
+    zoo = Zoo(mapdef)
+    for i, b in enumerate(pl["buildings"]):
+        if b["id"] != i:
+            raise ValueError(f"building ids must be 0..n-1 in order, got {b['id']} at {i}")
+        cells = frozenset(tuple(c) for c in b["cells"])
+        zoo.buildings.append(Building(b["id"], b["kind"], b["size"], cells, occupied=b["occupied"], used=b["used"],
+                                      name=b["name"], extra_size=b["extra_size"]))
+        for c in cells:
+            zoo.cell_owner[c] = b["id"]
+    return Player(
+        idx=idx, zoo=zoo, slots=list(pl["slots"]), appeal=pl["appeal"], money=pl["money"],
+        conservation=pl["conservation"], reputation=pl["reputation"], xtokens=pl["xtokens"],
+        upgraded=set(pl["upgraded"]), workers=pl["workers"], workers_out=dict(pl["workers_out"]),
+        partner_zoos=list(pl["partner_zoos"]), universities=list(pl["universities"]), tokens=list(pl["tokens"]),
+        hand=list(pl["hand"]), public_hand=list(pl["public_hand"]), zoo_cards=list(pl["zoo_cards"]),
+        final_cards=list(pl["final_cards"]), housing={c: tuple(v) for c, v in pl["housing"].items()},
+        action_tokens={a: list(v) for a, v in pl["action_tokens"].items()}, card_tokens=dict(pl["card_tokens"]),
+        tucked=list(pl["tucked"]), full_cover_scored=pl["full_cover_scored"], last_action=pl["last_action"])
+
+
+def import_state(s, rng, map_defs):
+    """The inverse of export_state: an ark-nova-ai State from that layout (as both engines write it).
+    `rng` becomes the state's random source; the export does not carry one. The log starts empty.
+    `map_defs`: ark-nova-ai's map layouts by key (engine.MAP_DEFS)."""
+    from arknova.state import Frame, State
+
+    mapdef = map_defs[s["map"]]
+    return State(
+        players=[import_player(i, pl, mapdef) for i, pl in enumerate(s["players"])], rng=rng, map_name=s["map"],
+        current=s["current"], deck=list(s["deck"]), discard=list(s["discard"]), display=list(s["display"]),
+        final_deck=list(s["final_deck"]), break_pos=s["break_pos"], break_by=s["break_by"],
+        base_projects=list(s["base_projects"]), base_project_deck=list(s["base_project_deck"]),
+        borrowed=None if s["borrowed"] is None else tuple(s["borrowed"]), projects=list(s["projects"]),
+        project_tokens={c: {int(k): v for k, v in slots.items()} for c, slots in s["project_tokens"].items()},
+        donations=s["donations"], partner_zoos_available=set(s["partner_zoos_available"]),
+        universities_available=set(s["universities_available"]),
+        bonus_tiles={int(k): list(v) for k, v in s["bonus_tiles"].items()},
+        final_card_discarded=s["final_card_discarded"], end_by=s["end_by"], final_turns=s["final_turns"],
+        over=s["over"], scores=None if s["scores"] is None else list(s["scores"]), turn=import_turn(s["turn"]),
+        turn_flags=dict(s["turn_flags"]),
+        stack=[Frame(f["kind"], f["player"], import_frame_data(f["kind"], f["data"])) for f in s["stack"]])
+
+
+def strict_difference(a, b, path="$"):
+    """First place where two Python engine values differ, types included (tuple vs list, int vs str keys),
+    or None. Set-like player and state fields compare without order."""
+    if type(a) is not type(b):
+        return f"{path}: {type(a).__name__} vs {type(b).__name__}"
+    if isinstance(a, (list, tuple)):
+        if path.rsplit(".", 1)[-1] in SET_FIELDS + STATE_SET_FIELDS:
+            a, b = sorted(a), sorted(b)
+        if len(a) != len(b):
+            return f"{path}: length {len(a)} vs {len(b)}"
+        for i, (x, y) in enumerate(zip(a, b)):
+            d = strict_difference(x, y, f"{path}[{i}]")
+            if d:
+                return d
+        return None
+    if isinstance(a, dict):
+        if set(a) != set(b):
+            return f"{path}: keys {sorted(map(repr, set(a) ^ set(b)))[:6]}"
+        for k in a:
+            d = strict_difference(a[k], b[k], f"{path}.{k}")
+            if d:
+                return d
+        return None
+    if hasattr(a, "__dict__") and not isinstance(a, type):
+        skip = UNEXPORTED_STATE_FIELDS if type(a).__name__ == "State" else ()
+        if type(a).__name__ == "Zoo":
+            if a.mapdef is not b.mapdef:
+                return f"{path}.mapdef: different map definitions"
+            skip = ("mapdef",)
+        # Underscored attributes are caches (Player._icons, Zoo._placements).
+        da = {k: v for k, v in vars(a).items() if k not in skip and not k.startswith("_")}
+        db = {k: v for k, v in vars(b).items() if k not in skip and not k.startswith("_")}
+        return strict_difference(da, db, path)
+    return None if a == b else f"{path}: {a!r} vs {b!r}"
+
+
 def normalize(state):
     """Sort the set-like fields so both engines' exports compare equal regardless of member order."""
     for p in state["players"]:
@@ -160,8 +266,9 @@ class RecordingRandom:
 
 
 class Cli:
-    def __init__(self, path):
-        self.proc = subprocess.Popen([path], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
+    def __init__(self, path, rulebook=False):
+        self.proc = subprocess.Popen([path] + (["--rulebook"] if rulebook else []), stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, text=True, bufsize=1)
 
     def send(self, line, reply=True):
         self.proc.stdin.write(line + "\n")
@@ -191,10 +298,18 @@ def play(engine, cli, seed, map_name, max_steps, dump=None):
         for p in state.players:
             p.public_hand = [c for c in p.public_hand if c in p.hand]
         before = export_state(state)
+        where = f"{map_name} seed {seed} step {n} ({state.stack[-1].kind})"
+        imported = import_state(json.loads(dumps(before)), state.rng, engine.MAP_DEFS)
+        diff = strict_difference(state, imported)
+        if diff:
+            raise AssertionError(f"{where}: import_state(export_state(s)) differs from s\n  {diff}")
+        # Option order follows hand order, which the export does not keep.
+        if (sorted((dumps(canon(o.key)), o.label) for o in engine.legal_options(imported))
+                != sorted((dumps(canon(o.key)), o.label) for o in engine.legal_options(state))):
+            raise AssertionError(f"{where}: the imported state lists other options")
         cli.send("S " + dumps(before))
         py_options = [dumps(canon(o.key)) for o in engine.legal_options(state)]
         cpp_options = [dumps(o) for o in json.loads(cli.send("O"))]
-        where = f"{map_name} seed {seed} step {n} ({state.stack[-1].kind})"
         # Python lists hand-card options in hand order, C++ in card order; actions map to fixed ids anyway.
         if sorted(py_options) != sorted(cpp_options) or len(set(cpp_options)) != len(cpp_options):
             only_py = [o for o in py_options if o not in cpp_options]
@@ -206,7 +321,10 @@ def play(engine, cli, seed, map_name, max_steps, dump=None):
         hands = [list(p.hand) for p in state.players]
         recorder = RecordingRandom(state.rng)
         state.rng = recorder
+        state.ledger, state.causes, logged = [], [], len(state.log)
         engine.step(state, option)
+        py_feed = {"ledger": canon(state.ledger), "log": state.log[logged:]}
+        state.ledger = None
         state.rng = recorder.rng
         for kind, value in recorder.events:
             if kind == "shuffle":
@@ -226,6 +344,10 @@ def play(engine, cli, seed, map_name, max_steps, dump=None):
                     json.dump({"before": before, "option": canon(option.key), "python": export_state(state),
                                "cpp": cpp_after}, f)
             raise AssertionError(f"{where}: state differs after {dumps(canon(option.key))}\n  {diff}")
+        cpp_feed = json.loads(cli.send("R"))
+        if cpp_feed != py_feed:
+            raise AssertionError(f"{where}: feed differs after {dumps(canon(option.key))}\n"
+                                 f"  python: {dumps(py_feed)}\n  c++:    {dumps(cpp_feed)}")
     raise AssertionError(f"{map_name} seed {seed}: game did not finish in {max_steps} steps")
 
 
@@ -239,12 +361,15 @@ def main():
     ap.add_argument("--maps", default="all",
                     help="comma-separated map keys (map0, plan1..plan8, plana) played in turn, or all")
     ap.add_argument("--dump", help="on a state mismatch, write the state before, the option and both results here")
+    ap.add_argument("--rulebook", action="store_true",
+                    help="run arknova_diff_cli with --rulebook, for a reference that follows the rulebook "
+                         "where ark-nova-ai departs from it (a fork with those places fixed)")
     args = ap.parse_args()
     sys.path.insert(0, args.ref)
     from arknova import engine
 
     maps = list(engine.MAP_DEFS) if args.maps == "all" else args.maps.split(",")
-    cli = Cli(args.cli)
+    cli = Cli(args.cli, args.rulebook)
     t0, steps = time.time(), 0
     for g in range(args.seed, args.seed + args.games):
         steps += play(engine, cli, g, maps[g % len(maps)], args.max_steps, args.dump)

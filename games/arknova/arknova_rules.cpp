@@ -8,24 +8,18 @@
 
 namespace board_ai::arknova {
 
+void RngChance::shuffle(std::vector<CardIdx>& cards) {
+  for (int i = static_cast<int>(cards.size()) - 1; i > 0; --i) {
+    std::swap(cards[i], cards[std::uniform_int_distribution<int>(0, i)(rng_)]);
+  }
+}
+
+CardIdx RngChance::pick(const std::vector<CardIdx>& candidates) {
+  if (candidates.empty()) throw std::logic_error("arknova: pick from no candidates");
+  return candidates[std::uniform_int_distribution<std::size_t>(0, candidates.size() - 1)(rng_)];
+}
+
 namespace {
-
-class RngChance final : public Chance {
- public:
-  explicit RngChance(std::mt19937_64& rng) : rng_(rng) {}
-  void shuffle(std::vector<CardIdx>& cards) override {
-    for (int i = static_cast<int>(cards.size()) - 1; i > 0; --i) {
-      std::swap(cards[i], cards[std::uniform_int_distribution<int>(0, i)(rng_)]);
-    }
-  }
-  CardIdx pick(const std::vector<CardIdx>& candidates) override {
-    if (candidates.empty()) throw std::logic_error("arknova: pick from no candidates");
-    return candidates[std::uniform_int_distribution<std::size_t>(0, candidates.size() - 1)(rng_)];
-  }
-
- private:
-  std::mt19937_64& rng_;
-};
 
 // Extends the prefix through forced atoms; applies the option when complete. Returns whether an
 // option was applied.

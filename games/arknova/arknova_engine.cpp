@@ -414,6 +414,7 @@ void check_end(State& s, bool during_break) {
     if (s.players[q].victory_points() >= 0) {
       s.end_by = static_cast<std::int8_t>(q);
       s.final_turns = static_cast<std::int8_t>(during_break ? kPlayers : kPlayers - 1);
+      if (g_feed) g_feed->log.push_back("P" + std::to_string(q) + " triggers the end of the game");
       return;
     }
   }
@@ -534,6 +535,7 @@ void break_auto(State& s, int fi, Chance& ch) {
   Frame& f = frame(s, fi);
   int phase = f.d[fd::phase];
   if (phase == 0) {
+    if (g_feed) feed_note(f.player, "break_begins");
     f.d[fd::phase] = 1;
     for (int q = kPlayers - 1; q >= 0; --q) {
       const Player& pl = s.players[q];
@@ -557,6 +559,7 @@ void break_auto(State& s, int fi, Chance& ch) {
       }
     }
     refill_display(s, ch);
+    if (g_feed) feed_note(f.player, "break_reset");
     f.d[fd::break_order_n] = kPlayers;
     for (int i = 0; i < kPlayers; ++i) f.d[fd::break_order + i] = static_cast<std::int16_t>((f.player + i) % kPlayers);
   } else if (phase == 2) {
@@ -570,12 +573,23 @@ void break_auto(State& s, int fi, Chance& ch) {
     f.d[fd::break_order + n - 1] = kNull;
     f.d[fd::break_order_n] = static_cast<std::int16_t>(n - 1);
     Player& pl = s.players[p];
-    gain(s, p, EffectKind::kEffMoney, appeal_income(pl.appeal) + pl.zoo.kiosk_income());
-    token_income(s, p);
+    const int income = appeal_income(pl.appeal) + pl.zoo.kiosk_income();
+    {
+      FeedCause cause([] { return std::string("[\"income\",\"appeal\"]"); });
+      gain(s, p, EffectKind::kEffMoney, income);
+    }
+    if (g_feed) g_feed->log.push_back("P" + std::to_string(p) + " income " + std::to_string(income));
+    {
+      FeedCause cause([] { return std::string("[\"income\",\"token\"]"); });
+      token_income(s, p);
+    }
     std::vector<CardIdx> zoo(pl.zoo_cards, pl.zoo_cards + pl.n_zoo_cards);
     for (auto it = zoo.rbegin(); it != zoo.rend(); ++it) {
-      if (has_income(*it)) income_effect(s, *it, p);
+      if (!has_income(*it)) continue;
+      FeedCause cause([&] { return "[\"income\"," + json_string(card_id_string(*it)) + "]"; });
+      income_effect(s, *it, p);
     }
+    FeedCause cause([] { return std::string("[\"income\",\"map\"]"); });
     map_break_income(s, p);
   } else {
     pop(s, fi);
@@ -694,6 +708,15 @@ void step(State& s, const Option& option, Chance& ch) {
     engine_error("illegal option " + option_to_json(s, option) + " for " + frame_kind_name(s.top().kind));
   }
   int fi = s.stack_n - 1;
+  std::string label;
+  if (g_feed) {
+    label = option_label(s, option);
+    g_feed->log.push_back("P" + std::to_string(s.stack[fi].player) + " " + frame_kind_name(s.stack[fi].kind) + ": " +
+                          label);
+  }
+  FeedCause cause([&] {
+    return "[\"move\"," + json_string(frame_kind_name(s.stack[fi].kind)) + "," + json_string(label) + "]";
+  });
   if (option.head == Head::harbor) {
     harbor_apply(s, option);
   } else {

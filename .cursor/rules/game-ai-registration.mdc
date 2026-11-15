@@ -27,6 +27,7 @@ alwaysApply: false
 | `episode_stats_extractor` | `EpisodeStatsExtractor` | Optional | Per-episode training statistics |
 | `adjudicator` | `GameAdjudicator` | Optional | Early game termination |
 | `auxiliary_scorer` | `AuxiliaryScorer` | Optional | Extra scoring for tail solver |
+| `final_score_extractor` | `FinalScoreExtractor` | Optional | One score per seat from a terminal state (e.g. victory points). Episodes then report `final_scores`; required by `training.score_head` (see `training/katago-techniques.md`) |
 | `training_action_filter` | `TrainingActionFilter` | Optional | Filter actions during training |
 | `public_event_extractor` | `PublicEventExtractor` | Snapshot | Full events + snapshot extractor |
 | `events_only_extractor` | `EventsOnlyExtractor` | Snapshot | Sim-only events (no snapshot overhead) |
@@ -34,6 +35,11 @@ alwaysApply: false
 | `belief_feature_extractor` | `unique_ptr<IBeliefFeatureExtractor>` | Optional | Belief net input features |
 | `belief_model_path` | `string` | Optional | Path to belief ONNX model, usually injected by runtime/training rather than hard-coded in register.cpp |
 | `belief_label_extractor` | `unique_ptr<IBeliefLabelExtractor>` | Optional | GT-side belief training labels |
+| `external_state_loader` | `ExternalStateLoader` | Optional | Load a state exported by another engine of the game as the truth state (`GameSession.load_external_state`); AI views are rebuilt masked |
+| `external_option_lister` | `ExternalOptionLister` | Optional | Pending options as (other engine's key, atom sequence), consistent with the applied atoms (`GameSession.external_options`) |
+| `external_rules_switch` | `ExternalRulesSwitch` | Optional | Follow the other engine where it departs from the rulebook, process-wide (`set_external_rules`) |
+| `external_host_factory` | `ExternalHostFactory` | Optional | Referee a game on the other engine's board (`ExternalHost`): truth, option keys and texts in that engine's format, one decision at a time (single-option ones too); `step` returns a game-defined move record (e.g. its activity feed) |
+| `external_rules_query` | `ExternalRulesQuery` | Optional | Answer that board's rule questions about a state in its layout (`external_rules_query`), so its hints follow this engine's rules |
 
 ## Type signatures
 
@@ -57,10 +63,21 @@ using EpisodeStatsExtractor = std::function<
 using GameAdjudicator = std::function<int(const IGameState& state)>;
 using AuxiliaryScorer = std::function<float(
     const IGameState& state, int player, int depth_remaining)>;
+using FinalScoreExtractor = std::function<std::vector<float>(const IGameState& final_state)>;
 using TrainingActionFilter = std::function<std::vector<ActionId>(
     const IGameState& state, const IGameRules& rules,
     const std::vector<ActionId>& legal)>;
 using TailSolveTrigger = std::function<bool(const IGameState& state, int ply)>;
+using ExternalStateLoader = std::function<void(IGameState& state, const std::string& json)>;
+using ExternalOptionLister = std::function<std::vector<std::pair<std::string,
+    std::vector<ActionId>>>(const IGameState& state)>;
+using ExternalRulesSwitch = std::function<void(bool enabled)>;
+// IExternalHost: clone, is_terminal, to_move, winners, options() -> (key, text) pairs,
+// step(key) -> move record, state_json(); the host holds the truth and is never an AI input.
+using ExternalHostFactory = std::function<std::unique_ptr<IExternalHost>(
+    std::uint64_t seed, const std::string& setup)>;
+using ExternalRulesQuery = std::function<std::string(
+    const std::string& state_json, const std::string& question)>;
 ```
 
 ## Minimal registration (fully-public game)

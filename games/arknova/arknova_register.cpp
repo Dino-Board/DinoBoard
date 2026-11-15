@@ -87,6 +87,49 @@ std::vector<std::pair<std::string, std::vector<ActionId>>> ark_nova_ai_options(c
   return out;
 }
 
+// ark-nova-ai's board refereed by this engine: its decisions (option keys as option_to_json writes
+// them) and its state layout (state_to_json).
+class ArknovaHost final : public board_ai::IExternalHost {
+ public:
+  ArknovaHost(std::uint64_t seed, const std::string& map_key) : rng_(seed) {
+    const int map = map_by_key(map_key);
+    if (map < 0) throw std::runtime_error("arknova host: unknown map '" + map_key + "'");
+    new_game(core_, rng_, map);
+  }
+  std::unique_ptr<board_ai::IExternalHost> clone() const override { return std::make_unique<ArknovaHost>(*this); }
+  bool is_terminal() const override { return core_.over; }
+  int to_move() const override {
+    if (core_.over) throw std::runtime_error("arknova host: the game is over");
+    return core_.top().player;
+  }
+  std::vector<int> winners() const override { return board_ai::arknova::winners(core_); }
+  std::vector<std::pair<std::string, std::string>> options() override {
+    std::vector<std::pair<std::string, std::string>> out;
+    for (const Option& o : legal_options(core_)) out.emplace_back(option_to_json(core_, o), option_label(core_, o));
+    return out;
+  }
+  // The feed: ark-nova-ai's ledger and log lines of the move (Feed, feed_json).
+  std::string step(const std::string& key) override {
+    for (const Option& o : legal_options(core_)) {
+      if (option_to_json(core_, o) == key) {
+        RngChance chance(rng_);
+        Feed feed;
+        {
+          FeedScope recording(feed);
+          board_ai::arknova::step(core_, o, chance);
+        }
+        return feed_json(feed);
+      }
+    }
+    throw std::runtime_error("arknova host: no legal option " + key);
+  }
+  std::string state_json() const override { return state_to_json(core_); }
+
+ private:
+  State core_;
+  std::mt19937_64 rng_;
+};
+
 board_ai::GameBundle make_arknova(const std::string& game_id, std::uint64_t seed) {
   board_ai::GameBundle b;
   b.game_id = game_id;
@@ -116,6 +159,10 @@ board_ai::GameBundle make_arknova(const std::string& game_id, std::uint64_t seed
   b.external_state_loader = load_ark_nova_ai_state;
   b.external_option_lister = ark_nova_ai_options;
   b.external_rules_switch = [](bool enabled) { g_upstream_rules = enabled; };
+  b.external_host_factory = [](std::uint64_t seed, const std::string& map_key) -> std::unique_ptr<board_ai::IExternalHost> {
+    return std::make_unique<ArknovaHost>(seed, map_key);
+  };
+  b.external_rules_query = rules_answer;
   return b;
 }
 

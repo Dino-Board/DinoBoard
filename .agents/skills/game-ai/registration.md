@@ -31,6 +31,8 @@
 | `external_state_loader` | `ExternalStateLoader` | Optional | Load a state exported by another engine of the game as the truth state (`GameSession.load_external_state`); AI views are rebuilt masked |
 | `external_option_lister` | `ExternalOptionLister` | Optional | Pending options as (other engine's key, atom sequence), consistent with the applied atoms (`GameSession.external_options`) |
 | `external_rules_switch` | `ExternalRulesSwitch` | Optional | Follow the other engine where it departs from the rulebook, process-wide (`set_external_rules`) |
+| `external_host_factory` | `ExternalHostFactory` | Optional | Referee a game on the other engine's board (`ExternalHost`): truth, option keys and texts in that engine's format, one decision at a time (single-option ones too); `step` returns a game-defined move record (e.g. its activity feed) |
+| `external_rules_query` | `ExternalRulesQuery` | Optional | Answer that board's rule questions about a state in its layout (`external_rules_query`), so its hints follow this engine's rules |
 
 ## Type signatures
 
@@ -63,6 +65,12 @@ using ExternalStateLoader = std::function<void(IGameState& state, const std::str
 using ExternalOptionLister = std::function<std::vector<std::pair<std::string,
     std::vector<ActionId>>>(const IGameState& state)>;
 using ExternalRulesSwitch = std::function<void(bool enabled)>;
+// IExternalHost: clone, is_terminal, to_move, winners, options() -> (key, text) pairs,
+// step(key) -> move record, state_json(); the host holds the truth and is never an AI input.
+using ExternalHostFactory = std::function<std::unique_ptr<IExternalHost>(
+    std::uint64_t seed, const std::string& setup)>;
+using ExternalRulesQuery = std::function<std::string(
+    const std::string& state_json, const std::string& question)>;
 ```
 
 ## Minimal registration (fully-public game)

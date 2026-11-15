@@ -246,6 +246,26 @@ class Chance {
 // occupied standard enclosure meeting its needs (pp. 12, 15).
 extern bool g_upstream_rules;
 
+// What a real move did, for a board's activity feed: ark-nova-ai's state.ledger (gains and notes,
+// each with its innermost cause) and its log lines, all as JSON arrays and strings. Recorded only while
+// g_feed is set (a host playing a move), so search pays one pointer test per event.
+struct Feed {
+  std::vector<std::string> ledger;
+  std::vector<std::string> causes;  // innermost last
+  std::vector<std::string> log;
+};
+extern thread_local Feed* g_feed;
+// Records into `f` while it lives.
+class FeedScope {
+ public:
+  explicit FeedScope(Feed& f) { g_feed = &f; }
+  ~FeedScope() { g_feed = nullptr; }
+  FeedScope(const FeedScope&) = delete;
+  FeedScope& operator=(const FeedScope&) = delete;
+};
+// {"ledger": [...], "log": [...]}
+std::string feed_json(const Feed& f);
+
 // Python new_game on map `map` (map_def index) with this engine's own shuffles (the differential
 // test imports Python's setup).
 void new_game(State& s, std::mt19937_64& rng, int map = 0);

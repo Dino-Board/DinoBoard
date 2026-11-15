@@ -7,13 +7,9 @@
 
 namespace board_ai::arknova {
 
-namespace {
-
 int animal_count(const State& s, int p, int strength) {
   return kAnimalsTable[is_upgraded(s, p, kAnimals)][std::min(strength, 5) - 1];
 }
-
-}  // namespace
 
 int animals_strength_needed(const Player& pl) {
   const auto& row = kAnimalsTable[pl.is_upgraded(kAnimals)];

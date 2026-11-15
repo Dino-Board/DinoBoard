@@ -13,6 +13,17 @@
 
 namespace board_ai::arknova {
 
+// Chance outcomes drawn from `rng`.
+class RngChance final : public Chance {
+ public:
+  explicit RngChance(std::mt19937_64& rng) : rng_(rng) {}
+  void shuffle(std::vector<CardIdx>& cards) override;
+  CardIdx pick(const std::vector<CardIdx>& candidates) override;
+
+ private:
+  std::mt19937_64& rng_;
+};
+
 class ArknovaRules final : public IGameRules {
  public:
   bool validate_action(const IGameState& state, ActionId action) const override;

@@ -538,7 +538,13 @@ void hunter(State& s, int p, int value, Chance& ch) {
 
 void resolve_abilities(State& s, int p, CardIdx c, Chance& ch) {
   const CardDef& d = card(c);
-  for (int i = d.n_abilities - 1; i >= 0; --i) resolve_keyword(s, p, d.abilities[i].keyword, d.abilities[i].value, ch);
+  for (int i = d.n_abilities - 1; i >= 0; --i) {
+    FeedCause cause([&] {
+      return "[\"ability\"," + json_string(card_id_string(c)) + "," + json_string(keyword_name(d.abilities[i].keyword)) +
+             "]";
+    });
+    resolve_keyword(s, p, d.abilities[i].keyword, d.abilities[i].value, ch);
+  }
 }
 
 void register_ability_frames() {

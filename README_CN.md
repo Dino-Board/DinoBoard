@@ -93,13 +93,16 @@ open http://localhost:8000
 ### 在 ark-nova-ai 的界面上玩 Ark Nova
 
 DinoBoard 没有自己的 Ark Nova 页面。`scripts/arknova_board.py` 启动
-[ark-nova-ai](https://github.com/collinfeng/ark-nova-ai)（MIT，需单独 clone）的服务器，只提供 Map 0
-和两个对手：`dinoboard`（DinoBoard 的 token transformer + MCTS，默认用
-`games/arknova/model/arknova_2p.onnx`，目前是随机初始化的网络，`--model` 可换）和 ark-nova-ai 的 `beam_3x8` 搜索。
+[ark-nova-ai](https://github.com/collinfeng/ark-nova-ai)（MIT，需单独 clone）的服务器，用它的页面和登录，
+裁判是 DinoBoard 的 C++ 引擎：对局、选项文字、活动记录和页面上的规则提示都来自 C++，不加载 ark-nova-ai 的规则。
+`--ref` 要指向改过的 checkout：修好了 ark-nova-ai 与规则书不符的三处，并带有 `arknova/play/table.py` 和
+`arknova/play/rules.py` 两个接口（见 `docs/games/arknova_api.md`）。只提供 Map 0 和两个对手：`dinoboard`
+（DinoBoard 的 token transformer + MCTS，默认用 `games/arknova/model/arknova_2p.onnx`，`--model` 可换）和
+C++ 版的 `beam_3x8` 搜索。
 
 ```bash
-python scripts/arknova_board.py --ref ~/ref/ark-nova-ai   # [--model m.onnx] [--profile web_casual]
-# 页面：cd ~/ref/ark-nova-ai/web && pnpm install && pnpm build，然后打开 http://127.0.0.1:8765
+python scripts/arknova_board.py --ref <改过的 checkout>   # [--model m.onnx] [--profile web_casual]
+# 页面：在该 checkout 里 cd web && pnpm install && pnpm build，然后打开 http://127.0.0.1:8765
 ```
 
 ### AI API

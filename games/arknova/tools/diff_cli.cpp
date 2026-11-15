@@ -70,6 +70,7 @@ int main(int argc, char** argv) {
   g_upstream_rules = !(argc > 1 && std::string(argv[1]) == "--rulebook");
   State state;
   ReplayChance chance;
+  Feed feed;  // of the last P
   std::string line;
   while (std::getline(std::cin, line)) {
     if (line.empty()) continue;
@@ -104,9 +105,15 @@ int main(int argc, char** argv) {
           if (option_to_json(state, o) == arg) chosen = &o;
         }
         if (!chosen) throw std::runtime_error("option not legal in C++: " + arg);
-        step(state, *chosen, chance);
+        feed = Feed();
+        {
+          FeedScope recording(feed);
+          step(state, *chosen, chance);
+        }
         if (!chance.queue.empty()) throw std::runtime_error("unused replayed outcomes after the step");
         std::cout << state_to_json(state) << "\n";
+      } else if (cmd == 'R') {
+        std::cout << feed_json(feed) << "\n";
       } else {
         throw std::runtime_error(std::string("unknown command ") + cmd);
       }

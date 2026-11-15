@@ -4572,6 +4572,46 @@ PYBIND11_MODULE(dinoboard_engine, m) {
     bundle.external_rules_switch(enabled);
   }, py::arg("game_id"), py::arg("enabled"));
 
+  // GameBundle::external_rules_query: a rule question about a state in the other engine's layout.
+  m.def("external_rules_query", [](const std::string& game_id, const std::string& state_json,
+                                   const std::string& question) {
+    static std::mutex mu;
+    static std::map<std::string, ExternalRulesQuery> queries;  // building a bundle per question is slow
+    ExternalRulesQuery query;
+    {
+      std::lock_guard<std::mutex> lock(mu);
+      auto it = queries.find(game_id);
+      if (it == queries.end()) {
+        GameBundle bundle = GameRegistry::instance().create_game(game_id, 0);
+        if (!bundle.external_rules_query) {
+          throw std::runtime_error("external_rules_query: game '" + game_id + "' registers no external_rules_query");
+        }
+        it = queries.emplace(game_id, bundle.external_rules_query).first;
+      }
+      query = it->second;
+    }
+    return query(state_json, question);
+  }, py::arg("game_id"), py::arg("state_json"), py::arg("question"));
+
+  // GameBundle::external_host_factory: the game refereed here on its other engine's board.
+  py::class_<IExternalHost>(m, "ExternalHost")
+      .def(py::init([](const std::string& game_id, std::uint64_t seed, const std::string& setup) {
+             GameBundle bundle = GameRegistry::instance().create_game(game_id, 0);
+             if (!bundle.external_host_factory) {
+               throw std::runtime_error("ExternalHost: game '" + game_id + "' registers no external_host_factory");
+             }
+             return bundle.external_host_factory(seed, setup);
+           }),
+           py::arg("game_id"), py::arg("seed"), py::arg("setup"))
+      .def("clone", &IExternalHost::clone)
+      .def_property_readonly("is_terminal", &IExternalHost::is_terminal)
+      .def_property_readonly("to_move", &IExternalHost::to_move)
+      .def_property_readonly("winners", &IExternalHost::winners)
+      .def("options", &IExternalHost::options,
+           "The pending decision as (option key JSON, option text) pairs, in the other engine's format.")
+      .def("step", &IExternalHost::step, py::arg("key"))
+      .def("state_json", &IExternalHost::state_json);
+
   py::class_<GameSessionWrapper>(m, "GameSession")
       .def(py::init<const std::string&, std::uint64_t, const std::string&, bool,
                     const std::string&, const std::vector<std::string>&>(),

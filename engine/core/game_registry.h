@@ -164,6 +164,32 @@ using ExternalOptionLister =
     std::function<std::vector<std::pair<std::string, std::vector<ActionId>>>(const IGameState& state)>;
 using ExternalRulesSwitch = std::function<void(bool enabled)>;
 
+// Hosting a game on that engine's board with this engine as the referee: the game advances here,
+// one decision at a time as that engine lists them (single-option decisions included), and the board
+// reads it in that engine's state layout. The host holds the full truth state, like the referee of a
+// game between people; it is never an input of an AI session (those still get masked views).
+class IExternalHost {
+ public:
+  virtual ~IExternalHost() = default;
+  virtual std::unique_ptr<IExternalHost> clone() const = 0;
+  virtual bool is_terminal() const = 0;
+  virtual int to_move() const = 0;  // the player of the pending decision
+  virtual std::vector<int> winners() const = 0;
+  // The pending decision as (that engine's option key, option text).
+  virtual std::vector<std::pair<std::string, std::string>> options() = 0;
+  // Plays the option with this key, drawing chance from the host's own random source. Returns what
+  // the move did for the board's activity feed (game-defined JSON).
+  virtual std::string step(const std::string& key) = 0;
+  virtual std::string state_json() const = 0;
+};
+// `setup` is game-defined (Ark Nova: the map key); `seed` seeds the host's random source.
+using ExternalHostFactory =
+    std::function<std::unique_ptr<IExternalHost>(std::uint64_t seed, const std::string& setup)>;
+// The rule questions that engine's board asks to explain a state (can this card be played, what does
+// it cost), answered by this engine: a state in that engine's layout and a game-defined question, both
+// JSON; returns the answer as JSON.
+using ExternalRulesQuery = std::function<std::string(const std::string& state_json, const std::string& question)>;
+
 struct GameBundle {
   std::unique_ptr<IGameState> state;
   std::unique_ptr<IGameRules> rules;
@@ -216,6 +242,8 @@ struct GameBundle {
   ExternalStateLoader external_state_loader;
   ExternalOptionLister external_option_lister;
   ExternalRulesSwitch external_rules_switch;
+  ExternalHostFactory external_host_factory;
+  ExternalRulesQuery external_rules_query;
 
   // Belief network plumbing (Coup belief net plan). Optional — only
   // games whose `IBeliefTracker::prepare_for_root` consults a learned

@@ -12,6 +12,31 @@ namespace board_ai::arknova {
 
 using IconCounts = std::array<std::int16_t, kNumIcons>;
 
+// ---- activity feed (state.ledger, under, note, log; see Feed) -------------------------------
+
+// ark-nova-ai's under(state, cause, ...): the cause `make()` returns (a JSON array) is the reason for
+// the gains made while this object lives. `make` only runs while a feed is recorded.
+class FeedCause {
+ public:
+  template <class Make>
+  explicit FeedCause(Make make) : on_(g_feed != nullptr) {
+    if (on_) g_feed->causes.push_back(make());
+  }
+  ~FeedCause() {
+    if (on_) g_feed->causes.pop_back();
+  }
+  FeedCause(const FeedCause&) = delete;
+  FeedCause& operator=(const FeedCause&) = delete;
+
+ private:
+  bool on_;
+};
+std::string json_string(const std::string& s);
+std::string card_id_string(CardIdx c);  // arknova_json.h
+// Callers test g_feed first, so the arguments are only built while a feed is recorded.
+void feed_gain(int p, EffectKind kind, int amount);
+void feed_note(int p, const char* what, int detail = kNull);
+
 // ---- registries (state.CHOICES / AUTOS / ACTIONS) ---------------------------------------
 
 using OptionsFn = void (*)(State& s, int fi, std::vector<Option>& out);
@@ -86,6 +111,7 @@ struct Housing {
 };
 std::vector<Housing> housings(const Player& pl, CardIdx c);
 int animal_cost(const Player& pl, CardIdx c);
+int animal_count(const State& s, int p, int strength);  // animals an Animals action of this strength plays
 void release_animal(State& s, int p, CardIdx c);
 HousingEntry* find_housing(Player& pl, CardIdx c);
 // The animal of housing entry `h` (in a standard enclosure) leaves it. Per the rules the enclosure
@@ -220,6 +246,7 @@ std::vector<KindSize> placeable_buildings(const State& s, int p);
 int project_icon_count(const Player& pl, ProjIcon icon);
 // Money the next donation costs.
 int next_donation_cost(const State& s);
+int workers_needed(const Player& pl, int task);  // workers the task would take now, -1 when blocked
 // Per slot position 1..3: whether player p could support the project there right now (slot free,
 // not yet supported by p, condition met, a map token left). The strength and the workers of an
 // Association action are not part of it. Works for projects in play, in a hand or on the display.

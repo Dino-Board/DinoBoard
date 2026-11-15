@@ -5,6 +5,7 @@
 #include <cstring>
 #include <map>
 #include <stdexcept>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -990,6 +991,337 @@ std::string option_to_json(const State& s, const Option& o) {
   return w.out;
 }
 
-std::string option_label(const State& s, const Option& o) { return option_to_json(s, o); }
+// ---- activity feed -------------------------------------------------------------------------
+
+thread_local Feed* g_feed = nullptr;
+
+std::string json_string(const std::string& s) {
+  Writer w;
+  w.str(s);
+  return w.out;
+}
+
+namespace {
+
+void feed_entry(const std::string& head, int p, const std::string& middle) {
+  g_feed->ledger.push_back("[\"" + head + "\"," + std::to_string(p) + "," + middle + "," +
+                           (g_feed->causes.empty() ? "null" : g_feed->causes.back()) + "]");
+}
+
+}  // namespace
+
+void feed_gain(int p, EffectKind kind, int amount) {
+  feed_entry("gain", p, json_string(kEffectKindNames[static_cast<int>(kind)]) + "," + std::to_string(amount));
+}
+
+void feed_note(int p, const char* what, int detail) {
+  feed_entry("note", p, json_string(what) + "," + (detail == kNull ? "null" : std::to_string(detail)));
+}
+
+std::string feed_json(const Feed& f) {
+  std::string out = "{\"ledger\":[";
+  for (std::size_t i = 0; i < f.ledger.size(); ++i) out += (i ? "," : "") + f.ledger[i];
+  out += "],\"log\":[";
+  for (std::size_t i = 0; i < f.log.size(); ++i) out += (i ? "," : "") + json_string(f.log[i]);
+  return out + "]}";
+}
+
+// ---- the board's rule questions -------------------------------------------------------------
+
+namespace {
+
+// Cells next to any of `cells`, `cells` themselves included when they touch each other.
+CellMask touching(CellMask cells) {
+  CellMask out = 0;
+  for (int c = 0; c < kMapCells; ++c) {
+    if (!(cells >> c & 1)) continue;
+    for (int n : map_cell(c).nbr) {
+      if (n >= 0) out |= CellMask{1} << n;
+    }
+  }
+  return out;
+}
+
+bool feeds_kiosk(BuildingKind k, bool occupied) {
+  return k == BuildingKind::kPavilion || k == BuildingKind::kUnique || is_special(k) ||
+         (k == BuildingKind::kEnclosure && occupied);
+}
+
+// What placing a `kind` building on `cells` would bring player p, without playing it (there can be
+// hundreds of placements): [{"k": what, "n": how much}], as ark-nova-ai's board names them.
+std::string place_preview(const State& s, int p, BuildingKind kind, CellMask cells) {
+  const Player& pl = s.players[p];
+  const Zoo& zoo = pl.zoo;
+  const MapDef& md = zoo.def();
+  const CellMask covered = zoo.covered();
+  Writer w;
+  w.begin('[');
+  auto item = [&](const std::string& k, int n) {
+    w.begin('{');
+    w.key("k");
+    w.str(k);
+    w.key("n");
+    w.num(n);
+    w.end('}');
+  };
+  const bool twice = pl.in_zoo(card_by_id(221));  // Archaeologist: border bonus spaces pay twice
+  for (int c = 0; c < kMapCells; ++c) {
+    if ((cells >> c & 1) && md.cells[c].bonus != kPBNone) {
+      item(std::string("bonus:") + kPlacementBonusNames[md.cells[c].bonus], twice && map_cell(c).border ? 2 : 1);
+    }
+  }
+  if (kind == BuildingKind::kPavilion) item("appeal", 1);
+  if (!pl.full_cover_scored && (md.buildable & ~(covered | cells)) == 0) item("full_cover", kFullCoverAppeal);
+  std::vector<int> near;
+  const CellMask around = touching(cells);
+  for (int c = 0; c < kMapCells; ++c) {
+    const int b = zoo.cell_owner[c];
+    if ((around >> c & 1) && b != kNoBuilding && std::find(near.begin(), near.end(), b) == near.end()) near.push_back(b);
+  }
+  int income = 0;
+  for (int b : near) {
+    const Building& o = zoo.buildings[b];
+    if (kind == BuildingKind::kKiosk) {
+      income += feeds_kiosk(o.kind, o.occupied);
+    } else if (feeds_kiosk(kind, false)) {
+      income += o.kind == BuildingKind::kKiosk;
+    }
+  }
+  if (income) item("kiosk_income", income);
+  for (auto [id, terrain, name] : {std::tuple{241, Terrain::kWater, "next_to_water"}, {242, Terrain::kRock, "next_to_rock"}}) {
+    if (!pl.in_zoo(card_by_id(id))) continue;
+    int n = 0;
+    for (int c = 0; c < kMapCells; ++c) {
+      if (!(cells >> c & 1)) continue;
+      bool next = false;
+      for (int m : map_cell(c).nbr) next |= m >= 0 && md.cells[m].terrain == terrain;
+      n += next;
+    }
+    if (n) item(name, n);
+  }
+  const CellMask site = md.rule_cells;
+  const bool touches = (around & site) != 0;
+  const bool covers_new = (cells & site) && !(covered & site);
+  switch (md.rule) {
+    case MapRule::kObservationTower:
+      if (kind == BuildingKind::kEnclosure && touches) item("tower", 2);
+      break;
+    case MapRule::kOutdoorArea:
+      if (kind == BuildingKind::kEnclosure && touches) item("outdoor", 2);
+      break;
+    case MapRule::kHarbor:
+      if (covers_new) item("harbour", kHarborMoney);
+      break;
+    case MapRule::kParkRestaurant: {
+      int n = 0;
+      for (int r = 0; r < kMapCells; ++r) {
+        if (!(site >> r & 1)) continue;
+        for (int c : map_cell(r).nbr) n += c >= 0 && (cells >> c & 1);
+      }
+      if (n) item("restaurant_income", n);
+      break;
+    }
+    case MapRule::kResearchInstitute:
+      if (covers_new) item("institute", 1);
+      break;
+    case MapRule::kIceCream: {
+      const int kiosks = zoo.count(BuildingKind::kKiosk) + (kind == BuildingKind::kKiosk);
+      const bool done_before = (site & ~covered) == 0;
+      if (site && !done_before && (site & ~(covered | cells)) == 0) {
+        item("ice_cream_income", kiosks);
+      } else if (site && done_before && kind == BuildingKind::kKiosk) {
+        item("ice_cream_income", 1);
+      }
+      break;
+    }
+    case MapRule::kHollywood: {
+      const int n = popcount(cells & site);
+      if (n) {
+        item("hollywood", n);
+        if ((site & ~(covered | cells)) == 0) item("hollywood_all", 1);
+      }
+      break;
+    }
+    default:
+      break;
+  }
+  w.end(']');
+  return w.out;
+}
+
+}  // namespace
+
+std::string rules_answer(const std::string& state_json, const std::string& question_json) {
+  State s;
+  state_from_json(s, state_json);
+  const J q = Parser(question_json).parse();
+  const std::string& what = q.at("q").str();
+  if (what == "winners") {
+    std::string out = "[";
+    for (int w : winners(s)) out += (out.size() > 1 ? "," : "") + std::to_string(w);
+    return out + "]";
+  }
+  const int p = static_cast<int>(q.at("p").i());
+  if (p < 0 || p >= kPlayers) throw std::runtime_error("rules_answer: no player " + std::to_string(p));
+  const Player& pl = s.players[p];
+  auto yes = [](bool b) { return std::string(b ? "true" : "false"); };
+  if (what == "animals_count") return std::to_string(animal_count(s, p, static_cast<int>(q.at("strength").i())));
+  if (what == "workers_needed") {
+    const int need = workers_needed(pl, name_index(q.at("task").str(), kTaskNames, kNumTasks, "task"));
+    return need < 0 ? "null" : std::to_string(need);
+  }
+  if (what == "place_preview") {
+    return place_preview(s, p, static_cast<BuildingKind>(kind_index(q.at("kind").str())), parse_cells(q.at("cells")));
+  }
+  const CardIdx c = parse_card(q.at("card"));
+  if (what == "requirements_ok") return yes(sr::requirements_ok(s, p, c));
+  if (what == "animal_allowed") return yes(sr::animal_allowed(pl, c));
+  if (what == "can_house") return yes(!housings(pl, c).empty());
+  if (what == "animal_cost") return std::to_string(animal_cost(pl, c));
+  if (what == "sponsor_level") return std::to_string(sr::sponsor_level(s, p, c));
+  if (what == "can_play_sponsor") return yes(can_play_sponsor(s, p, c));
+  throw std::runtime_error("rules_answer: unknown question " + what);
+}
+
+// ---- option texts (ark-nova-ai's Option labels) -----------------------------------------------
+
+namespace {
+
+std::string name_of(CardIdx c) { return card(c).name; }
+
+std::string num(int v) { return std::to_string(v); }
+
+// Python's repr of cells_key: a sorted tuple of (q, r) tuples.
+std::string cells_repr(CellMask cells) {
+  std::string out = "(";
+  int n = 0;
+  for (int c = 0; c < kMapCells; ++c) {
+    if (!(cells >> c & 1)) continue;
+    if (n++) out += ", ";
+    out += "(" + num(map_cell(c).q) + ", " + num(map_cell(c).r) + ")";
+  }
+  return out + (n == 1 ? ",)" : ")");
+}
+
+std::string act_label(const State& s, int owner, int action, int x) {
+  const int penalty = has_token(s, owner, action, TokenKind::kConstriction) ? kConstrictionPenalty : 0;
+  const int strength = s.players[owner].strength(action) - penalty + x;
+  return std::string(kActionNames[action]) + " at strength " + num(strength) + (x ? " (+" + num(x) + " X)" : "");
+}
+
+std::string support_extra(const Option& o) {
+  if (o.a[3] == kExtraToken) return ", using a token from " + name_of(o.a[4]);
+  if (o.a[3] == kExtraRelease) return ", release " + name_of(o.a[4]);
+  return "";
+}
+
+std::string done_label(FrameKind top) {
+  switch (top) {
+    case FrameKind::act_animals: case FrameKind::act_sponsors: case FrameKind::act_association: return "Finish";
+    case FrameKind::act_build: return "Done building";
+    case FrameKind::move_animals: return "Finish moving animals";
+    case FrameKind::ab_sun: case FrameKind::ab_dig: case FrameKind::ab_pouch: return "Done";
+    default: engine_error(std::string("no 'done' text for frame ") + frame_kind_name(top));
+  }
+}
+
+}  // namespace
+
+std::string option_label(const State& s, const Option& o) {
+  if (!s.stack_n) engine_error("option_label: no pending decision");
+  const Frame& f = s.top();
+  const int p = f.player;
+  const FrameKind top = f.kind;
+  switch (o.head) {
+    case Head::keep: {
+      if (top == FrameKind::ab_resist) return "Keep final scoring card " + card_id_string(o.a[0]);
+      std::string out = "Keep ";
+      for (int i = 0; i < o.n; ++i) out += (i ? ", " : "") + card_id_string(o.a[i]);
+      return out;
+    }
+    case Head::act:
+      return act_label(s, top == FrameKind::extra_action ? f.d[fd::extra_owner] : p, o.a[0], o.a[1]);
+    case Head::xtoken: return std::string("Take an X-token with ") + kActionNames[o.a[0]];
+    case Head::repeat: return std::string("Use the x2 token: ") + kActionNames[s.turn().action] + " again";
+    case Head::skip: return "Skip";
+    case Head::done: return done_label(top);
+    case Head::upgrade: return std::string("Upgrade ") + kActionNames[o.a[0]];
+    case Head::worker: return "Hire an association worker";
+    case Head::money:
+      if (top == FrameKind::ab_pilfer) return "Give up to 5 money";
+      return "Take " + num(kConservationTileMoney) + " money";
+    case Head::card: return "Give a random hand card";
+    case Head::tile: return std::string("Take bonus tile ") + kBonusTileNames[o.a[0]];
+    case Head::deck: return "Draw from the deck";
+    case Head::display: return "Take folder " + num(o.a[0] + 1);
+    case Head::snap: return "Snap folder " + num(o.a[0] + 1);
+    case Head::clever: return std::string("Move ") + kActionNames[o.a[0]] + " to slot 1";
+    case Head::multiplier: return std::string("Put the x2 token on ") + kActionNames[o.a[0]];
+    case Head::partner_zoo: return std::string("Partner zoo: ") + kContinentNames[o.a[0]];
+    case Head::university: return std::string("University: ") + kUniversityNames[o.a[0]];
+    case Head::discard_final: return "Discard final scoring card " + card_id_string(o.a[0]);
+    case Head::discard: return "Discard " + card_id_string(o.a[0]);
+    case Head::place:
+      if (o.n >= 2) return std::string("Build ") + kBuildingKindNames[o.a[0]] + " at " + cells_repr(o.cells);
+      return "Place the building at " + cells_repr(o.cells);
+    case Head::build:
+      return std::string("Build ") + kBuildingKindNames[o.a[0]] + " " + num(o.a[1]) + " at " + cells_repr(o.cells) +
+             " for " + num(kBuildCostPerSpace * o.a[1]);
+    case Head::engineer:
+      return std::string("Engineer: build another ") + kBuildingKindNames[o.a[0]] + " " + num(o.a[1]) + " at " +
+             cells_repr(o.cells) + " for " + num(kBuildCostPerSpace * o.a[1]);
+    case Head::play:
+      if (top == FrameKind::act_animals) {
+        return "Play " + name_of(o.a[0]) + " into building " + num(o.a[1]) + " for " +
+               num(animal_cost(s.players[p], o.a[0]));
+      }
+      if (top == FrameKind::paid_sponsor) {
+        return "Play " + name_of(o.a[0]) + " for " + num(sr::sponsor_level(s, p, o.a[0])) + " money";
+      }
+      return "Play " + name_of(o.a[0]);
+    case Head::play_display: {
+      const CardIdx c = s.display[o.a[0]];
+      if (top == FrameKind::act_animals) {
+        return "Play " + name_of(c) + " into building " + num(o.a[1]) + " for " +
+               num(animal_cost(s.players[p], c) + o.a[0] + 1);
+      }
+      return "Play " + name_of(c);
+    }
+    case Head::take_small: return "Take " + name_of(s.display[o.a[0]]) + " from folder " + num(o.a[0] + 1);
+    case Head::reputation: return "Reputation +" + num(kTaskReputationGain);
+    case Head::donate: return "Donate " + num(next_donation_cost(s)) + " money for 1 conservation";
+    case Head::support: case Head::release:
+      return "Support " + name_of(o.a[0]) + " (slot " + num(o.a[1]) + ", token " + num(o.a[2]) + support_extra(o) + ")";
+    case Head::play_project: case Head::play_release:
+      return "Play " + name_of(o.a[0]) + " and support it (slot " + num(o.a[1]) + ", token " + num(o.a[2]) +
+             support_extra(o) + ")";
+    case Head::play_project_display: case Head::play_release_display:
+      return "Play " + name_of(s.display[o.a[0]]) + " from folder " + num(o.a[0] + 1) + " and support it (slot " +
+             num(o.a[1]) + ", token " + num(o.a[2]) + support_extra(o) + ")";
+    case Head::break_: return "Break " + num(f.d[sponsors_strength]) + " and take money";
+    case Head::pick: return "Keep " + name_of(o.a[0]);
+    case Head::take:
+      if (top == FrameKind::ab_snap) return "Take display folder " + num(o.a[0] + 1);
+      if (top == FrameKind::ab_project) return "Take base project " + name_of(o.a[0]);
+      return "Take " + name_of(o.a[0]);
+    case Head::target: return "Target player " + num(o.a[0]);
+    case Head::move: {
+      const BuildingKind k = s.players[p].zoo.buildings[f.d[move_animals_building]].kind;
+      return "Move " + name_of(o.a[0]) + " into the new " + kBuildingKindNames[static_cast<int>(k)];
+    }
+    case Head::boost:
+      return std::string("Place ") + kActionNames[f.d[fd::boost_action]] + " on slot " + num(o.a[0]);
+    case Head::yes: return "Remove a token and play a sponsor card for its level";
+    case Head::no: return "Do not use Okapi Stable";
+    case Head::replenish: return "Replenish the display";
+    case Head::kind: return o.a[0] == kWazaSmall ? "Small animals (size 2 or less)" : "Large animals (size 4 or more)";
+    case Head::discard_display: return "Discard display folder " + num(o.a[0] + 1);
+    case Head::discard_hand: return "Discard " + name_of(o.a[0]) + " and draw";
+    case Head::sell: return "sell " + name_of(o.a[0]);
+    case Head::tuck: return "tuck " + name_of(o.a[0]);
+    case Head::harbor: return "Harbour: discard " + name_of(o.a[0]) + " for " + num(kHarborMoney) + " money";
+    default: engine_error(std::string("no text for option head ") + head_name(o.head));
+  }
+}
 
 }  // namespace board_ai::arknova

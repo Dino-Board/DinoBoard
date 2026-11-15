@@ -9,7 +9,6 @@
 #include "arknova_internal.h"
 
 namespace board_ai::arknova {
-namespace {
 
 int workers_needed(const Player& pl, int task) {
   int out = pl.workers_out[task];
@@ -17,6 +16,8 @@ int workers_needed(const Player& pl, int task) {
   if (need < 0) return -1;
   return pl.active_workers() >= need ? need : -1;
 }
+
+namespace {
 
 // ---- projects ---------------------------------------------------------------------
 

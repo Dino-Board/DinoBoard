@@ -51,8 +51,18 @@ and checks both behaviours. Not modelled:
 the player choosing the order of simultaneous effects and of "after finishing"
 effects (fixed order here).
 
+Against a checkout of ark-nova-ai with those three places fixed (the board's
+reference, see "Playing on ark-nova-ai's Board"), `diff_test.py --rulebook` runs
+the CLI with `--rulebook`. Every step it also checks that `import_state` (the
+inverse of `export_state`) rebuilds the Python state exactly, types included,
+and that both engines report the same activity feed: the ledger of gains and
+notes with their causes, and the log lines (`Feed`, `R` in the CLI). 2000 games
+over all ten maps (about 1.23 million steps) agree this way.
+
 ```bash
 python games/arknova/tools/diff_test.py --ref ~/ref/ark-nova-ai \
+    --cli build/<dir>/arknova_diff_cli --games 200
+python games/arknova/tools/diff_test.py --ref <fixed checkout> --rulebook \
     --cli build/<dir>/arknova_diff_cli --games 200
 ```
 
@@ -701,23 +711,51 @@ are checked against the engine's layout by
 
 ## Playing on ark-nova-ai's Board
 
-`scripts/arknova_board.py` runs ark-nova-ai's server (its page, engine and logins) with
-two opponents, `dinoboard` and its `beam_3x8`, on Map 0. The bundle's external-engine
-hooks carry it:
+`scripts/arknova_board.py` runs ark-nova-ai's server (its page and logins) with this
+engine as the referee and two opponents, `dinoboard` and the C++ `beam_3x8`, on Map 0.
+`--ref` is a checkout of ark-nova-ai with the three rulebook places fixed and two hooks
+the server reaches the rules through: `arknova/play/table.py` (`TABLE`: the game) and
+`arknova/play/rules.py` (`RULES`: the questions that explain a position). The script
+sets both to C++ (`games/arknova/tools/host_table.py`), so ark-nova-ai's rules are never
+imported. The bundle's external-engine hooks carry it:
 
-- `external_state_loader`: an ark-nova-ai state, as `tools/diff_test.py` `export_state`
-  writes it, becomes the truth state (`GameSession.load_external_state`). The AI views
-  are rebuilt from it masked, so the search never reads the other player's cards;
-  cards in `public_hand` stay visible to them.
-- `external_option_lister`: the pending decision as (ark-nova-ai option key, atom
-  sequence) pairs consistent with the atoms applied so far
-  (`GameSession.external_options`). The bridge searches one atom at a time until
-  the atoms name a single option.
-- `external_rules_switch`: `g_upstream_rules` for the whole process
-  (`set_external_rules("arknova", True)`), so both engines list the same options.
+- `external_host_factory`: `ExternalHost("arknova", seed, map key)` holds the truth
+  and plays the board's decisions one at a time, single-option ones included (unlike a
+  `GameSession`, which applies those itself). `options()` lists (option key as
+  `option_to_json` writes it, ark-nova-ai's label from `option_label`); `step(key)`
+  returns the move's feed (`feed_json`: ledger and log lines, recorded through
+  `g_feed` / `FeedCause` at the places ark-nova-ai records them). `HostTable` rebuilds
+  the board's State from `state_json()` with `import_state` after every move; that
+  State never draws a random number, the host draws every chance outcome. Saved games
+  name their table, since the host deals other cards than ark-nova-ai from one seed.
+- `external_rules_query`: `rules_answer` (arknova_json.h) for `HostRules`: whether a
+  card's conditions are met, its cost and level, where animals fit, workers a task
+  takes, the winners, and the placement preview (what a building would bring there).
+- `external_state_loader` / `external_option_lister`: each AI decision loads the
+  table's state into a truth `GameSession` (`load_external_state`); the AI views are
+  rebuilt from it masked, so the search never reads the other player's cards (cards in
+  `public_hand` stay visible to them). `external_options` gives (key, atom sequence)
+  pairs consistent with the applied atoms; the bridge picks one atom at a time (MCTS,
+  or `get_heuristic_action` for `beam_3x8`) until the atoms name a single option. The
+  next atom's place is the session's prefix length: the session applies atoms with a
+  single continuation by itself.
+- `external_rules_switch`: `g_upstream_rules` for the whole process, for the
+  differential test against unmodified ark-nova-ai; the board does not use it.
 
 `tests/arknova/test_ark_nova_ai_interop.py` checks the option lists, the atom
-narrowing and that the search ignores the opponent's hidden cards and the deck.
+narrowing and that the search ignores the opponent's hidden cards and the deck. With
+the ark-nova-ai checkout:
+
+- `games/arknova/tools/host_test.py --ref <checkout>` plays random games on the host;
+  every step the rebuilt State must list exactly the host's options (keys and texts)
+  and the placement previews must match, and every few steps every rule question about
+  the hand and display cards must get ark-nova-ai's answer (1000 games agree).
+- `games/arknova/tools/host_table_plugin.py` runs ark-nova-ai's own board tests
+  (`tests/test_play_*.py`) on `HostTable` and `HostRules`; four that build positions
+  by editing `game.state` are skipped.
+- `games/arknova/tools/board_check.py --ref <checkout> --model m.onnx` starts the
+  server and plays whole games through its HTTP API against both opponents, then
+  checks that no ark-nova-ai rules module was imported.
 
 ## Configs
 

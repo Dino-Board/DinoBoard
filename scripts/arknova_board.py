@@ -1,12 +1,14 @@
 """Play Ark Nova on ark-nova-ai's board against DinoBoard.
 
-The board, the game engine that runs the game and the logins are ark-nova-ai's
-(github.com/collinfeng/ark-nova-ai, MIT; see games/arknova/LICENSE-ark-nova-ai). This script starts
-its server with two opponents only, on Map 0:
+The board and the logins are ark-nova-ai's (github.com/collinfeng/ark-nova-ai, MIT; see
+games/arknova/LICENSE-ark-nova-ai); the game is refereed by DinoBoard's C++ engine (its table is
+games/arknova/tools/host_table.HostTable, so the truth, the options, their texts and the activity feed
+come from C++). This script starts the server with two opponents only, on Map 0:
   - dinoboard: DinoBoard's token-transformer MCTS (search from the web.json profile). Without
     --model it plays games/arknova/model/arknova_2p.onnx, for now a randomly initialised network
     (scripts/init_random_models.py --game arknova --variants 2p --no-belief).
-  - beam_3x8: ark-nova-ai's strongest rule-based search.
+  - beam_3x8: the rule-based search of that name (DinoBoard's C++ port of ark-nova-ai's strongest
+    one, heuristic.json `named`); the human's hints then come from the network.
 
     python scripts/arknova_board.py --ref ~/ref/ark-nova-ai [--model m.onnx] [--profile web_expert]
 
@@ -15,10 +17,11 @@ cd web && pnpm install && pnpm build), or run `pnpm dev` there and open the addr
 Saves, logins and the server's config.json go to runs/arknova_board/data (ARKNOVA_DATA), not into
 the ark-nova-ai checkout; a browser on this machine is signed in as `player` without a password.
 
-Each DinoBoard decision loads ark-nova-ai's state into a truth GameSession, which searches on the
+Each DinoBoard decision loads the table's state into a truth GameSession, which searches on the
 mover's masked view (it never reads the opponent's hidden cards), one atom at a time, until the
-chosen atoms name one of the board's options. The process follows ark-nova-ai's rules where they
-depart from the rulebook (set_external_rules), so both engines list the same options.
+chosen atoms name one of the board's options. --ref must be an ark-nova-ai checkout with the board's
+table hook (arknova/play/table.py) whose rules follow the rulebook where ark-nova-ai departs from it
+(see docs/games/arknova_api.md): the board's hints still read that engine's rules.
 """
 from __future__ import annotations
 
@@ -46,20 +49,35 @@ RUN_DIR = PROJECT_ROOT / "runs" / "arknova_board"
 
 
 class DinoBoardAI:
-    """ark-nova-ai's AI interface (analyse(game) -> Analysis) over a DinoBoard GameSession."""
+    """ark-nova-ai's AI interface (analyse(game) -> Analysis) over a DinoBoard GameSession: the network's
+    MCTS, or with `heuristic` one of the game's registered heuristics (heuristic.json `named`), which also
+    pick from the mover's masked view. A heuristic opponent leaves the human's hints to `adviser`."""
 
-    def __init__(self, analysis_type, model: Path, profile: str):
+    def __init__(self, analysis_type, model: Path | None, profile: str | None, heuristic: str | None = None,
+                 adviser: DinoBoardAI | None = None):
         self.Analysis = analysis_type
-        self.name = self.checkpoint = DINOBOARD
-        p = resolve_profile(GAME, profile)
-        self.search = dict(simulations=p.simulations, world_cap=p.world_cap, c_puct=p.c_puct,
-                           temperature=p.temperature, opponent_selection=p.opponent_selection,
-                           top_k=p.top_k, fpu_reduction=p.fpu_reduction)
-        self.session = engine.GameSession(GAME, 0, str(model))
+        self.name = self.checkpoint = heuristic or DINOBOARD
+        self.heuristic = heuristic
+        self.adviser = adviser
+        if heuristic is None:
+            p = resolve_profile(GAME, profile)
+            self.search = dict(simulations=p.simulations, world_cap=p.world_cap, c_puct=p.c_puct,
+                               temperature=p.temperature, opponent_selection=p.opponent_selection,
+                               top_k=p.top_k, fpu_reduction=p.fpu_reduction)
+        self.session = engine.GameSession(GAME, 0, "" if heuristic else str(model))
         self.lock = threading.Lock()  # one session serves every game of the server
 
     def analyse(self, game):
+        if self.adviser is not None and game.to_move() == game.human:
+            return self.adviser.analyse(game)
         return self.analyse_state(game.state, game.options())
+
+    def _pick(self):
+        """The next atom and (for the network) its search value."""
+        if self.heuristic is not None:
+            return self.session.get_heuristic_action(self.heuristic)["action"], 0.0
+        r = self.session.get_ai_action(**self.search)
+        return r["action"], float(r["stats"]["best_value"])
 
     def analyse_state(self, state, options):
         keys = [dumps(canon(o.key)) for o in options]
@@ -76,19 +94,20 @@ class DinoBoardAI:
                 only_theirs = sorted(set(keys) - {k for k, _ in listed})
                 raise RuntimeError(f"the engines list different options ({state.stack[-1].kind}): "
                                    f"DinoBoard only {only_ours[:5]}, ark-nova-ai only {only_theirs[:5]}")
-            chosen, value = 0, None
+            value = None
             while True:
-                r = s.get_ai_action(**self.search)
+                atom, atom_value = self._pick()
                 if value is None:
-                    value = float(r["stats"]["best_value"])
-                atom = r["action"]
-                named = {k for k, atoms in listed if atoms[chosen] == atom}
+                    value = atom_value
+                # The session applies atoms that have a single continuation by itself, so the next atom's
+                # place is the prefix's length, not the number of atoms chosen here.
+                at = len(s.get_state_dict()["prefix"].split())
+                named = {k for k, atoms in listed if atoms[at] == atom}
                 if len(named) == 1:
                     return self._result(keys, named.pop(), value)
                 if not named:
                     raise RuntimeError(f"DinoBoard chose atom {atom}, which names no option")
                 s.apply_action(atom)
-                chosen += 1
                 listed = self._options()
 
     def _options(self):
@@ -119,15 +138,47 @@ def configure(server, ai_module, dinoboard):
         if checkpoint in (None, "", DINOBOARD):
             return dinoboard
         if checkpoint == BEAM:
-            return ai_module.HeuristicAI(BEAM)  # its own copy: a beam keeps a plan per game
+            return DinoBoardAI(dinoboard.Analysis, None, None, heuristic=BEAM, adviser=dinoboard)
         raise HTTPException(404, f"no opponent {checkpoint}: this board offers {DINOBOARD} and {BEAM}")
 
     def hint_model(name):
+        if name == BEAM:
+            return DinoBoardAI(dinoboard.Analysis, None, None, heuristic=BEAM)  # its own choice is the hint
         return None if name in (None, "", "default") else opponent(name)
 
     server._ai = opponent
     server._hint_ai = hint_model
     server.ctx["default"] = DINOBOARD
+
+
+def setup(ref: Path, model: Path | None, profile: str, data: Path):
+    """ark-nova-ai's server app with DinoBoard as referee and opponent (see the module docstring);
+    `data` holds its saves, logins and config.json."""
+    ref = ref.expanduser().resolve()
+    if not (ref / "arknova" / "play" / "server.py").is_file():
+        raise SystemExit(f"{ref} is not an ark-nova-ai checkout")
+    data.mkdir(parents=True, exist_ok=True)
+    if not (data / "config.json").exists():
+        (data / "config.json").write_text(json.dumps({"skip_login": "player"}, indent=1) + "\n")
+    os.environ["ARKNOVA_DATA"] = str(data)  # read when ark-nova-ai's modules are imported
+    sys.path.insert(0, str(ref))
+    from arknova.play import ai as ai_module, auth, rules, server, table  # noqa: PLC0415
+    from host_table import HostRules, HostTable  # noqa: PLC0415
+
+    table.TABLE = HostTable
+    rules.RULES = HostRules()
+
+    model = model.resolve() if model else expected_model_path(GAME)
+    if not model.is_file():
+        raise SystemExit(f"no model at {model}")
+    configure(server, ai_module, DinoBoardAI(ai_module.Analysis, model, profile))
+    if auth.ensure():
+        print(f"made the logins: see {auth.AUTH_DIR / 'credentials.txt'}")
+    if not server.DIST.is_dir():
+        print(f"{server.DIST} is not built: run `pnpm install && pnpm build` in {ref / 'web'}, "
+              f"or `pnpm dev` there and open its address")
+    print(f"opponents: {DINOBOARD} ({model.name}, {profile}) and {BEAM}")
+    return server.app
 
 
 def main():
@@ -139,31 +190,10 @@ def main():
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
     args = ap.parse_args()
-
-    ref = Path(args.ref).expanduser().resolve()
-    if not (ref / "arknova" / "play" / "server.py").is_file():
-        raise SystemExit(f"{ref} is not an ark-nova-ai checkout")
-    data = RUN_DIR / "data"
-    data.mkdir(parents=True, exist_ok=True)
-    if not (data / "config.json").exists():
-        (data / "config.json").write_text(json.dumps({"skip_login": "player"}, indent=1) + "\n")
-    os.environ["ARKNOVA_DATA"] = str(data)  # read when ark-nova-ai's modules are imported
-    sys.path.insert(0, str(ref))
+    app = setup(Path(args.ref), Path(args.model) if args.model else None, args.profile, RUN_DIR / "data")
     import uvicorn  # noqa: PLC0415
-    from arknova.play import ai as ai_module, auth, server  # noqa: PLC0415
 
-    model = Path(args.model).resolve() if args.model else expected_model_path(GAME)
-    if not model.is_file():
-        raise SystemExit(f"no model at {model}")
-    engine.set_external_rules(GAME, True)
-    configure(server, ai_module, DinoBoardAI(ai_module.Analysis, model, args.profile))
-    if auth.ensure():
-        print(f"made the logins: see {auth.AUTH_DIR / 'credentials.txt'}")
-    if not server.DIST.is_dir():
-        print(f"{server.DIST} is not built: run `pnpm install && pnpm build` in {ref / 'web'}, "
-              f"or `pnpm dev` there and open its address")
-    print(f"opponents: {DINOBOARD} ({model.name}, {args.profile}) and {BEAM}")
-    uvicorn.run(server.app, host=args.host, port=args.port)
+    uvicorn.run(app, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

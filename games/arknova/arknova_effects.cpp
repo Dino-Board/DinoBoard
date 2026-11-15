@@ -109,6 +109,11 @@ void advance_break(State& s, int p, int steps) {
   s.break_pos = static_cast<std::int8_t>(std::min(s.break_pos + steps, kBreakTrack));
   if (s.break_pos >= kBreakTrack) {
     s.break_by = static_cast<std::int8_t>(p);
+    if (g_feed) {
+      g_feed->log.push_back("P" + std::to_string(p) + " triggers a break");
+      feed_note(p, "break_triggered");
+    }
+    FeedCause cause([] { return std::string("[\"break\"]"); });
     gain(s, p, EffectKind::kEffXtoken, 1);
   }
 }
@@ -191,7 +196,10 @@ void icons_played(State& s, int p, const IconCounts& added, const IconCounts& be
     const Player& o = s.players[owner];
     std::vector<CardIdx> zoo(o.zoo_cards, o.zoo_cards + o.n_zoo_cards);
     for (CardIdx c : zoo) {
-      if (has_icon_trigger(c)) icon_trigger(s, c, owner, p, added, new_icons, ch);
+      if (has_icon_trigger(c)) {
+        FeedCause cause([&] { return "[\"card\"," + json_string(card_id_string(c)) + "]"; });
+        icon_trigger(s, c, owner, p, added, new_icons, ch);
+      }
     }
   }
 }
@@ -228,6 +236,12 @@ void gain_conservation(State& s, int p, int amount) {
   pl.conservation += amount;
   int now = pl.conservation;
   auto crossed = [&](int space) { return old < space && space <= now; };
+  if (g_feed) {
+    for (int space : {kConservationTileSpaces[0], kConservationTileSpaces[1], kConservationUpgradeOrWorker,
+                      kConservationFinalCardDiscard}) {
+      if (crossed(space)) feed_note(p, "conservation_stop", space);
+    }
+  }
   if (crossed(kConservationFinalCardDiscard) && !s.final_card_discarded) push_final_card_discards(s);
   for (int t = 1; t >= 0; --t) {
     if (crossed(kConservationTileSpaces[t])) {
@@ -249,7 +263,10 @@ void gain_reputation(State& s, int p, int amount) {
     ++pl.reputation;
     bool present = false;
     Effect bonus = reputation_bonus(pl.reputation, &present);
-    if (present) gain(s, p, bonus.kind, 1);
+    if (present) {
+      FeedCause cause([&] { return "[\"track\",\"reputation\"," + std::to_string(pl.reputation) + "]"; });
+      gain(s, p, bonus.kind, 1);
+    }
   }
 }
 
@@ -262,6 +279,7 @@ void apply_effect(State& s, int p, const Effect& e) {
 void gain(State& s, int p, EffectKind kind, int amount) {
   Player& pl = s.players[p];
   if (amount <= 0) return;
+  if (g_feed) feed_gain(p, kind, amount);
   switch (kind) {
     case EffectKind::kEffMoney: pl.money += amount; break;
     case EffectKind::kEffAppeal: pl.appeal += amount; break;
@@ -367,12 +385,19 @@ int place_building(State& s, int p, BuildingKind kind, int size, CellMask cells,
   std::vector<PlacementBonus> bonuses;
   int b = pl.zoo.place(kind, size, cells, name, &bonuses);
   after_build_hooks(s, p, b, ch);
-  if (kind == BuildingKind::kPavilion) gain(s, p, EffectKind::kEffAppeal, 1);
+  if (kind == BuildingKind::kPavilion) {
+    FeedCause cause([] { return std::string("[\"build\",\"pavilion\"]"); });
+    gain(s, p, EffectKind::kEffAppeal, 1);
+  }
   if (!pl.full_cover_scored && pl.zoo.is_fully_covered()) {
     pl.full_cover_scored = true;
+    FeedCause cause([] { return std::string("[\"build\",\"cover\"]"); });
     gain(s, p, EffectKind::kEffAppeal, kFullCoverAppeal);
   }
-  for (auto it = bonuses.rbegin(); it != bonuses.rend(); ++it) apply_effect(s, p, placement_bonus_effect(*it));
+  for (auto it = bonuses.rbegin(); it != bonuses.rend(); ++it) {
+    FeedCause cause([&] { return "[\"placement\"," + json_string(kPlacementBonusNames[*it]) + "]"; });
+    apply_effect(s, p, placement_bonus_effect(*it));
+  }
   return b;
 }
 
