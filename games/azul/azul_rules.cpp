@@ -289,10 +289,14 @@ void AzulRules<NPlayers>::apply_action_no_undo(AzulState<NPlayers>& state, Actio
     to_floor = picked - to_line;
   }
 
-  for (int i = 0; i < to_floor && p.floor_count < 7; ++i) {
+  int on_floor = 0;
+  for (; on_floor < to_floor && p.floor_count < 7; ++on_floor) {
     p.floor[p.floor_count] = static_cast<std::int8_t>(color);
     p.floor_count += 1;
   }
+  // Tiles that do not fit on a full floor line go to the box lid, which
+  // refills the bag once it runs dry.
+  state.box_lid_counts[color] += to_floor - on_floor;
 
   const bool round_ended = state.all_sources_empty();
   if (round_ended) {
@@ -399,6 +403,7 @@ UndoToken AzulRules<NPlayers>::do_action_deterministic_impl(IGameState& state, A
   rec.prev_scores = s->scores;
   rec.prev_center = s->center;
   rec.prev_player = s->players[s->current_player_];
+  rec.prev_box_lid_counts = s->box_lid_counts;
   const int source = decode_source(action);
   if (source >= 0 && source < Cfg::kFactories) {
     rec.has_factory_source = true;
@@ -468,6 +473,7 @@ void AzulRules<NPlayers>::undo_action_impl(IGameState& state, const UndoToken& t
   s->scores = rec.prev_scores;
   s->center = rec.prev_center;
   s->players[s->current_player_] = rec.prev_player;
+  s->box_lid_counts = rec.prev_box_lid_counts;
   if (rec.has_factory_source && rec.source_factory_idx >= 0 && rec.source_factory_idx < Cfg::kFactories) {
     s->factories[rec.source_factory_idx] = rec.prev_factory_source;
   }

@@ -261,3 +261,43 @@ def test_random_four_player_games_never_dead_end():
             plies += 1
         unfinished += not gs.is_terminal
     assert unfinished <= 5, f"{unfinished}/150 random games did not finish"
+
+
+# ---------------------------------------------------------------------------
+# Tiles past a full floor line go to the box lid, not out of the game
+# ---------------------------------------------------------------------------
+
+def _tiles_by_colour(sd):
+    total = [0] * 5
+    for counts in (*sd["factories"], sd["center"], sd["bag_counts"], sd["box_counts"]):
+        for c, n in enumerate(counts):
+            total[c] += n
+    for p in sd["players"]:
+        for line in p["pattern_lines"]:
+            if line["length"]:
+                total[line["color"]] += line["length"]
+        for r, row in enumerate(p["wall"]):
+            for col, cell in enumerate(row):
+                total[(col - r) % 5] += cell
+        for tile in p["floor"]:
+            if tile >= 0:
+                total[tile] += 1
+    return total
+
+
+@pytest.mark.parametrize("variant", ["azul", "azul_3p", "azul_4p"])
+def test_every_tile_stays_in_the_game(variant):
+    """100 tiles, 20 of each colour, at every ply: what overflows a full floor
+    line goes to the box lid and comes back through the bag."""
+    rng = random.Random(5)
+    overflows = 0
+    for seed in range(8):
+        gs = engine.GameSession(variant, seed=seed)
+        while not gs.is_terminal:
+            sd = gs.get_state_dict()
+            assert _tiles_by_colour(sd) == [20] * 5, f"{variant} seed={seed} round={sd['round_index']}"
+            action = rng.choice(gs.get_legal_actions())
+            mover = sd["players"][sd["current_player"]]
+            overflows += action % 6 == 5 and mover["floor_count"] == 7
+            gs.apply_action(action)
+    assert overflows > 0

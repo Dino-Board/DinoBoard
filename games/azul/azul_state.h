@@ -73,6 +73,7 @@ struct UndoRecord {
   int source_factory_idx = -1;
   std::array<std::uint8_t, kColors> prev_factory_source{};
   PlayerState prev_player{};
+  std::array<int, kColors> prev_box_lid_counts{};
 };
 
 struct PersistentTreeCache {
