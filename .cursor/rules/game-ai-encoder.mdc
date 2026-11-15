@@ -154,6 +154,36 @@ instead.
 
 - **BUG-037**: every piece of state that affects DAG node identity, encoder input, or legal-action scope must be represented in schema/hash scope. If the encoder reads off-schema state, hash and encoder disagree, causing silent DAG corruption. Pure hidden physical contents may stay off-schema only when they are never read by the encoder, cannot change same-hash legal actions, are resampled by `randomize_unseen`, and expose any public projection (count/size) through schema fields.
 
+## Board symmetries (training augmentation)
+
+Optional. An encoder whose game has board symmetries (rotations, mirrors)
+tells training how a sample changes under each one; with
+`training.symmetry_augmentation: true` every sampled example gets a random
+symmetry at batch time (`training/symmetry.py`), so the replay buffer does
+not grow. Two ways, and an encoder offers at most one of them:
+
+- **Static tables** — `symmetries()` returns one `EncoderSymmetry` per
+  symmetry (feature permutation; for token encoders anchor permutation,
+  position affine map, column permutation; plus an action permutation). Use
+  it when the symmetry moves features and actions the same way in every
+  state (Harmonies: the fixed board).
+- **Sample-dependent** — `sample_symmetry_count()` and
+  `apply_sample_symmetry(g, features, feature_len, action_rows, n)` rewrite
+  one sample in place. Use it when the image depends on the sample itself,
+  typically because the rules keep canonical forms (Carcassonne: a symmetric
+  tile's rotation is stored reduced, a meeple is named by the lowest edge of
+  its feature, so a quarter turn re-canonicalises both). It cannot transform
+  an opponent-policy target, so it is rejected together with
+  `training.opponent_policy_head`.
+
+Symmetry 0 is the identity in both. The contract to test: for every state
+`s` and symmetry `g`, the transformed `encode(s)` equals `encode(g·s)` (as a
+set of tokens for token encoders) and the transformed legal mask equals the
+legal mask of `g·s`; build `g·s` independently of the encoder, e.g. by
+loading a transformed public snapshot (`tests/carcassonne/test_symmetry.py`,
+`tests/harmonies/test_symmetry.py`). The rules must really be invariant —
+verify by replaying a game with every action mapped through `g`.
+
 ## action_space / feature_dim
 
 Must return compile-time constants matching the network architecture:

@@ -47,6 +47,23 @@ struct SelfplaySample {
   // Heuristic-guided plies only: simulations the guiding heuristic ran
   // internally (HeuristicResult::simulations; its own network and budget).
   int heuristic_simulations = 0;
+  // True for a ply of the episode's opening-exploration prefix
+  // (SelfplayConfig::opening_exploration): the move was sampled from the raw
+  // policy without a search. Always full_search=false, simulations=0 and no
+  // policy target, so the trainer drops it like a playout-cap fast ply.
+  bool opening_exploration = false;
+  // Search-diversity read-out, set (has_policy_stats=true) on every searched
+  // ply with at least two root actions — not on forced, tail-solved,
+  // heuristic-guided or opening-exploration plies. P is the network's own
+  // prior over the legal actions (before root temperature and noise), pi the
+  // normalised root visits. Entropies in nats.
+  bool has_policy_stats = false;
+  float prior_entropy = 0.0f;   // H(P)
+  float prior_top1 = 0.0f;      // max_a P(a)
+  float visit_entropy = 0.0f;   // H(pi)
+  // KL(pi || P), with P floored at 1e-9: how far the search moved away from
+  // the prior ("policy surprise").
+  float policy_kl = 0.0f;
 };
 
 // Belief-net training sample (Coup belief net plan §2.2).
@@ -94,6 +111,8 @@ struct SelfplayEpisodeResult {
   // share ∈ [0, 1], total over seats = 1).
   std::vector<float> terminal_z_values{};
   int total_plies = 0;
+  // Plies played as the opening-exploration prefix (0 for a normal episode).
+  int opening_exploration_plies = 0;
   std::vector<SelfplaySample> samples{};
   std::map<std::string, double> custom_stats{};
   std::unique_ptr<IGameState> final_state{};
@@ -119,6 +138,27 @@ struct SelfplayEpisodeResult {
   int belief_label_class_count = 0;
 };
 
+// Random starting positions (KataGo game branching / Go-Exploit in spirit).
+// With probability `episode_ratio` an episode opens with a prefix of
+// uniform{min_plies..max_plies} plies whose moves are drawn, without any
+// search, from
+//   (1 - uniform_mix) * P^(1/temperature) / Z  +  uniform_mix / num_legal
+// where P is the acting seat's raw network policy over its legal actions
+// (same masked view + tracker the search would use; no hidden information).
+// From the first ply after the prefix the episode is ordinary selfplay.
+// Prefix plies are emitted with opening_exploration=true / full_search=false
+// and are never training samples; the game result is a clean value target
+// for every later ply, because those were played by the normal policy from
+// the position the prefix reached. Heuristic guidance does not act inside
+// the prefix. episode_ratio == 0 disables (the default).
+struct OpeningExploration {
+  double episode_ratio = 0.0;
+  int min_plies = 0;
+  int max_plies = 0;
+  double temperature = 1.0;
+  double uniform_mix = 0.0;
+};
+
 struct SelfplayConfig {
   int simulations = 200;
   // ISMCTS K outer worlds × M inner sims-per-world cap. 0 = legacy
@@ -140,6 +180,18 @@ struct SelfplayConfig {
   double dirichlet_alpha = 0.0;
   double dirichlet_epsilon = 0.0;
   int dirichlet_on_first_n_plies = 0;
+  // See NetMctsConfig::root_dirichlet_total_alpha. Same epsilon and ply
+  // window as dirichlet_alpha; exclusive with it.
+  double dirichlet_total_alpha = 0.0;
+  // Root policy temperature of full searches
+  // (NetMctsConfig::root_policy_temperature): linear in the ply index from
+  // `_initial` at ply 0 to `_final` at `_decay_plies` and beyond
+  // (decay_plies == 0: `_final` throughout). Both 1 = off. Playout-cap fast
+  // searches stay at 1, like they stay noise-free.
+  double root_policy_temperature_initial = 1.0;
+  double root_policy_temperature_final = 1.0;
+  int root_policy_temperature_decay_plies = 0;
+  OpeningExploration opening_exploration{};
   int max_game_plies = 500;
 
   bool tail_solve_enabled = false;

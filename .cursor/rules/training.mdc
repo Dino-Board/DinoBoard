@@ -13,3 +13,4 @@ Read the rule matching your current task:
 - **Launch / resume / stop a run** (GPU env setup, `gpu_env.sh`, nohup launch, monitoring, clean stop): see `training-launch`
 - **Hyperparameter selection** (c_puct, network depth/width, lr, Dirichlet, opponent pool by game type): see `training-hyperparams`
 - **Diagnose issues** (symptom-to-cause checklist, concurrent inference setup, known BUGs): see `training-diagnostics`
+- **Selfplay exploration / policy lock-in** (same opening every game, random starting positions, root policy temperature, Dirichlet noise by legal-action count, `prior_ent` / `policy_kl` log fields): see `training-exploration`

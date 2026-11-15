@@ -69,6 +69,8 @@ _PROFILE_FIELDS = {
     "dirichlet_alpha",
     "dirichlet_epsilon",
     "dirichlet_on_first_n_plies",
+    "dirichlet_total_alpha",
+    "root_policy_temperature",
     "opponent_selection",
     "tail_solve_enabled",
     "tail_solve_depth_limit",
@@ -85,7 +87,14 @@ _PROFILE_FIELDS = {
 # silently ignored there — rejected instead.
 _TRAIN_PROFILE_ONLY_FIELDS = {"uct2_arrival_visits"}
 
+# Selfplay exploration knobs: only train.json's `mcts.selfplay` may set them.
+# Eval, gating and the web AI never explore, and none of those paths forwards
+# these fields, so a value anywhere else would be silently ignored — rejected.
+_SELFPLAY_PROFILE_ONLY_FIELDS = {"dirichlet_total_alpha", "root_policy_temperature"}
+
 _TEMPERATURE_SCHEDULE_FIELDS = {"enabled", "initial", "final", "decay_plies"}
+
+_ROOT_POLICY_TEMPERATURE_FIELDS = {"initial", "final", "decay_plies"}
 
 
 @dataclass(frozen=True)
@@ -113,6 +122,16 @@ class MctsProfile:
     dirichlet_alpha: float
     dirichlet_epsilon: float
     dirichlet_on_first_n_plies: int
+    # Selfplay only. Root noise sized by the number of legal actions:
+    # per-action alpha = dirichlet_total_alpha / N. 0 = off; exclusive with
+    # dirichlet_alpha. See NetMctsConfig::root_dirichlet_total_alpha.
+    dirichlet_total_alpha: float
+    # Selfplay only. Root policy temperature of full searches, linear in the
+    # ply index from `initial` (ply 0) to `final` (`decay_plies` and later).
+    # 1 / 1 = off. See NetMctsConfig::root_policy_temperature.
+    root_policy_temperature_initial: float
+    root_policy_temperature_final: float
+    root_policy_temperature_decay_plies: int
 
     opponent_selection: str
 
@@ -154,6 +173,10 @@ _BASE_DICT: dict[str, Any] = {
     # int overrides. This way games don't have to repeat max_game_plies in
     # train.json::mcts.selfplay.
     "dirichlet_on_first_n_plies": -1,
+    "dirichlet_total_alpha": 0.0,
+    "root_policy_temperature_initial": 1.0,
+    "root_policy_temperature_final": 1.0,
+    "root_policy_temperature_decay_plies": 0,
     "opponent_selection": "puct",
     "tail_solve_enabled": False,
     "tail_solve_depth_limit": 10,
@@ -205,6 +228,15 @@ def _reject_train_profile_only_fields(node: dict, source: str) -> None:
             f"forward them, so a value here would be silently ignored for web play.")
 
 
+def _reject_selfplay_profile_only_fields(node: dict, source: str) -> None:
+    misplaced = set(node.keys()) & _SELFPLAY_PROFILE_ONLY_FIELDS
+    if misplaced:
+        raise ValueError(
+            f"{source}: field(s) {sorted(misplaced)} are selfplay exploration knobs and "
+            f"can only be set in train.json's `mcts.selfplay` profile. Eval, gating "
+            f"and the web AI do not explore, so a value here would be silently ignored.")
+
+
 def _validate_profile_node(name: str, game_id: str, node: dict, source: str) -> None:
     if not isinstance(node, dict):
         raise ValueError(
@@ -238,6 +270,7 @@ def _load_baseline(game_id: str) -> dict[str, Any]:
             f"baseline (no profile names); profile-specific knobs live in "
             f"train.json's `mcts` block or web.json.")
     _reject_train_profile_only_fields(raw, str(path))
+    _reject_selfplay_profile_only_fields(raw, str(path))
 
     with _CACHE_LOCK:
         _BASELINE_CACHE[game_id] = raw
@@ -273,6 +306,7 @@ def _load_train_profiles(game_id: str) -> dict[str, dict]:
             raise KeyError(
                 f"{path}['mcts'] missing required profile {name!r}.")
         _validate_profile_node(name, game_id, raw[name], f"{path}['mcts']")
+    _reject_selfplay_profile_only_fields(raw["eval"], f"{path}['mcts']['eval']")
 
     with _CACHE_LOCK:
         _TRAIN_PROFILES_CACHE[game_id] = raw
@@ -304,6 +338,7 @@ def _load_web_profiles(game_id: str) -> dict[str, dict]:
                 f"{path} missing required profile {name!r}.")
         _validate_profile_node(name, game_id, raw[name], str(path))
         _reject_train_profile_only_fields(raw[name], f"{path} profile {name!r}")
+        _reject_selfplay_profile_only_fields(raw[name], f"{path} profile {name!r}")
 
     with _CACHE_LOCK:
         _WEB_PROFILES_CACHE[game_id] = raw
@@ -336,6 +371,46 @@ def _flatten_temperature_schedule(layer: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _is_number(value: Any) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value))
+
+
+def _flatten_root_policy_temperature(layer: dict[str, Any]) -> dict[str, Any]:
+    """Expand `root_policy_temperature` into flat profile fields.
+
+    Either one number T (the same temperature at every ply) or
+    `{"initial": T0, "final": T1, "decay_plies": n}` (linear from T0 at ply 0
+    to T1 at ply n and after)."""
+    if "root_policy_temperature" not in layer:
+        return layer
+    value = layer["root_policy_temperature"]
+    out = {k: v for k, v in layer.items() if k != "root_policy_temperature"}
+    if _is_number(value):
+        out["root_policy_temperature_initial"] = float(value)
+        out["root_policy_temperature_final"] = float(value)
+        out["root_policy_temperature_decay_plies"] = 0
+        return out
+    if not isinstance(value, dict) or set(value.keys()) != _ROOT_POLICY_TEMPERATURE_FIELDS:
+        raise ValueError(
+            f"root_policy_temperature must be a number or a JSON object with exactly "
+            f"{sorted(_ROOT_POLICY_TEMPERATURE_FIELDS)}, got {value!r}.")
+    decay = value["decay_plies"]
+    if not (_is_number(value["initial"]) and _is_number(value["final"])
+            and isinstance(decay, int) and not isinstance(decay, bool)):
+        raise ValueError(
+            f"root_policy_temperature: initial / final must be numbers and decay_plies "
+            f"an integer, got {value!r}.")
+    out["root_policy_temperature_initial"] = float(value["initial"])
+    out["root_policy_temperature_final"] = float(value["final"])
+    out["root_policy_temperature_decay_plies"] = decay
+    return out
+
+
+def _flatten_layer(layer: dict[str, Any]) -> dict[str, Any]:
+    return _flatten_root_policy_temperature(_flatten_temperature_schedule(layer))
+
+
 def _validate_resolved(name: str, game_id: str, merged: dict[str, Any]) -> None:
     if int(merged["world_cap"]) < 0:
         raise ValueError(
@@ -352,6 +427,27 @@ def _validate_resolved(name: str, game_id: str, merged: dict[str, Any]) -> None:
         raise ValueError(
             f"profile {name!r} for game {game_id!r}: uct2_arrival_visits must be "
             f"true or false, got {merged['uct2_arrival_visits']!r}.")
+    total_alpha = merged["dirichlet_total_alpha"]
+    if not (_is_number(total_alpha) and total_alpha >= 0):
+        raise ValueError(
+            f"profile {name!r} for game {game_id!r}: dirichlet_total_alpha must be a "
+            f"finite number >= 0 (0 = off), got {total_alpha!r}.")
+    if total_alpha > 0 and float(merged["dirichlet_alpha"]) > 0:
+        raise ValueError(
+            f"profile {name!r} for game {game_id!r}: dirichlet_alpha "
+            f"({merged['dirichlet_alpha']!r}) and dirichlet_total_alpha ({total_alpha!r}) "
+            f"are two ways to size the same root noise; set only one of them.")
+    rpt_initial = merged["root_policy_temperature_initial"]
+    rpt_final = merged["root_policy_temperature_final"]
+    rpt_decay = merged["root_policy_temperature_decay_plies"]
+    if not (rpt_initial > 0 and rpt_final > 0):
+        raise ValueError(
+            f"profile {name!r} for game {game_id!r}: root_policy_temperature must be "
+            f"> 0 (1 = off), got initial={rpt_initial!r}, final={rpt_final!r}.")
+    if rpt_decay < 0 or (rpt_initial != rpt_final and rpt_decay == 0):
+        raise ValueError(
+            f"profile {name!r} for game {game_id!r}: root_policy_temperature.decay_plies "
+            f"must be > 0 when initial != final (and never negative), got {rpt_decay!r}.")
     if merged["opponent_selection"] not in _VALID_OPPONENT_SELECTION:
         raise ValueError(
             f"profile {name!r} for game {game_id!r}: opponent_selection must be "
@@ -390,8 +486,8 @@ def resolve_profile(game_id: str, profile_name: str) -> MctsProfile:
         delta = _load_web_profiles(game_id)[profile_name]
 
     merged = dict(_BASE_DICT)
-    merged.update(_flatten_temperature_schedule(baseline))
-    merged.update(_flatten_temperature_schedule(delta))
+    merged.update(_flatten_layer(baseline))
+    merged.update(_flatten_layer(delta))
 
     # dirichlet_on_first_n_plies sentinel: -1 means "the whole game"
     # (= game.json::max_game_plies). Lets each game omit the field
@@ -416,6 +512,10 @@ def resolve_profile(game_id: str, profile_name: str) -> MctsProfile:
         dirichlet_alpha=float(merged["dirichlet_alpha"]),
         dirichlet_epsilon=float(merged["dirichlet_epsilon"]),
         dirichlet_on_first_n_plies=int(merged["dirichlet_on_first_n_plies"]),
+        dirichlet_total_alpha=float(merged["dirichlet_total_alpha"]),
+        root_policy_temperature_initial=float(merged["root_policy_temperature_initial"]),
+        root_policy_temperature_final=float(merged["root_policy_temperature_final"]),
+        root_policy_temperature_decay_plies=int(merged["root_policy_temperature_decay_plies"]),
         opponent_selection=str(merged["opponent_selection"]),
         tail_solve_enabled=bool(merged["tail_solve_enabled"]),
         tail_solve_depth_limit=int(merged["tail_solve_depth_limit"]),

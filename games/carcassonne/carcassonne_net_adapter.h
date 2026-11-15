@@ -74,6 +74,17 @@ class CarcassonneTokenEncoder final : public IFeatureEncoder {
                        const IBeliefTracker* tracker,
                        std::vector<float>* out) const override;
 
+  // The four quarter turns of the board (g clockwise turns of the 20x20
+  // grid: cell (row, col) -> (col, 19 - row), side s -> s + g, half-edge
+  // h -> h + 2g). Sample-dependent because the rules keep one form of every
+  // placement: a tile's rotation is stored modulo its period and a meeple on
+  // the lowest side / half-edge of its city, road or farm, so the image of a
+  // rotation or meeple action depends on the tile it is about.
+  static constexpr int kBoardSymmetries = 4;
+  int sample_symmetry_count() const override { return kBoardSymmetries; }
+  void apply_sample_symmetry(int g, float* features, std::size_t feature_len,
+                             float* const* action_rows, int num_action_rows) const override;
+
  private:
   void encode_slots(const IGameState& masked_state, int perspective_player, std::vector<float>* out) const;
   void compact(const IGameState& masked_state, const float* slots, std::vector<float>* out) const;

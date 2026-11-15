@@ -282,3 +282,50 @@ Whether a monk can be placed does not depend on the cell (current-tile token:
 cloister slot; global token: meeples in supply). Whether a farmer can be
 placed is not given per rotation; the farmers across each half-edge are
 (`34..49`), and the meeple stage has the exact answer.
+
+#### Board symmetry (training augmentation)
+
+The rules are unchanged by turning the whole table a quarter turn: cell
+`(row, col)` goes to `(col, 19 - row)`, a tile's rotation grows by one, side
+`s` becomes `s + 1` and farm half-edge `h` becomes `h + 2`. The token encoder
+exposes the four turns as sample-dependent symmetries
+(`sample_symmetry_count() == 4`, `apply_sample_symmetry`); with
+`training.symmetry_augmentation: true` every sampled training example gets a
+random turn at batch time. The transform is not a fixed permutation, because
+the rules keep canonical forms and the turn has to restore them:
+
+- a tile's rotation is reduced below its rotation period, on tile tokens, on
+  the current token, and in the placement actions and the per-rotation
+  "fits" / outcome blocks of frontier tokens (a rotation at or above the
+  period is no action; weight on one is an error);
+- a meeple is named by the lowest side / half-edge of its city, road or
+  farm, so after the turn the "may be placed" flags, the farm ids and the
+  meeple actions `1601..1612` move to the new lowest position of the same
+  feature; pass (`1600`) and the cloister (`1613`) stay.
+
+The turned sample is the encoding of the turned state on the fixed 20x20
+grid without re-centring; the network only sees relative positions, so that
+is a valid input. `tests/carcassonne/test_symmetry.py` checks, for sampled
+positions of real games and every turn, that the transformed encoding equals
+the encoding of the independently turned snapshot (as a set of tokens) and
+that the transformed legal mask equals that state's legal mask.
+
+#### Training recipe (`train_transformer_guided.json`)
+
+The first cloud run of this recipe stopped improving once heuristic guidance
+ended. Measured on freshly generated self-play games, the value head got
+worse while its training loss kept falling: at step 250 its win/loss error
+was below that of a five-number regression on the scoreboard, at step 775
+above it (0.745 against 0.712, training log 0.587). Independent 800-simulation
+searches agreed with each other, so the search was following a value head
+that had memorised the outcomes in the replay buffer. The recipe therefore
+differs from the Splendor one in these points:
+
+| Setting | Value | Reason |
+|---------|-------|--------|
+| `train_batches_per_step` | 12 | about 30 sample draws per game, as in Splendor; 28 gave about 70, because a Carcassonne game records twice as many positions that all share one win/loss label |
+| `replay_buffer_size` | 1500000 | about 40k games in the window instead of 8k |
+| `symmetry_augmentation` | true | four views of every position |
+| `opponent_policy_head` | absent | the opponent's next move depends on a tile nobody has drawn yet; its loss stayed flat for a thousand steps |
+
+Whether these are sufficient has not been measured yet.

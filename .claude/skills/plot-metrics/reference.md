@@ -11,6 +11,18 @@ python3 scripts/plot_training_metrics.py runs/<run_dir>
 
 The script auto-discovers all game-specific custom metrics in `train.log` (anything beyond the standard fields like p_loss, v_loss, plies, sims, lr, etc.) and plots them on a single chart with light smoothing.
 
+To plot named `train.log` fields instead — standard ones included — pass
+`--fields`. The chart is auto-scaled and written to a separate file:
+
+```bash
+# Search-diversity read-out (policy lock-in check, see training/exploration.md)
+python3 scripts/plot_training_metrics.py runs/<run_dir> --fields prior_ent,prior_top1,search_ent,policy_kl
+
+# Output: runs/<run_dir>/field_metrics.png
+```
+
+A field that never appears in the log is an error.
+
 ## What Gets Plotted
 
 Custom metrics come from each game's `episode_stats_extractor` registered on GameBundle. The pipeline averages them over all episodes in a step and logs them at the end of the step line.

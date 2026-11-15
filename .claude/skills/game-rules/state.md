@@ -204,7 +204,7 @@ Every field that can affect `state_hash_for_perspective(p)` must round-trip thro
 
 The default `hash_field_bulk` / `mask_field_bulk` implementations forward per-slot to `hash_field_slot` / `mask_field_slot` with `std::vector<int>` index construction per slot. For games with many fields (Splendor 27, Coup 27, Azul 19), this overhead matters — MCTS calls hash every descent step.
 
-**Override `hash_field_bulk` for hot fields** — replace the per-slot virtual dispatch with a tight inlined loop. See `games/6nimmit/6nimmit_state.cpp` for the canonical example: it overrides `hash_field_bulk` for `hand` and `bullhead_pile` (the two largest fields) with a direct loop that skips index vector construction.
+**Override `hash_field_bulk` for hot fields** — replace the per-slot virtual dispatch with a tight inlined loop. See `games/6nimmit/6nimmit_state.cpp` for the canonical example: it overrides `hash_field_bulk` for `hand` and `used` (the two largest fields) with a direct loop that skips index vector construction.
 
 Pattern:
 ```cpp

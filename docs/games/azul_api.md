@@ -2,7 +2,7 @@
 
 ## 概览
 
-- **game_id**：`azul` / `azul_2p` / `azul_3p` / `azul_4p`
+- **game_id**：`azul` / `azul_2p` / `azul_3p` / `azul_4p`（扁平编码 + MLP）；`azul_tok` / `azul_tok_3p` / `azul_tok_4p`（token 编码 + transformer，规则与动作 id 完全相同，见「Token 编码」一节）
 - **玩家数**：2–4
 - **动作空间**：`(factories + 1) × 5 × 6`，2p/3p/4p 下的工厂数不同
   - 2p: 5 factories → 180
@@ -98,6 +98,129 @@ target = action_id % TARGETS                  # 0..4 = pattern line 0..4；5 = f
 | 唯一胜者 | 该玩家 | `[w]` | 其余所有人 | 胜者 +1，其余各 −1/(N−1) |
 | 3–4 人局部分玩家并列第一（比完横行数仍相同） | `-1` | 所有并列第一者 | 其余所有人 | 并列者各 +1/nw，其余各 −1/nl |
 | 所有人并列（含 2 人平局） | `-1` | `[]` | `[]` | 全 0（平局） |
+
+---
+
+## Token 编码（`azul_tok` / `azul_tok_3p` / `azul_tok_4p`）
+
+`AzulTokenEncoder`（`games/azul/azul_net_adapter.{h,cpp}`）把局面编码成一组 token，供 `token_transformer` 网络使用。规则、动作 id、state_dict、事件都与扁平变体相同；扁平变体（`azul` 等）和它的 `AzulFeatureEncoder` 没有改动，旧模型照常可用。
+
+**工厂顺序不影响决策**：一个「堆」token = 某个工厂（或 center）上某一种颜色的全部瓷砖，也就是一次动作拿走的东西。token 里没有任何「这是第几号工厂」的信息（只列出同一工厂上其余颜色各几块），网络也没有位置编码，所以把工厂任意重排后，网络给出的局面价值不变，各个动作的策略值跟着对应的堆走。`tests/azul/test_token_encoder.py` 用真实局面验证了这一点。
+
+### 槽位
+
+每个 token 是 `[valid, entity_id, 特征…]`，共 43 维（`entity_id` 恒为 0；不存在的 token 全 0）。按玩家排列的块都以视角玩家为第 0 位、按座次往后排。
+
+| 块 | 数量 | 类型 id | 说明 |
+|----|------|---------|------|
+| 全局 | 1 | 0 | 轮次、袋子、弃盘 |
+| 玩家 | P | 1 | 分数、floor、墙的汇总 |
+| 图案行 | 5P | 2 | 每位玩家的每条 pattern line 及对应的墙行 |
+| 堆 | (F+1)×5 | 3 | 槽位 = `source × 5 + color`；该颜色数量为 0 时 token 不存在 |
+
+P = 玩家数，F = 工厂数。2p / 3p / 4p 分别是 43 / 59 / 75 个 token，`feature_dim` = 1849 / 2537 / 3225。
+
+### 动作绑定
+
+所有动作都绑定到堆 token：动作 `(source, color, target)` 的策略值 = 堆 `(source, color)` 的第 `target` 个指针头（6 个头：5 条 pattern line + floor）。没有走全局策略头的动作。
+
+### 特征
+
+全局（16）：
+
+| 偏移 | 含义 |
+|------|------|
+| 0 | `min(round_index, 10) / 10` |
+| 1–5 | 袋中各色 / 20 |
+| 6–10 | 弃盘各色 / 20 |
+| 11 | 袋中总数 / 100 |
+| 12 | 先手标记还在 center |
+| 13 | 轮到视角玩家 |
+| 14 | 桌面（工厂 + center）剩余瓷砖 / (4F) |
+| 15 | 桌面剩余堆数 / 20（本轮最多还能取几次） |
+
+玩家（28）：
+
+| 偏移 | 含义 |
+|------|------|
+| 0–3 | 相对视角玩家的座次 one-hot |
+| 4 | 轮到该玩家 |
+| 5 | 已拿到先手标记（下一轮先手） |
+| 6 | 分数 / 100 |
+| 7 | floor 张数 / 7 |
+| 8 | floor 目前的扣分 / 14 |
+| 9 | 下一块落到 floor 的扣分 / 3 |
+| 10–14 | floor 上各色块数 / 7 |
+| 15 | 本轮结算时已满的行将得的分 / 20 |
+| 16 | 结算后会凑满一个墙行（游戏结束） |
+| 17 | 以当前墙计的终局奖励 / 50 |
+| 18–22 | 墙上每列块数 / 5 |
+| 23–27 | 墙上每种颜色块数 / 5 |
+
+图案行（33）：
+
+| 偏移 | 含义 |
+|------|------|
+| 0–3 | 所属玩家的相对座次 one-hot |
+| 4–8 | 第几行 one-hot |
+| 9–13 | 行内颜色 one-hot（空行全 0） |
+| 14 | 已放块数 / 容量 |
+| 15 | 空位数 / 5 |
+| 16 | 已满 |
+| 17–21 | 该墙行上已有颜色 c |
+| 22–26 | 该墙行第 k 列已有块 |
+| 27–31 | 颜色 c 在这一行成墙时的得分 / 10（该色已在墙上则为 0） |
+| 32 | 这一行本轮结算的得分 / 10（未满为 0） |
+
+「成墙得分」按结算顺序算：各行从上到下成墙，所以某一行计分时，上方已满的行已经在墙上。
+
+堆（41）：
+
+| 偏移 | 含义 |
+|------|------|
+| 0 | 在 center |
+| 1 | 拿它会同时拿到先手标记 |
+| 2–6 | 颜色 one-hot |
+| 7 | `min(数量, 16) / 8` |
+| 8–12 | 同一工厂上其余颜色各几块 / 4（拿走后它们进 center；center 的堆全 0） |
+| 13 + 5r … 17 + 5r | 对视角玩家的第 r 条 pattern line：可放、放进去的块数 / 5、放后该行满、满后成墙得分 / 10、溢出到 floor（含先手标记）的扣分 / 14 |
+| 38 | 全部放 floor（含先手标记）的扣分 / 14 |
+| 39 | 下家有图案行能放这种颜色 |
+| 40 | 下家拿它能放满某一行 |
+
+「可放」与规则的合法动作判定一致，所以轮到视角玩家时，堆 token 上的「可放」标志（加上 floor 总是可放）恰好等于合法动作掩码。
+
+### 旧网络与热启动
+
+旧的 MLP 模型（`games/azul/model/azul_{2,3,4}p.onnx`）吃的是扁平编码，和 transformer 结构不同，权重不能直接搬过去。热启动的方式与 `splendor_tok` 相同：在 token 变体里，`pv_512x4` 启发式仍然用旧模型 + 扁平编码器做搜索（配置按对应的扁平变体 id 读取 `heuristic.json`），训练前期由它来下棋，transformer 学它的搜索结果，之后逐步过渡到自我对弈；评估时它也是对手。旧模型在 `azul_tok` 里选的动作与在 `azul` 里完全一样（有测试）。
+
+`final_score_extractor` 已注册（各家终局分数），所以 `training.score_head` 可用。
+
+### 训练配方（`train_transformer.json`，20000 步）
+
+与 Splendor 的 `train_transformer_kata_guided.json` 逐项相同（网络 d128×4、每步 400 局、批 1024×12、学习率 2e-4 余弦降到 4e-6、回放池 20 万、fp16 推理、旧网络引导到第 100 步后线性退到第 1000 步、每 50 步评估 100 局），KataGo 的五项也全部打开：
+
+| 项 | 配置 | 值 |
+|----|------|----|
+| 随机搜索量（playout cap） | `training.playout_cap` | 完整 800 / 快速 150 / 完整概率 0.25 |
+| 分差辅助头 | `training.score_head` | 权重 0.5，`scale` 40 |
+| 对手策略辅助头 | `training.opponent_policy_head` | 权重 0.15 |
+| 权重滑动平均 | `training.ema` | 0.99 |
+| FPU 降低 | `train.json::mcts.selfplay` / `mcts.eval` 的 `fpu_reduction` | 0.2 |
+
+唯一和 Splendor 数字不同的是 `score_head.scale`：它的单位是游戏分数。Splendor 的分差标准差约 4.5 分，除以 15 后目标方差约 0.09；Azul 旧网络对局的分差标准差约 11 分（带噪声的自我对弈约 21 分），要得到同样量级的目标需要除以 40（方差 0.08–0.29）。照搬 15 的话分差损失会比胜负损失还大。
+
+为了和 Splendor 一致，Azul 的公共配置也改了三处，它们同样作用于扁平变体 `azul` 的训练和评估（网页对局读 `web.json`，不受影响）：
+
+- `train.json::mcts`：`selfplay` 和 `eval` 加 `fpu_reduction` 0.2；`eval.simulations` 400 → 2000。改动前后的评估胜率不能直接比较。
+- `heuristic.json`：`pv_512x4` 加 `leaf_batch_size` 8（引导阶段旧网络的搜索按批送显卡）。
+
+```bash
+python3 -m training.cli --game azul_tok \
+    --train-config games/azul/config/train_transformer.json \
+    --output runs/azul_tok_kata20k --providers cuda,cpu
+# 中断后继续：同一条命令加 --resume runs/azul_tok_kata20k
+```
 
 ---
 

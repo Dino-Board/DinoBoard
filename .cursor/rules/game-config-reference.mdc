@@ -88,6 +88,8 @@ Shared knobs every profile inherits. All fields are optional (fall back to _BASE
 | opponent_pool_enabled | bool | Enable past-model opponent pool |
 | opponent_pool_self_ratio | float | Fraction of games vs self (vs pool) |
 | gating_accept_win_rate | float | Override auto-computed gating threshold |
+| opening_exploration | object | Random starting positions: `{"episode_ratio", "min_plies", "max_plies", "temperature", "uniform_mix"}`, all five required. With probability episode_ratio (in [0, 1]; 0 = off) an episode opens with uniform{min_plies..max_plies} unsearched plies sampled from the acting seat's raw policy P as `(1 − uniform_mix)·P^(1/temperature)/Z + uniform_mix/n`; those plies are never training samples. 1 ≤ min_plies ≤ max_plies < max_game_plies, temperature > 0, uniform_mix in [0, 1]. Works for every game. Logged as `expl_eps` / `expl_plies` |
+| symmetry_augmentation | bool | Default false. Each sampled training example gets a uniformly random board symmetry of the encoder (`IFeatureEncoder::symmetries`, `engine/core/feature_encoder.h`) applied at batch time to its features, policy target, legal mask and opponent-policy target (`training/symmetry.py`); the replay buffer is unchanged. Rejected when the encoder offers no symmetries. Encoders with static tables: Harmonies (4 per board side). Encoders with sample-dependent symmetries (`sample_symmetry_count` / `apply_sample_symmetry`): `carcassonne_tok` (4 quarter turns); these cannot transform an opponent-policy target, so the flag is rejected together with `opponent_policy_head`. How to give an encoder symmetries: `game-ai-encoder` |
 
 #### training.selfplay_concurrency
 | Field | Type | Description |
@@ -105,6 +107,17 @@ Contains `selfplay` and `eval` profile deltas. Each overrides baseline fields.
 
 Selfplay is the ONLY place dirichlet non-zero values belong.
 Eval profile is used for both benchmark eval and latest-vs-best gating.
+
+Two exploration fields may appear only in `selfplay` (rejected in mcts.json,
+web.json and `eval`); when and how to use them: `training-exploration`.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| dirichlet_total_alpha | float ≥ 0 | 0.0 | Root noise sized by the position: per-action alpha = total / number of legal root moves. Exclusive with `dirichlet_alpha > 0`; uses the same `dirichlet_epsilon` and `dirichlet_on_first_n_plies` |
+| root_policy_temperature | float > 0, or `{"initial", "final", "decay_plies"}` | 1.0 | Root prior of full selfplay searches becomes P^(1/T) before noise. Object form: linear in the ply index from initial (ply 0) to final (decay_plies and later); decay_plies > 0 when the two differ. Fast `playout_cap` searches keep 1 |
+
+With `--train-config` (e.g. `_tok` variants) these still go in the base
+`train.json`, because MCTS profiles are resolved from it.
 
 #### heuristic_guidance
 | Field | Type | Description |
@@ -179,7 +192,7 @@ Each selector in heuristic.json: `{ "name": "<named_key>", "temperature": 0.0 }`
 
 ## belief.json — Belief Network (Optional)
 
-Only for games with belief tracking (coup, 6nimmit, liarsdice).
+Only for games with a learned belief network (coup, liarsdice).
 
 | Field | Type | Description |
 |-------|------|-------------|

@@ -107,6 +107,87 @@ def _default_gating_threshold(num_players: int, eval_games: int,
     return baseline + z * se
 
 
+_OPENING_EXPLORATION_KEYS = {"episode_ratio", "min_plies", "max_plies", "temperature", "uniform_mix"}
+
+
+def parse_opening_exploration(train_cfg: dict, game_max_plies: int) -> dict | None:
+    """Validate `training.opening_exploration` (random starting positions).
+
+    Absent block = disabled (None). With probability `episode_ratio` a selfplay
+    episode opens with uniform{min_plies..max_plies} plies sampled from the raw
+    policy (`temperature`, mixed with `uniform_mix` of uniform-random) instead
+    of searched; those plies are never training samples. See
+    runtime::OpeningExploration in engine/runtime/selfplay_runner.h.
+    `episode_ratio: 0` keeps the block but switches it off (for
+    --config-override, which can change keys but not delete them).
+    """
+    block = train_cfg.get("opening_exploration")
+    if block is None:
+        return None
+    if not isinstance(block, dict) or set(block) != _OPENING_EXPLORATION_KEYS:
+        raise ValueError(
+            f"training.opening_exploration must be an object with exactly "
+            f"{sorted(_OPENING_EXPLORATION_KEYS)}, got {block!r}")
+    for key in ("min_plies", "max_plies"):
+        if isinstance(block[key], bool) or not isinstance(block[key], int):
+            raise ValueError(
+                f"training.opening_exploration.{key} must be an integer, got {block[key]!r}")
+    ratio = float(block["episode_ratio"])
+    min_plies, max_plies = block["min_plies"], block["max_plies"]
+    temperature = float(block["temperature"])
+    uniform_mix = float(block["uniform_mix"])
+    if not 0.0 <= ratio <= 1.0:
+        raise ValueError(f"training.opening_exploration.episode_ratio must be in [0, 1], got {ratio}")
+    if not 1 <= min_plies <= max_plies:
+        raise ValueError(
+            f"training.opening_exploration needs 1 <= min_plies <= max_plies, "
+            f"got {min_plies}, {max_plies}")
+    if max_plies >= game_max_plies:
+        raise ValueError(
+            f"training.opening_exploration.max_plies ({max_plies}) must be below the "
+            f"game's max_game_plies ({game_max_plies}): the prefix would be the whole game")
+    if not (math.isfinite(temperature) and temperature > 0):
+        raise ValueError(f"training.opening_exploration.temperature must be > 0, got {temperature}")
+    if not 0.0 <= uniform_mix <= 1.0:
+        raise ValueError(f"training.opening_exploration.uniform_mix must be in [0, 1], got {uniform_mix}")
+    return {"episode_ratio": ratio, "min_plies": min_plies, "max_plies": max_plies,
+            "temperature": temperature, "uniform_mix": uniform_mix}
+
+
+def selfplay_exploration_args(cfg: dict) -> dict:
+    """The `exploration` argument of the selfplay bindings, from a selfplay cfg
+    (the resolved selfplay MctsProfile as a dict, plus an optional
+    `opening_exploration` block as returned by parse_opening_exploration)."""
+    out = {
+        "dirichlet_total_alpha": cfg["dirichlet_total_alpha"],
+        "root_policy_temperature_initial": cfg["root_policy_temperature_initial"],
+        "root_policy_temperature_final": cfg["root_policy_temperature_final"],
+        "root_policy_temperature_decay_plies": cfg["root_policy_temperature_decay_plies"],
+    }
+    if "opening_exploration" in cfg:
+        out["opening_exploration"] = cfg["opening_exploration"]
+    return out
+
+
+def policy_diversity_stats(samples: list[dict[str, Any]]) -> dict[str, float] | None:
+    """Step averages of the engine's per-ply search-diversity read-out over
+    `samples` (selfplay sample dicts; those without `has_policy_stats` are
+    skipped). None when no sample carries it, e.g. a fully heuristic-guided
+    step. Keys: prior_ent / search_ent (entropy in nats of the network prior
+    and of the root visit distribution), prior_top1 (largest prior),
+    policy_kl (KL from visits to prior)."""
+    rows = [s for s in samples if s["has_policy_stats"]]
+    if not rows:
+        return None
+    n = len(rows)
+    return {
+        "prior_ent": sum(s["prior_entropy"] for s in rows) / n,
+        "prior_top1": sum(s["prior_top1"] for s in rows) / n,
+        "search_ent": sum(s["visit_entropy"] for s in rows) / n,
+        "policy_kl": sum(s["policy_kl"] for s in rows) / n,
+    }
+
+
 def _worker_selfplay_batch(args: tuple) -> list[dict[str, Any]]:
     """Run one selfplay episode in C++.
 
@@ -174,6 +255,7 @@ def _worker_selfplay_batch(args: tuple) -> list[dict[str, Any]]:
         belief_model_paths=belief_paths_per_seat or [],
         fpu_reduction=cfg["fpu_reduction"],
         uct2_arrival_visits=cfg["uct2_arrival_visits"],
+        exploration=selfplay_exploration_args(cfg),
     )
     episodes = out["episodes"]
     for ep in episodes:
@@ -1076,6 +1158,7 @@ def _run_selfplay_batch_concurrent(
         fpu_reduction=train_cfg["fpu_reduction"],
         compact_samples=bool(train_cfg.get("compact_samples", False)),
         uct2_arrival_visits=train_cfg["uct2_arrival_visits"],
+        exploration=selfplay_exploration_args(train_cfg),
     )
     episodes = out["episodes"]
     # Pipeline downstream expects latest_seat=None for mirror, int>=0 for pool.
@@ -2215,6 +2298,12 @@ def run_training_loop(
             raise ValueError(f"training.playout_cap.full_search_prob must be in (0, 1), got {pc_prob}")
         simulations_start = simulations_full = pc_full
 
+    # Random starting positions for a share of the selfplay episodes. Absent
+    # block (or episode_ratio 0) = every episode starts from the initial state.
+    opening_exploration = parse_opening_exploration(train_cfg, game_max_plies)
+    if opening_exploration is not None and opening_exploration["episode_ratio"] == 0.0:
+        opening_exploration = None
+
     # Opponent pool — opt-in via train.json. Default off (mirror selfplay) so
     # adding the feature didn't change any existing game's training behavior.
     # If `opponent_pool_enabled` is set without `opponent_pool_self_ratio`
@@ -2328,6 +2417,17 @@ def run_training_loop(
     logger.info(f"  uct2_arrival_visits: selfplay={selfplay_profile.uct2_arrival_visits}, "
                 f"eval/gating={eval_profile.uct2_arrival_visits} "
                 f"(mcts_pv heuristics are pinned to False, whatever this is)")
+    logger.info(
+        f"  root noise (selfplay): dirichlet_alpha={selfplay_profile.dirichlet_alpha}, "
+        f"dirichlet_total_alpha={selfplay_profile.dirichlet_total_alpha}, "
+        f"epsilon={selfplay_profile.dirichlet_epsilon}, "
+        f"first_n_plies={selfplay_profile.dirichlet_on_first_n_plies}")
+    logger.info(
+        f"  root_policy_temperature (selfplay): "
+        f"initial={selfplay_profile.root_policy_temperature_initial}, "
+        f"final={selfplay_profile.root_policy_temperature_final}, "
+        f"decay_plies={selfplay_profile.root_policy_temperature_decay_plies}")
+    logger.info(f"  opening_exploration: {opening_exploration or 'disabled'}")
     logger.info(f"  tail_solve (selfplay): enabled={selfplay_profile.tail_solve_enabled}")
     logger.info(f"  opponent_selection (selfplay): {selfplay_profile.opponent_selection}")
     logger.info(
@@ -2461,6 +2561,8 @@ def run_training_loop(
             if playout_cap is not None:
                 selfplay_cfg["fast_simulations"] = pc_fast
                 selfplay_cfg["full_search_prob"] = pc_prob
+            if opening_exploration is not None:
+                selfplay_cfg["opening_exploration"] = opening_exploration
             # Phase 1 batched/threaded path opt-in: forward the
             # selfplay_concurrency block from train.json so run_selfplay_batch
             # can short-circuit to the C++ batched runner when enabled=true.
@@ -2496,6 +2598,7 @@ def run_training_loop(
             # (after pool-mode filtering), not the raw episode-output count.
             step_samples = 0
             belief_step_samples = 0
+            trained_samples: list[dict[str, Any]] = []  # sample dicts that entered the replay buffer
             for ep in episodes:
                 latest_seat = ep["latest_seat"]  # int for pool, None for mirror
                 # Belief samples (Plan §2.2). One per ply per observer; pool-mode
@@ -2564,6 +2667,14 @@ def run_training_loop(
                             opp_target = (opp_policy, 1.0 if has_target else 0.0)
                     replay_buffer.append((feats, policy, z_rotated, mask, score_target, opp_target))
                     step_samples += 1
+                    trained_samples.append(sample)
+
+            # Search diversity of the plies that became training samples: is
+            # the policy collapsing onto single moves (prior_ent falling,
+            # prior_top1 -> 1) and is search still correcting it (policy_kl)?
+            diversity = policy_diversity_stats(trained_samples)
+            explored_plies = [ep["opening_exploration_plies"] for ep in episodes
+                              if ep["opening_exploration_plies"] > 0]
 
             # `pX=...` log column: per-seat win-share accumulated over
             # the step's episodes. Each episode contributes share =
@@ -2619,29 +2730,37 @@ def run_training_loop(
                 # features and to every action-indexed row (policy, legal
                 # mask, opponent policy); values and scores are invariant.
                 sym = augmenter.sample(augment_rng, len(batch)) if augmenter is not None else None
+                as_arrays = compact_dtype is not None or sym is not None
+                feats_np = policy_np = mask_np = opp_np = None
                 if variable_token_dim:
                     feats_np = pad_token_rows([s[0] for s in batch], variable_token_dim)
                 elif compact_dtype is not None:
                     feats_np = np.stack([s[0] for s in batch])
                 elif sym is not None:
                     feats_np = np.asarray([s[0] for s in batch], dtype=np.float32)
-                if variable_token_dim or compact_dtype is not None or sym is not None:
-                    if sym is not None:
-                        feats_np = augmenter.features(feats_np, sym)
+                opp_rows = [s[5][0] for s in batch] if opp_head is not None else None
+                if compact_dtype is not None:
+                    policy_np = densify_policies([s[1] for s in batch], action_space)
+                    mask_np = np.stack([s[3] for s in batch])
+                    if opp_rows is not None:
+                        opp_np = densify_policies(opp_rows, action_space)
+                elif sym is not None:
+                    policy_np = np.asarray([s[1] for s in batch], dtype=np.float32)
+                    mask_np = np.asarray([s[3] for s in batch], dtype=np.float32)
+                    if opp_rows is not None:
+                        opp_np = np.asarray(opp_rows, dtype=np.float32)
+                if sym is not None:
+                    action_rows = [policy_np, mask_np] + ([opp_np] if opp_np is not None else [])
+                    feats_np, action_rows = augmenter.transform(feats_np, action_rows, sym)
+                    policy_np, mask_np = action_rows[0], action_rows[1]
+                    if opp_np is not None:
+                        opp_np = action_rows[2]
+                if feats_np is not None:
                     feat_tensor = rows_to_tensor(feats_np, device)
                 else:
                     feat_tensor = torch.tensor(
                         [s[0] for s in batch], dtype=torch.float32, device=device)
-                if compact_dtype is not None or sym is not None:
-                    if compact_dtype is not None:
-                        policy_np = densify_policies([s[1] for s in batch], action_space)
-                        mask_np = np.stack([s[3] for s in batch])
-                    else:
-                        policy_np = np.asarray([s[1] for s in batch], dtype=np.float32)
-                        mask_np = np.asarray([s[3] for s in batch], dtype=np.float32)
-                    if sym is not None:
-                        policy_np = augmenter.actions(policy_np, sym)
-                        mask_np = augmenter.actions(mask_np, sym)
+                if as_arrays:
                     policy_tensor = rows_to_tensor(policy_np, device)
                     mask_tensor = rows_to_tensor(mask_np, device)
                 else:
@@ -2657,12 +2776,7 @@ def run_training_loop(
                         [s[4] for s in batch], dtype=torch.float32, device=device)
                 opp_tensor = opp_weight_tensor = None
                 if opp_head is not None:
-                    opp_rows = [s[5][0] for s in batch]
-                    if compact_dtype is not None or sym is not None:
-                        opp_np = (densify_policies(opp_rows, action_space) if compact_dtype is not None
-                                  else np.asarray(opp_rows, dtype=np.float32))
-                        if sym is not None:
-                            opp_np = augmenter.actions(opp_np, sym)
+                    if as_arrays:
                         opp_tensor = rows_to_tensor(opp_np, device)
                     else:
                         opp_tensor = torch.tensor(opp_rows, dtype=torch.float32, device=device)
@@ -2775,6 +2889,17 @@ def run_training_loop(
             if guided_sims > 0:
                 rates += f" (heuristic {guided_sims / max(0.01, selfplay_elapsed):.0f})"
             log_parts.append(rates)
+            if diversity is not None:
+                log_parts.append(
+                    f"prior_ent={diversity['prior_ent']:.3f}, "
+                    f"prior_top1={diversity['prior_top1']:.3f}, "
+                    f"search_ent={diversity['search_ent']:.3f}, "
+                    f"policy_kl={diversity['policy_kl']:.3f}")
+            if opening_exploration is not None:
+                # Episodes that opened with a random prefix, and its mean length.
+                avg_prefix = sum(explored_plies) / max(1, len(explored_plies))
+                log_parts.append(
+                    f"expl_eps={len(explored_plies)}, expl_plies={avg_prefix:.1f}")
             if belief_enabled:
                 buf_n = len(belief_buffer) if belief_buffer is not None else 0
                 if belief_loss_val is not None:

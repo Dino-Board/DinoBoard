@@ -7,6 +7,10 @@ position and feature column (variable token encoders) of a sample goes, and
 where every action goes. This module turns that into gather tables once and
 gives each sampled training example its own random symmetry at batch time, so
 the replay buffer still holds every sample exactly once.
+
+Encoders whose symmetries depend on the sample have no tables and transform
+samples themselves (IFeatureEncoder::apply_sample_symmetry, exported by
+`dinoboard_engine.apply_sample_symmetries`); SampleSymmetryAugmenter wraps that.
 """
 from __future__ import annotations
 
@@ -88,6 +92,11 @@ class SymmetryAugmenter:
                 out[rows] = p[rows][:, self.action_gather[g]]
         return out
 
+    def transform(self, x: np.ndarray, action_rows: list[np.ndarray],
+                  sym: np.ndarray) -> tuple[np.ndarray, list[np.ndarray]]:
+        """Features and every action-indexed array ([B, action_space]) of a batch."""
+        return self.features(x, sym), [self.actions(p, sym) for p in action_rows]
+
     def _tokens(self, x: np.ndarray, g: int) -> np.ndarray:
         tok = x.reshape(len(x), -1, self.token_dim)
         if not self.columns_fixed[g]:
@@ -103,8 +112,33 @@ class SymmetryAugmenter:
         return tok.reshape(len(x), -1)
 
 
+class SampleSymmetryAugmenter:
+    """Symmetries the encoder applies itself, sample by sample
+    (IFeatureEncoder::apply_sample_symmetry): the image of an action or a
+    feature depends on the sample, so there are no tables to gather with."""
+
+    def __init__(self, game_id: str, count: int):
+        if count < 2:
+            raise ValueError("symmetry augmentation needs an encoder with at least one non-identity symmetry")
+        self.game_id = game_id
+        self.count = count
+
+    def sample(self, rng: np.random.Generator, n: int) -> np.ndarray:
+        return rng.integers(self.count, size=n)
+
+    def transform(self, x: np.ndarray, action_rows: list[np.ndarray],
+                  sym: np.ndarray) -> tuple[np.ndarray, list[np.ndarray]]:
+        """Features and every array over the actions of the same state
+        ([B, action_space]: policy target, legal mask) of a batch."""
+        import dinoboard_engine
+        feats, rows = dinoboard_engine.apply_sample_symmetries(
+            self.game_id, np.asarray(sym, dtype=np.int64), np.ascontiguousarray(x, dtype=np.float32),
+            [np.ascontiguousarray(p, dtype=np.float32) for p in action_rows])
+        return feats, list(rows)
+
+
 def parse_symmetry_augmentation(train_cfg: dict, game_id: str, *, feature_dim: int, action_space: int,
-                                token_layout: dict | None) -> SymmetryAugmenter | None:
+                                token_layout: dict | None) -> SymmetryAugmenter | SampleSymmetryAugmenter | None:
     """training.symmetry_augmentation: true = a random board symmetry per
     sampled example (default false). Rejected for encoders without symmetries."""
     flag = train_cfg.get("symmetry_augmentation", False)
@@ -114,9 +148,21 @@ def parse_symmetry_augmentation(train_cfg: dict, game_id: str, *, feature_dim: i
         return None
     import dinoboard_engine
     symmetries = dinoboard_engine.encoder_symmetries(game_id)
+    sample_count = dinoboard_engine.encoder_sample_symmetry_count(game_id)
+    if len(symmetries) >= 2 and sample_count >= 2:
+        raise ValueError(
+            f"the encoder of {game_id!r} offers both symmetry tables and sample-dependent symmetries; "
+            f"it must offer one of the two")
+    if sample_count >= 2:
+        if train_cfg.get("opponent_policy_head") is not None:
+            raise ValueError(
+                f"training.symmetry_augmentation cannot be combined with training.opponent_policy_head for "
+                f"{game_id!r}: its symmetries depend on the sample, and the opponent-policy target is a "
+                f"vector over the actions of a later state")
+        return SampleSymmetryAugmenter(game_id, sample_count)
     if len(symmetries) < 2:
         raise ValueError(
             f"training.symmetry_augmentation is true but the encoder of {game_id!r} offers no board "
-            f"symmetries (IFeatureEncoder::symmetries)")
+            f"symmetries (IFeatureEncoder::symmetries or sample_symmetry_count)")
     return SymmetryAugmenter(symmetries, feature_dim=feature_dim, action_space=action_space,
                              token_layout=token_layout)

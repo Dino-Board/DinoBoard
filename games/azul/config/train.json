@@ -38,6 +38,7 @@
       "dirichlet_alpha": 0.33,
       "dirichlet_epsilon": 0.25,
       "simulations": 2000,
+      "fpu_reduction": 0.2,
       "temperature": 1.0,
       "temperature_schedule": {
         "enabled": true,
@@ -48,7 +49,8 @@
     },
     "eval": {
       "tail_solve_enabled": true,
-      "simulations": 400
+      "simulations": 2000,
+      "fpu_reduction": 0.2
     }
   },
   "heuristic_guidance": {

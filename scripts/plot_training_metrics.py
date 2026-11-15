@@ -3,11 +3,17 @@
 
 Usage:
   python3 scripts/plot_training_metrics.py [run_dir]
+  python3 scripts/plot_training_metrics.py [run_dir] --fields prior_ent,prior_top1,search_ent,policy_kl
 
 If run_dir is omitted, uses the DEFAULT_RUN below. Automatically discovers
 all custom metric keys (anything after the standard fields in each log line)
 and plots them on a single chart.
+
+--fields plots the named train.log fields instead (standard ones included,
+e.g. the search-diversity read-out above), auto-scaled, to
+<run_dir>/field_metrics.png.
 """
+import argparse
 import re
 import sys
 from pathlib import Path
@@ -26,11 +32,16 @@ STANDARD_FIELDS = {
     "draw", "plies", "cap_hits", "sims", "lr",
     "b_loss", "b_buf", "b_step", "time", "selfplay", "train",
     "h_ratio", "f_ratio", "ts",
+    # search-diversity read-out and opening-exploration counters
+    "prior_ent", "prior_top1", "search_ent", "policy_kl", "expl_eps", "expl_plies",
 }
 
 
-def parse_metrics(log_path: Path) -> dict[str, list[tuple[int, float]]]:
-    """Parse custom metrics from train.log. Returns {metric_name: [(step, value), ...]}."""
+def parse_metrics(log_path: Path, fields: list[str] | None = None) -> dict[str, list[tuple[int, float]]]:
+    """Parse metrics from train.log. Returns {metric_name: [(step, value), ...]}.
+
+    fields=None: the game's custom metrics (everything not in STANDARD_FIELDS).
+    fields=[...]: exactly those fields."""
     step_re = re.compile(r"Step (\d+)/\d+:")
     kv_re = re.compile(r"(\w+)=([\d.]+)")
 
@@ -43,7 +54,7 @@ def parse_metrics(log_path: Path) -> dict[str, list[tuple[int, float]]]:
             step = int(sm.group(1))
             for m in kv_re.finditer(line):
                 key, val = m.group(1), float(m.group(2))
-                if key in STANDARD_FIELDS:
+                if (key not in fields) if fields is not None else (key in STANDARD_FIELDS):
                     continue
                 if key not in metrics:
                     metrics[key] = []
@@ -59,15 +70,28 @@ def smooth(y: np.ndarray, w: int) -> np.ndarray:
 
 
 def main():
-    run_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_RUN
+    parser = argparse.ArgumentParser(description="Plot metrics from a training run's train.log.")
+    parser.add_argument("run_dir", nargs="?", default=str(DEFAULT_RUN))
+    parser.add_argument(
+        "--fields",
+        help="comma-separated train.log fields to plot instead of the custom metrics, "
+             "e.g. prior_ent,prior_top1,search_ent,policy_kl")
+    args = parser.parse_args()
+    run_dir = Path(args.run_dir)
+    fields = [f for f in args.fields.split(",") if f] if args.fields else None
     log_path = run_dir / "train.log"
-    out_path = run_dir / "custom_metrics.png"
+    out_path = run_dir / ("field_metrics.png" if fields else "custom_metrics.png")
 
     if not log_path.exists():
         print(f"train.log not found: {log_path}", file=sys.stderr)
         sys.exit(1)
 
-    metrics = parse_metrics(log_path)
+    metrics = parse_metrics(log_path, fields)
+    if fields:
+        missing = [f for f in fields if f not in metrics]
+        if missing:
+            print(f"field(s) {missing} not found in {log_path}", file=sys.stderr)
+            sys.exit(1)
     if not metrics:
         print(f"no custom metrics found in {log_path}", file=sys.stderr)
         sys.exit(1)
@@ -83,11 +107,15 @@ def main():
         ax.plot(sx, sv, label=name, color=f"C{i}")
 
     ax.set_xlabel("training step")
-    ax.set_ylabel("rate")
-    ax.set_ylim(0, 1)
+    if fields:
+        ax.set_ylabel("value")
+    else:
+        ax.set_ylabel("rate")
+        ax.set_ylim(0, 1)
     game_name = run_dir.name.split("_")[0]
     total = sum(len(v) for v in metrics.values())
-    ax.set_title(f"{game_name} custom metrics (window={w}) — {list(metrics.values())[0][-1][0]} steps")
+    kind = "fields" if fields else "custom metrics"
+    ax.set_title(f"{game_name} {kind} (window={w}) — {list(metrics.values())[0][-1][0]} steps")
     ax.grid(True, alpha=0.3)
     ax.legend(loc="best")
     fig.tight_layout()

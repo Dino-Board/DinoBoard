@@ -65,8 +65,16 @@ int AzulRules<NPlayers>::score_wall_placement(const PlayerState& p, int row, int
 }
 
 template <int NPlayers>
-int AzulRules<NPlayers>::apply_final_bonus(AzulState<NPlayers>& state, int pid) {
-  auto& p = state.players[pid];
+int AzulRules<NPlayers>::floor_penalty(int first_slot, int tiles) {
+  int total = 0;
+  for (int i = std::max(0, first_slot); i < first_slot + tiles && i < 7; ++i) {
+    total -= kFloorPenalties[i];
+  }
+  return total;
+}
+
+template <int NPlayers>
+int AzulRules<NPlayers>::final_bonus(const PlayerState& p) {
   int row_bonus = 0;
   for (int r = 0; r < kRows; ++r) {
     bool full = true;
@@ -187,7 +195,7 @@ void AzulRules<NPlayers>::apply_round_settlement(AzulState<NPlayers>& state,
 
   auto finish_game = [&]() {
     for (int pid = 0; pid < Cfg::kPlayers; ++pid) {
-      const int bonus = apply_final_bonus(state, pid);
+      const int bonus = final_bonus(state.players[pid]);
       state.players[pid].score += bonus;
       state.scores[pid] = state.players[pid].score;
     }

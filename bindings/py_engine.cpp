@@ -261,6 +261,14 @@ py::dict sample_to_py(const runtime::SelfplaySample& s, bool compact = false) {
   d["full_search"] = s.full_search;
   d["simulations"] = s.simulations;
   d["heuristic_simulations"] = s.heuristic_simulations;
+  d["opening_exploration"] = s.opening_exploration;
+  // Search-diversity read-out (SelfplaySample::has_policy_stats); the four
+  // values are 0 when has_policy_stats is false.
+  d["has_policy_stats"] = s.has_policy_stats;
+  d["prior_entropy"] = s.prior_entropy;
+  d["prior_top1"] = s.prior_top1;
+  d["visit_entropy"] = s.visit_entropy;
+  d["policy_kl"] = s.policy_kl;
   return d;
 }
 
@@ -314,6 +322,7 @@ py::dict result_to_py(const runtime::SelfplayEpisodeResult& result,
   // wins). Empty only when num_players==0 (degenerate).
   out["terminal_z_values"] = result.terminal_z_values;
   out["total_plies"] = result.total_plies;
+  out["opening_exploration_plies"] = result.opening_exploration_plies;
   out["samples"] = samples;
   py::list belief_samples;
   for (const auto& bs : result.belief_samples)
@@ -450,6 +459,85 @@ runtime::SelfplayConfig build_selfplay_config(
   return cfg;
 }
 
+// Selfplay exploration options, passed by the three selfplay bindings as one
+// `exploration` dict so a new knob does not grow three argument lists.
+// Every key is optional (absent = off); unknown keys are rejected:
+//   dirichlet_total_alpha                 float  SelfplayConfig::dirichlet_total_alpha
+//   root_policy_temperature_initial       float  }
+//   root_policy_temperature_final         float  } SelfplayConfig::root_policy_temperature_*
+//   root_policy_temperature_decay_plies   int    }
+//   opening_exploration                   dict with exactly episode_ratio,
+//                                         min_plies, max_plies, temperature,
+//                                         uniform_mix (runtime::OpeningExploration)
+// Value ranges are checked by run_selfplay_episode. Must be parsed with the
+// GIL held, i.e. before the binding releases it.
+struct SelfplayExplorationArgs {
+  double dirichlet_total_alpha = 0.0;
+  double root_policy_temperature_initial = 1.0;
+  double root_policy_temperature_final = 1.0;
+  int root_policy_temperature_decay_plies = 0;
+  runtime::OpeningExploration opening{};
+};
+
+SelfplayExplorationArgs parse_selfplay_exploration(const py::dict& d) {
+  static const std::unordered_set<std::string> kKeys = {
+      "dirichlet_total_alpha", "root_policy_temperature_initial",
+      "root_policy_temperature_final", "root_policy_temperature_decay_plies",
+      "opening_exploration"};
+  static const std::unordered_set<std::string> kOpeningKeys = {
+      "episode_ratio", "min_plies", "max_plies", "temperature", "uniform_mix"};
+  for (const auto& item : d) {
+    const std::string key = py::str(item.first);
+    if (!kKeys.count(key)) {
+      throw std::invalid_argument("selfplay exploration: unknown key '" + key + "'");
+    }
+  }
+  SelfplayExplorationArgs a;
+  if (d.contains("dirichlet_total_alpha")) {
+    a.dirichlet_total_alpha = d["dirichlet_total_alpha"].cast<double>();
+  }
+  if (d.contains("root_policy_temperature_initial")) {
+    a.root_policy_temperature_initial = d["root_policy_temperature_initial"].cast<double>();
+  }
+  if (d.contains("root_policy_temperature_final")) {
+    a.root_policy_temperature_final = d["root_policy_temperature_final"].cast<double>();
+  }
+  if (d.contains("root_policy_temperature_decay_plies")) {
+    a.root_policy_temperature_decay_plies = d["root_policy_temperature_decay_plies"].cast<int>();
+  }
+  if (d.contains("opening_exploration")) {
+    const py::dict o = d["opening_exploration"].cast<py::dict>();
+    for (const auto& item : o) {
+      const std::string key = py::str(item.first);
+      if (!kOpeningKeys.count(key)) {
+        throw std::invalid_argument(
+            "selfplay exploration: unknown opening_exploration key '" + key + "'");
+      }
+    }
+    for (const auto& key : kOpeningKeys) {
+      if (!o.contains(key.c_str())) {
+        throw std::invalid_argument(
+            "selfplay exploration: opening_exploration is missing '" + key + "'");
+      }
+    }
+    a.opening.episode_ratio = o["episode_ratio"].cast<double>();
+    a.opening.min_plies = o["min_plies"].cast<int>();
+    a.opening.max_plies = o["max_plies"].cast<int>();
+    a.opening.temperature = o["temperature"].cast<double>();
+    a.opening.uniform_mix = o["uniform_mix"].cast<double>();
+  }
+  return a;
+}
+
+void apply_selfplay_exploration(runtime::SelfplayConfig& cfg,
+                                const SelfplayExplorationArgs& a) {
+  cfg.dirichlet_total_alpha = a.dirichlet_total_alpha;
+  cfg.root_policy_temperature_initial = a.root_policy_temperature_initial;
+  cfg.root_policy_temperature_final = a.root_policy_temperature_final;
+  cfg.root_policy_temperature_decay_plies = a.root_policy_temperature_decay_plies;
+  cfg.opening_exploration = a.opening;
+}
+
 struct BeliefEvalResult {
   std::unique_ptr<infer::OnnxBeliefEvaluator> evaluator;
   const IBeliefEvaluator* ptr = nullptr;
@@ -500,9 +588,11 @@ py::dict run_selfplay_episode_py(
     bool safe_mode,
     int top_k,
     std::optional<float> fpu_reduction,
-    bool uct2_arrival_visits) {
+    bool uct2_arrival_visits,
+    const py::dict& exploration) {
   // Validate before releasing the GIL — exception propagation is cleaner.
   const auto opp_sel = parse_opponent_selection(opponent_selection);
+  const auto exploration_args = parse_selfplay_exploration(exploration);
   py::gil_scoped_release release;
 
   auto bundle = GameRegistry::instance().create_game(game_id, seed);
@@ -582,6 +672,7 @@ py::dict run_selfplay_episode_py(
       heuristic_guidance_ratio, heuristic_temperature,
       training_filter_ratio, opp_sel, safe_mode, top_k, fpu_reduction,
       uct2_arrival_visits);
+  apply_selfplay_exploration(cfg, exploration_args);
 
   auto pp = create_per_seat_bundles(game_id, seed, num_players_sp);
 
@@ -659,8 +750,10 @@ py::dict run_selfplay_episodes_batch_py(
     int top_k,
     const std::vector<std::string>& belief_model_paths,
     std::optional<float> fpu_reduction,
-    bool uct2_arrival_visits) {
+    bool uct2_arrival_visits,
+    const py::dict& exploration) {
   const auto opp_sel = parse_opponent_selection(opponent_selection);
+  const auto exploration_args = parse_selfplay_exploration(exploration);
   py::gil_scoped_release release;
 
   if (seeds.empty()) {
@@ -829,6 +922,7 @@ py::dict run_selfplay_episodes_batch_py(
       heuristic_guidance_ratio, heuristic_temperature,
       training_filter_ratio, opp_sel, safe_mode, top_k, fpu_reduction,
       uct2_arrival_visits);
+  apply_selfplay_exploration(cfg, exploration_args);
 
   std::vector<runtime::SelfplayEpisodeResult> results;
   results.reserve(seeds.size());
@@ -940,8 +1034,10 @@ py::dict run_concurrent_selfplay_step_py(
     double full_search_prob,
     std::optional<float> fpu_reduction,
     bool compact_samples,
-    bool uct2_arrival_visits) {
+    bool uct2_arrival_visits,
+    const py::dict& exploration) {
   const auto opp_sel = parse_opponent_selection(opponent_selection);
+  const auto exploration_args = parse_selfplay_exploration(exploration);
   py::gil_scoped_release release;
 
   if (seeds.empty()) {
@@ -1170,6 +1266,7 @@ py::dict run_concurrent_selfplay_step_py(
   cfg.fast_simulations = fast_simulations;
   cfg.full_search_prob = full_search_prob;
   cfg.encode_fast_samples = !compact_samples;
+  apply_selfplay_exploration(cfg, exploration_args);
 
   // ------------------------------------------------------------
   // Thread pool: shared seed counter (work-stealing). Each thread fixed in
@@ -4056,7 +4153,8 @@ PYBIND11_MODULE(dinoboard_engine, m) {
       py::arg("safe_mode") = false,
       py::arg("top_k") = 0,
       py::arg("fpu_reduction") = py::none(),
-      py::arg("uct2_arrival_visits").noconvert() = true);
+      py::arg("uct2_arrival_visits").noconvert() = true,
+      py::arg("exploration") = py::dict());
 
   m.def("run_selfplay_episodes_batch", &run_selfplay_episodes_batch_py,
       py::arg("game_id"),
@@ -4088,7 +4186,8 @@ PYBIND11_MODULE(dinoboard_engine, m) {
       py::arg("top_k") = 0,
       py::arg("belief_model_paths") = std::vector<std::string>{},
       py::arg("fpu_reduction") = py::none(),
-      py::arg("uct2_arrival_visits").noconvert() = true);
+      py::arg("uct2_arrival_visits").noconvert() = true,
+      py::arg("exploration") = py::dict());
 
   m.def("run_concurrent_selfplay_step", &run_concurrent_selfplay_step_py,
       py::arg("game_id"),
@@ -4134,7 +4233,8 @@ PYBIND11_MODULE(dinoboard_engine, m) {
       py::arg("full_search_prob") = 1.0,
       py::arg("fpu_reduction") = py::none(),
       py::arg("compact_samples") = false,
-      py::arg("uct2_arrival_visits").noconvert() = true);
+      py::arg("uct2_arrival_visits").noconvert() = true,
+      py::arg("exploration") = py::dict());
 
   m.def("run_arena_match", &run_arena_match_py,
       py::arg("game_id"),
@@ -4339,6 +4439,70 @@ PYBIND11_MODULE(dinoboard_engine, m) {
     }
     return out;
   }, py::arg("game_id"));
+
+  // Number of sample-dependent board symmetries of the encoder
+  // (IFeatureEncoder::sample_symmetry_count); 0 if it has none.
+  m.def("encoder_sample_symmetry_count", [](const std::string& game_id) -> int {
+    py::gil_scoped_release release;
+    return GameRegistry::instance().create_game(game_id, 0).encoder->sample_symmetry_count();
+  }, py::arg("game_id"));
+
+  // IFeatureEncoder::apply_sample_symmetry over a batch: symmetry sym[i] is
+  // applied to row i of `features` ([B, W] float32; variable token rows
+  // padded with all-zero tokens) and to row i of every array in
+  // `action_rows` ([B, action_space] float32). Returns new arrays
+  // (features, [action rows]); the inputs are not modified.
+  m.def("apply_sample_symmetries", [](const std::string& game_id,
+                                      py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> sym,
+                                      py::array_t<float, py::array::c_style | py::array::forcecast> features,
+                                      std::vector<py::array_t<float, py::array::c_style | py::array::forcecast>>
+                                          action_rows) -> py::tuple {
+    if (sym.ndim() != 1 || features.ndim() != 2 || features.shape(0) != sym.shape(0)) {
+      throw std::invalid_argument("apply_sample_symmetries: sym must be [B] and features [B, W]");
+    }
+    const auto batch = static_cast<std::size_t>(sym.shape(0));
+    const auto width = static_cast<std::size_t>(features.shape(1));
+    py::array_t<float> out_features({features.shape(0), features.shape(1)});
+    std::copy(features.data(), features.data() + batch * width, out_features.mutable_data());
+    std::vector<py::array_t<float>> out_rows;
+    std::vector<float*> row_data;
+    std::size_t action_space = 0;
+    for (const auto& rows : action_rows) {
+      if (rows.ndim() != 2 || rows.shape(0) != sym.shape(0) ||
+          (!out_rows.empty() && static_cast<std::size_t>(rows.shape(1)) != action_space)) {
+        throw std::invalid_argument("apply_sample_symmetries: every action array must be [B, action_space]");
+      }
+      action_space = static_cast<std::size_t>(rows.shape(1));
+      out_rows.emplace_back(std::vector<py::ssize_t>{rows.shape(0), rows.shape(1)});
+      std::copy(rows.data(), rows.data() + batch * action_space, out_rows.back().mutable_data());
+      row_data.push_back(out_rows.back().mutable_data());
+    }
+    const std::int64_t* g = sym.data();
+    float* feature_data = out_features.mutable_data();
+    {
+      py::gil_scoped_release release;
+      const GameBundle bundle = GameRegistry::instance().create_game(game_id, 0);
+      const IFeatureEncoder& encoder = *bundle.encoder;
+      const int count = encoder.sample_symmetry_count();
+      if (count < 2) {
+        throw std::invalid_argument("apply_sample_symmetries: the encoder of '" + game_id +
+                                    "' has no sample-dependent symmetries");
+      }
+      if (!row_data.empty() && action_space != static_cast<std::size_t>(encoder.action_space())) {
+        throw std::invalid_argument("apply_sample_symmetries: action arrays must have action_space columns");
+      }
+      std::vector<float*> rows(row_data.size());
+      for (std::size_t i = 0; i < batch; ++i) {
+        if (g[i] < 0 || g[i] >= count) throw std::invalid_argument("apply_sample_symmetries: symmetry out of range");
+        // Variable token rows end in all-zero padding tokens the encoder
+        // skips; the row is passed whole.
+        for (std::size_t k = 0; k < row_data.size(); ++k) rows[k] = row_data[k] + i * action_space;
+        encoder.apply_sample_symmetry(static_cast<int>(g[i]), feature_data + i * width, width, rows.data(),
+                                      static_cast<int>(rows.size()));
+      }
+    }
+    return py::make_tuple(out_features, out_rows);
+  }, py::arg("game_id"), py::arg("sym"), py::arg("features"), py::arg("action_rows"));
 
   // Resolved settings of a registered heuristic, read from the object the
   // engine actually instantiates (not from heuristic.json), so benchmark

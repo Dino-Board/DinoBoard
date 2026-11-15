@@ -183,7 +183,12 @@ unordered_map<StateHash64, int> node_index;      // per-search DAG 查找表
 输入: root_state, rules, evaluator, config, search_seed
 
 初始化:
-  创建根节点, expand, 加 Dirichlet 噪声
+  创建根节点, expand
+  根先验温度(root_policy_temperature ≠ 1 时): P ← P^(1/T) 归一化
+  加 Dirichlet 噪声(每个动作的 alpha = root_dirichlet_alpha,
+    或 root_dirichlet_total_alpha / 根合法动作数,二者只能配一个)
+  // 温度和噪声只由 selfplay 的完整搜索传入;eval / gating / web 恒为 T=1、无噪声。
+  // stats.root_priors 记录的是温度和噪声之前的网络原始先验。
   // 根只有一个合法动作(forced move)且不是分析模式(cover_root_edges):
   // 不跑任何 sim,直接返回该动作——visits one-hot, simulations_done = 0,
   // root_values 取根节点的网络评估。tail solver 照常先跑。
@@ -234,6 +239,17 @@ visit_count 是它所有结果的总和，直接用它会把概率为 p 的结�
 `Q(父节点) − r·sqrt(已访问子边先验之和)`。训练侧的其他 KataGo 技巧
 （playout cap、辅助头、EMA）不改变搜索，见 `/training` 技能的
 `katago-techniques.md`。
+
+**Selfplay 探索（防止策略锁死）**：PUCT 按先验分配访问、策略又按访问训练，
+先领先的走法会自我强化，同样好的替代走法因为搜不深而永远显不出来。框架提供
+三个对所有游戏通用、默认关闭、只作用于 selfplay 的开关：
+`training.opening_exploration`（一部分对局先按原始策略采样走一段不搜索的随机
+开局，这些步不进训练样本，之后照常搜索）、`mcts.selfplay.root_policy_temperature`
+（根先验温度，可随 ply 线性衰减）、`mcts.selfplay.dirichlet_total_alpha`
+（噪声 alpha 随根合法动作数缩放）。每步训练日志同时输出
+`prior_ent / prior_top1 / search_ent / policy_kl`（网络原始先验的熵和最大值、
+根访问分布的熵、访问相对先验的 KL），用来判断策略是否坍缩。用法见 `/training`
+技能的 `exploration.md`。
 
 ### Step counter 防环
 

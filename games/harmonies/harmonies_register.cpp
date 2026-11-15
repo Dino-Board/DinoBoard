@@ -206,6 +206,14 @@ board_ai::GameBundle make_harmonies(const std::string& game_id, std::uint64_t se
           "greedy_mcts_train", pv_eval_ptr, b.value_model.get(),
           hc_train.simulations, hc_train.c_puct, hc_train.world_cap,
           hc_train.leaf_batch_size));
+  b.final_score_extractor = [](const IGameState& state) -> std::vector<float> {
+    const auto& s = board_ai::checked_cast<HarmoniesState<NPlayers, Side>>(state);
+    std::vector<float> points(NPlayers);
+    for (int p = 0; p < NPlayers; ++p) {
+      points[static_cast<size_t>(p)] = static_cast<float>(s.animal_scores[p] + s.landscape_scores[p]);
+    }
+    return points;
+  };
   return b;
 }
 

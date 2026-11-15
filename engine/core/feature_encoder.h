@@ -1,6 +1,8 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
+#include <stdexcept>
 #include <vector>
 
 #include "game_interfaces.h"
@@ -77,6 +79,12 @@ struct TokenLayout {
 //   policy:  a target over the actions of s, with action a moved to
 //            action_map[a], is the target over the actions of g(s).
 // symmetries()[0] is the identity; no symmetries = no augmentation.
+//
+// Encoders whose symmetries are not fixed tables — where an action or a
+// feature of g(s) depends on the sample itself (e.g. which rotations of a
+// tile are distinct actions depends on the tile being placed) — leave
+// symmetries() empty and implement IFeatureEncoder::sample_symmetry_count /
+// apply_sample_symmetry instead; an encoder offers one of the two, not both.
 struct EncoderSymmetry {
   std::vector<int> feature_map;
   std::vector<int> anchor_map;
@@ -121,6 +129,23 @@ class IFeatureEncoder {
   virtual const TokenLayout* token_layout() const { return nullptr; }
   // Board symmetries of the encoding (see EncoderSymmetry); empty if none.
   virtual std::vector<EncoderSymmetry> symmetries() const { return {}; }
+  // Sample-dependent board symmetries (see EncoderSymmetry): how many there
+  // are (0 = none; symmetry 0 is the identity), and the transform of one
+  // stored sample of a state s into the sample of g(s).
+  //   features:    encode(s) for some perspective, `feature_len` floats; a
+  //                variable token encoding may be followed by all-zero
+  //                padding tokens. Rewritten in place to encode(g s) (token
+  //                order may differ from a fresh encoding).
+  //   action_rows: `num_action_rows` vectors of action_space() floats over
+  //                the actions of s (policy target, legal mask), each
+  //                rewritten in place to the vector over the actions of g(s).
+  // Vectors over the actions of another state (the opponent-policy target)
+  // cannot be transformed this way.
+  virtual int sample_symmetry_count() const { return 0; }
+  virtual void apply_sample_symmetry(int /*g*/, float* /*features*/, std::size_t /*feature_len*/,
+                                     float* const* /*action_rows*/, int /*num_action_rows*/) const {
+    throw std::logic_error("apply_sample_symmetry: this encoder has no sample-dependent symmetries");
+  }
 
   bool variable_tokens() const {
     const TokenLayout* layout = token_layout();

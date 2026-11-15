@@ -113,6 +113,18 @@ def test_random_games_terminate(game_id, seed):
     assert any(p["space_remaining"] <= 2 for p in sd["players"]) or sum(sd["pouch_counts"]) < 3
 
 
+@pytest.mark.parametrize("game_id", ["harmonies", "harmonies_tok", "harmonies_a", "harmonies_3p"])
+def test_final_scores_feed_the_score_head(game_id):
+    """final_score_extractor (training.score_head) reports each player's
+    animal + landscape total; the winner holds the top score."""
+    assert engine.game_metadata(game_id)["has_final_score_extractor"]
+    ep = engine.run_heuristic_episode(game_id=game_id, seed=4, max_game_plies=400, heuristic_selector="greedy")
+    scores = ep["final_scores"]
+    assert len(scores) == engine.game_metadata(game_id)["num_players"] and min(scores) > 0
+    if ep["winner"] >= 0:
+        assert scores[ep["winner"]] == max(scores)
+
+
 def test_side_a_model_is_only_for_side_a():
     """The shipped model (trained on side A) matches the side A encoder and
     plays harmonies_a_2p; the side B variants have other dimensions and no

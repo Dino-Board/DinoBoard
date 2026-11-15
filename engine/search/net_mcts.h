@@ -104,6 +104,22 @@ struct NetMctsConfig {
   float value_clip = 1.0f;
   float root_dirichlet_alpha = 0.0f;
   float root_dirichlet_epsilon = 0.0f;
+  // Root noise sized by the number of root actions (AlphaZero / KataGo
+  // convention): per-action alpha = root_dirichlet_total_alpha / N, so the
+  // noise keeps the same total concentration whether the root has 5 legal
+  // actions or 500. With the fixed root_dirichlet_alpha the total grows with
+  // N and the noise turns into a near-uniform smear on wide roots. 0 = off;
+  // > 0 replaces root_dirichlet_alpha (setting both is rejected).
+  float root_dirichlet_total_alpha = 0.0f;
+  // Root policy softmax temperature (KataGo / SAI). Root priors become
+  // p^(1/T), renormalised, before the noise is mixed in. PUCT sharpens the
+  // visit distribution even among moves of equal value, and the policy is
+  // trained on those visits, so a slight preference feeds itself until one
+  // of several equally good moves holds all the prior. T > 1 pushes back at
+  // the root: once a move holds most of the prior it is searched somewhat
+  // less than the prior says, the others somewhat more. 1 = off. Only the
+  // root is touched; noise, selection and backup are unchanged.
+  float root_policy_temperature = 1.0f;
 
   // Enables ISMCTS root-sampling. When non-null, each sampled world clones
   // root and calls tracker->randomize_unseen(world_state, rng) before any
@@ -231,6 +247,11 @@ struct NetMctsStats {
   std::vector<std::vector<double>> root_edge_values{};
   std::vector<ActionId> root_actions{};
   std::vector<int> root_action_visits{};
+  // The network's prior over root_actions exactly as the evaluator returned
+  // it (normalised; before root_policy_temperature and root noise). Empty
+  // when the tail solver decided the move. Selfplay compares it with the
+  // visit distribution for the search-diversity read-out.
+  std::vector<float> root_priors{};
   bool tail_solve_attempted = false;
   bool tail_solve_completed = false;
   bool tail_solved = false;

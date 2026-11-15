@@ -12,6 +12,130 @@
 
 namespace board_ai::runtime {
 
+namespace {
+
+void validate_exploration_config(const SelfplayConfig& config) {
+  auto positive = [](double v) { return std::isfinite(v) && v > 0.0; };
+  if (!positive(config.root_policy_temperature_initial) ||
+      !positive(config.root_policy_temperature_final)) {
+    throw std::invalid_argument(
+        "selfplay: root_policy_temperature must be a finite value > 0, got initial=" +
+        std::to_string(config.root_policy_temperature_initial) + ", final=" +
+        std::to_string(config.root_policy_temperature_final));
+  }
+  if (config.root_policy_temperature_decay_plies < 0) {
+    throw std::invalid_argument(
+        "selfplay: root_policy_temperature decay_plies must be >= 0, got " +
+        std::to_string(config.root_policy_temperature_decay_plies));
+  }
+  if (!(std::isfinite(config.dirichlet_total_alpha) && config.dirichlet_total_alpha >= 0.0)) {
+    throw std::invalid_argument(
+        "selfplay: dirichlet_total_alpha must be a finite value >= 0, got " +
+        std::to_string(config.dirichlet_total_alpha));
+  }
+  if (config.dirichlet_total_alpha > 0.0 && config.dirichlet_alpha > 0.0) {
+    throw std::invalid_argument(
+        "selfplay: dirichlet_alpha and dirichlet_total_alpha are two ways to size "
+        "the same root noise; set only one of them");
+  }
+  const OpeningExploration& oe = config.opening_exploration;
+  if (!(oe.episode_ratio >= 0.0 && oe.episode_ratio <= 1.0)) {
+    throw std::invalid_argument(
+        "selfplay: opening_exploration.episode_ratio must be in [0, 1], got " +
+        std::to_string(oe.episode_ratio));
+  }
+  if (oe.episode_ratio > 0.0) {
+    if (!(oe.min_plies >= 1 && oe.max_plies >= oe.min_plies)) {
+      throw std::invalid_argument(
+          "selfplay: opening_exploration needs 1 <= min_plies <= max_plies, got " +
+          std::to_string(oe.min_plies) + ", " + std::to_string(oe.max_plies));
+    }
+    if (!positive(oe.temperature)) {
+      throw std::invalid_argument(
+          "selfplay: opening_exploration.temperature must be a finite value > 0, got " +
+          std::to_string(oe.temperature));
+    }
+    if (!(oe.uniform_mix >= 0.0 && oe.uniform_mix <= 1.0)) {
+      throw std::invalid_argument(
+          "selfplay: opening_exploration.uniform_mix must be in [0, 1], got " +
+          std::to_string(oe.uniform_mix));
+    }
+  }
+}
+
+// Index drawn from (1 - uniform_mix) * P^(1/temperature) / Z + uniform_mix / n,
+// P being the evaluator's prior over the legal actions.
+std::size_t sample_opening_action(const std::vector<float>& priors,
+                                  const OpeningExploration& oe,
+                                  std::uint64_t seed) {
+  const std::size_t n = priors.size();
+  double max_p = 0.0;
+  for (const float p : priors) {
+    if (!std::isfinite(p) || p < 0.0f) {
+      throw std::runtime_error(
+          "selfplay opening exploration: evaluator returned a non-finite or negative prior");
+    }
+    max_p = std::max(max_p, static_cast<double>(p));
+  }
+  if (max_p <= 0.0) {
+    throw std::runtime_error(
+        "selfplay opening exploration: evaluator returned zero prior mass over legal actions");
+  }
+  const double inv_t = 1.0 / oe.temperature;
+  std::vector<double> weights(n, 0.0);
+  double sum = 0.0;
+  for (std::size_t i = 0; i < n; ++i) {
+    const double rel = static_cast<double>(priors[i]) / max_p;
+    weights[i] = rel > 0.0 ? std::pow(rel, inv_t) : 0.0;
+    sum += weights[i];
+  }
+  const double uniform = oe.uniform_mix / static_cast<double>(n);
+  for (double& w : weights) w = (1.0 - oe.uniform_mix) * w / sum + uniform;
+
+  std::mt19937_64 rng(seed);
+  const double r = std::uniform_real_distribution<double>(0.0, 1.0)(rng);
+  double cumulative = 0.0;
+  std::size_t last_possible = 0;
+  for (std::size_t i = 0; i < n; ++i) {
+    if (weights[i] <= 0.0) continue;
+    cumulative += weights[i];
+    last_possible = i;
+    if (r < cumulative) return i;
+  }
+  return last_possible;  // r landed in the rounding gap just below 1
+}
+
+// SelfplaySample search-diversity read-out from the root's raw prior and
+// visit counts (same order, >= 2 actions).
+void fill_policy_stats(const std::vector<float>& priors,
+                       const std::vector<int>& visits,
+                       SelfplaySample* sample) {
+  double total = 0.0;
+  for (const int v : visits) total += static_cast<double>(std::max(0, v));
+  if (total <= 0.0) return;
+  double prior_entropy = 0.0;
+  double visit_entropy = 0.0;
+  double kl = 0.0;
+  double top1 = 0.0;
+  for (std::size_t i = 0; i < priors.size(); ++i) {
+    const double p = static_cast<double>(priors[i]);
+    if (p > 0.0) prior_entropy -= p * std::log(p);
+    top1 = std::max(top1, p);
+    const double pi = static_cast<double>(std::max(0, visits[i])) / total;
+    if (pi > 0.0) {
+      visit_entropy -= pi * std::log(pi);
+      kl += pi * std::log(pi / std::max(p, 1e-9));
+    }
+  }
+  sample->has_policy_stats = true;
+  sample->prior_entropy = static_cast<float>(prior_entropy);
+  sample->prior_top1 = static_cast<float>(top1);
+  sample->visit_entropy = static_cast<float>(visit_entropy);
+  sample->policy_kl = static_cast<float>(std::max(0.0, kl));
+}
+
+}  // namespace
+
 SelfplayEpisodeResult run_selfplay_episode(
     IGameState& initial_state,
     const IGameRules& rules,
@@ -191,6 +315,36 @@ SelfplayEpisodeResult run_selfplay_episode(
   std::mt19937_64 playout_cap_rng(
       board_ai::rng::derive_subseed(episode_seed, "selfplay.playout_cap"));
 
+  // Exploration knobs (all off by default). `opening_plies` is the length of
+  // this episode's opening-exploration prefix, 0 for a normal episode.
+  validate_exploration_config(config);
+  const OpeningExploration& opening = config.opening_exploration;
+  int opening_plies = 0;
+  if (opening.episode_ratio > 0.0) {
+    std::mt19937_64 opening_rng(board_ai::rng::derive_subseed(
+        episode_seed, "selfplay.opening_exploration"));
+    if (std::uniform_real_distribution<double>(0.0, 1.0)(opening_rng) <
+        opening.episode_ratio) {
+      opening_plies = std::uniform_int_distribution<int>(
+          opening.min_plies, opening.max_plies)(opening_rng);
+    }
+  }
+  auto root_policy_temperature_at = [&](int ply_index) -> float {
+    const int decay = config.root_policy_temperature_decay_plies;
+    const double t1 = config.root_policy_temperature_final;
+    if (decay <= 0) return static_cast<float>(t1);
+    const double t0 = config.root_policy_temperature_initial;
+    const double progress = std::min(
+        1.0, static_cast<double>(std::max(0, ply_index)) / static_cast<double>(decay));
+    return static_cast<float>(t0 + (t1 - t0) * progress);
+  };
+  auto tracker_for = [&](int seat) -> IBeliefTracker* {
+    return (use_per_perspective && seat >= 0 &&
+            seat < static_cast<int>(per_perspective_trackers.size()))
+        ? per_perspective_trackers[seat]
+        : nullptr;
+  };
+
   // GT step rng for do_action_fast on truth state. Seeded directly from
   // episode_seed (no subseed derivation) so that any other GT runner —
   // notably the API session's `step_rng_` in py_engine.cpp — receiving
@@ -271,6 +425,50 @@ SelfplayEpisodeResult run_selfplay_episode(
     }
   };
 
+  // Play `chosen` (picked by `player`) on truth with `step_rules`, then bring
+  // every observer up to date: per-seat trackers, per-seat session states,
+  // the trace. Advances `ply`.
+  auto commit_action = [&](const IGameRules& step_rules, ActionId chosen, int player) {
+    std::unique_ptr<IGameState> state_before = state->clone_state();
+    const ActionId observed = rules.public_action(*state_before, chosen);
+    step_rules.do_action_fast(*state, chosen, step_rng);
+    if (use_per_perspective) {
+      // Every seat's tracker sees every action. Each perspective extracts
+      // its own perspective-specific events.
+      const int num_trackers = static_cast<int>(per_perspective_trackers.size());
+      for (int p = 0; p < num_trackers; ++p) {
+        if (!per_perspective_trackers[p]) continue;
+        PublicEventTrace evt_p;
+        if (public_event_extractor) {
+          evt_p = public_event_extractor(*state_before, chosen, *state, p);
+        }
+        per_perspective_trackers[p]->observe_public_event(
+            player, observed, evt_p.events);
+      }
+    }
+    // Advance per-seat session states via the public-event protocol so
+    // the AI path's view of public state stays in sync with truth's
+    // public projection while hidden remains a tracker-consistent sample.
+    advance_per_seat_states(*state_before, *state, chosen, player);
+    if (tracing) {
+      SelfplayObservationTrace t{};
+      t.ply = ply;
+      t.actor = player;
+      t.action = observed;
+      auto evt = public_event_extractor(
+          *state_before, chosen, *state, trace_perspective);
+      t.events = evt.events;
+      t.public_snapshot = evt.public_snapshot;
+      if (trace_belief_tracker) {
+        trace_belief_tracker->observe_public_event(
+            player, observed, evt.events);
+        t.belief_snapshot_after = trace_belief_tracker->serialize();
+      }
+      result.observation_trace.push_back(std::move(t));
+    }
+    ply += 1;
+  };
+
   while (!state->is_terminal() && ply < config.max_game_plies) {
     const int player = state->current_player();
 
@@ -293,6 +491,51 @@ SelfplayEpisodeResult run_selfplay_episode(
         use_filter ? rules.legal_actions(ai_view) : std::vector<ActionId>{};
     const std::vector<ActionId>& full_legal =
         use_filter ? full_legal_storage : legal;
+
+    // Opening-exploration prefix: no search and no heuristic, the move is
+    // sampled from the acting seat's raw policy (see OpeningExploration).
+    // The evaluator gets what a search root would get: the seat's session
+    // state masked for that seat, plus its tracker.
+    if (ply < opening_plies) {
+      ActionId chosen = legal[0];
+      if (legal.size() > 1) {
+        auto masked = make_masked_state(ai_view, ai_view.schema_ref(), player);
+        std::vector<float> priors;
+        std::vector<float> values;
+        if (!evaluator_for_player(player).evaluate(
+                *masked, player, tracker_for(player), legal, &priors, &values)) {
+          throw std::runtime_error(
+              "selfplay opening exploration: evaluator.evaluate() failed");
+        }
+        if (priors.size() != legal.size()) {
+          throw std::runtime_error(
+              "selfplay opening exploration: evaluator returned " +
+              std::to_string(priors.size()) + " priors for " +
+              std::to_string(legal.size()) + " actions");
+        }
+        chosen = legal[sample_opening_action(
+            priors, opening,
+            board_ai::rng::derive_subseed(
+                episode_seed, "selfplay.opening_exploration.pick",
+                static_cast<std::uint64_t>(ply)))];
+      }
+
+      SelfplaySample sample{};
+      sample.ply = ply;
+      sample.player = player;
+      sample.action_id = chosen;
+      sample.full_search = false;
+      sample.opening_exploration = true;
+      if (encoder && config.encode_fast_samples) {
+        encoder->encode(ai_view, player, tracker_for(player), full_legal,
+                        &sample.features, &sample.legal_mask);
+      }
+      result.samples.push_back(std::move(sample));
+
+      commit_action(effective_rules, chosen, player);
+      result.opening_exploration_plies += 1;
+      continue;
+    }
 
     const bool use_heuristic = heuristic &&
         config.heuristic_guidance_ratio > 0.0 &&
@@ -371,42 +614,7 @@ SelfplayEpisodeResult run_selfplay_episode(
       sample.heuristic_simulations = hr.simulations;
       result.samples.push_back(std::move(sample));
 
-      std::unique_ptr<IGameState> state_before = state->clone_state();
-      const ActionId observed = rules.public_action(*state_before, chosen);
-      effective_rules.do_action_fast(*state, chosen, step_rng);
-      if (use_per_perspective) {
-        const int num_players = static_cast<int>(per_perspective_trackers.size());
-        for (int p = 0; p < num_players; ++p) {
-          if (!per_perspective_trackers[p]) continue;
-          PublicEventTrace evt_p;
-          if (public_event_extractor) {
-            evt_p = public_event_extractor(*state_before, chosen, *state, p);
-          }
-          per_perspective_trackers[p]->observe_public_event(
-              player, observed, evt_p.events);
-        }
-      }
-      // Advance per-seat session states via the public-event protocol so
-      // the AI path's view of public state stays in sync with truth's
-      // public projection while hidden remains a tracker-consistent sample.
-      advance_per_seat_states(*state_before, *state, chosen, player);
-      if (tracing) {
-        SelfplayObservationTrace t{};
-        t.ply = ply;
-        t.actor = player;
-        t.action = observed;
-        auto evt = public_event_extractor(
-            *state_before, chosen, *state, trace_perspective);
-        t.events = evt.events;
-        t.public_snapshot = evt.public_snapshot;
-        if (trace_belief_tracker) {
-          trace_belief_tracker->observe_public_event(
-              player, observed, evt.events);
-          t.belief_snapshot_after = trace_belief_tracker->serialize();
-        }
-        result.observation_trace.push_back(std::move(t));
-      }
-      ply += 1;
+      commit_action(effective_rules, chosen, player);
       heuristic_moves += 1;
       continue;
     }
@@ -424,7 +632,7 @@ SelfplayEpisodeResult run_selfplay_episode(
         std::uniform_real_distribution<double>(0.0, 1.0)(playout_cap_rng) < config.full_search_prob;
     const auto noise = search::resolve_root_dirichlet_noise(
         config.dirichlet_alpha, config.dirichlet_epsilon,
-        config.dirichlet_on_first_n_plies, ply);
+        config.dirichlet_on_first_n_plies, ply, config.dirichlet_total_alpha);
 
     const bool try_tail_solve = config.tail_solve_enabled && tail_solver &&
         tail_solve_trigger && tail_solve_trigger(ai_view, ply);
@@ -439,6 +647,9 @@ SelfplayEpisodeResult run_selfplay_episode(
     mcts_cfg.value_clip = config.value_clip;
     mcts_cfg.root_dirichlet_alpha = full_search ? noise.alpha : 0.0;
     mcts_cfg.root_dirichlet_epsilon = full_search ? noise.epsilon : 0.0;
+    mcts_cfg.root_dirichlet_total_alpha = full_search ? noise.total_alpha : 0.0f;
+    mcts_cfg.root_policy_temperature =
+        full_search ? root_policy_temperature_at(ply) : 1.0f;
     mcts_cfg.opponent_selection = config.opponent_selection;
     mcts_cfg.safe_mode = config.safe_mode;
     mcts_cfg.leaf_batch_size = config.leaf_batch_size;
@@ -506,6 +717,10 @@ SelfplayEpisodeResult run_selfplay_episode(
     sample.tail_solved = stats.tail_solved;
     sample.full_search = full_search;
     sample.simulations = stats.simulations_done;
+    if (!stats.tail_solved && stats.root_priors.size() >= 2 &&
+        stats.root_priors.size() == stats.root_action_visits.size()) {
+      fill_policy_stats(stats.root_priors, stats.root_action_visits, &sample);
+    }
     if (encoder && (full_search || config.encode_fast_samples)) {
       const IBeliefTracker* enc_tracker =
           (use_per_perspective && player >= 0 &&
@@ -526,41 +741,7 @@ SelfplayEpisodeResult run_selfplay_episode(
     sample.action_id = chosen;
     result.samples.push_back(std::move(sample));
 
-    std::unique_ptr<IGameState> state_before = state->clone_state();
-    const ActionId observed = rules.public_action(*state_before, chosen);
-    effective_rules.do_action_fast(*state, chosen, step_rng);
-    if (use_per_perspective) {
-      // Every seat's tracker sees every action. Each perspective extracts
-      // its own perspective-specific events.
-      const int num_players = static_cast<int>(per_perspective_trackers.size());
-      for (int p = 0; p < num_players; ++p) {
-        if (!per_perspective_trackers[p]) continue;
-        PublicEventTrace evt_p;
-        if (public_event_extractor) {
-          evt_p = public_event_extractor(*state_before, chosen, *state, p);
-        }
-        per_perspective_trackers[p]->observe_public_event(
-            player, observed, evt_p.events);
-      }
-    }
-    advance_per_seat_states(*state_before, *state, chosen, player);
-    if (tracing) {
-      SelfplayObservationTrace t{};
-      t.ply = ply;
-      t.actor = player;
-      t.action = observed;
-      auto evt = public_event_extractor(
-          *state_before, chosen, *state, trace_perspective);
-      t.events = evt.events;
-      t.public_snapshot = evt.public_snapshot;
-      if (trace_belief_tracker) {
-        trace_belief_tracker->observe_public_event(
-            player, observed, evt.events);
-        t.belief_snapshot_after = trace_belief_tracker->serialize();
-      }
-      result.observation_trace.push_back(std::move(t));
-    }
-    ply += 1;
+    commit_action(effective_rules, chosen, player);
   }
 
   result.total_plies = ply;

@@ -49,7 +49,7 @@ algorithm walkthrough.
 | Splendor | random + light hidden info | 中等/✓ | 中等/✗ | 中等/✗ |
 | Love Letter | random + hidden info | 随机/✓ | 随机/✓ | 随机/✓ |
 | Coup | bluff | 随机/✓ | 随机/✗ | 随机/✓ |
-| 6 nimmt! | simultaneous + hidden info | 强/✓ | 强/✗ | 强/✗ |
+| 6 nimmt! | simultaneous + hidden info | 强/✗ | 强/✗ | 强/✗ |
 | Liar's Dice | bluff | 中等/✓ | 中等/✓ | 中等/✓ |
 | Harmonies | random | 中等/✗ | 中等/✗ | 中等/✗ |
 | Jaipur | random + hidden info | 中等/✓ | — | — |

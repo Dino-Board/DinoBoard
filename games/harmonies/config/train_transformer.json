@@ -1,16 +1,16 @@
 {
   "network": {
     "type": "token_transformer",
-    "d_model": 128,
-    "num_layers": 4,
-    "num_heads": 4,
-    "ffn_dim": 256,
+    "d_model": 192,
+    "num_layers": 6,
+    "num_heads": 6,
+    "ffn_dim": 384,
     "attention": "fused",
     "relative_position_radius": 6,
     "anchor_embedding": false
   },
   "training": {
-    "steps": 5000,
+    "steps": 20000,
     "episodes_per_step": 200,
     "batch_size": 1024,
     "learning_rate": 0.0002,
@@ -20,8 +20,17 @@
     },
     "grad_clip_norm": 1.0,
     "weight_decay": 0.0001,
-    "train_batches_per_step": 12,
-    "replay_buffer_size": 100000,
+    "train_batches_per_step": 10,
+    "replay_buffer_size": 300000,
+    "opponent_pool_enabled": true,
+    "opponent_pool_self_ratio": 0.75,
+    "opening_exploration": {
+      "episode_ratio": 0.3,
+      "min_plies": 2,
+      "max_plies": 20,
+      "temperature": 1.25,
+      "uniform_mix": 0.2
+    },
     "compact_replay": {
       "features_dtype": "float16"
     },
@@ -30,6 +39,10 @@
       "full_simulations": 800,
       "fast_simulations": 150,
       "full_search_prob": 0.25
+    },
+    "score_head": {
+      "loss_weight": 0.5,
+      "scale": 15.0
     },
     "opponent_policy_head": {
       "loss_weight": 0.15
@@ -43,7 +56,8 @@
     ],
     "selfplay_concurrency": {
       "enabled": true,
-      "leaf_batch_size": 16,
+      "leaf_batch_size": 32,
+      "opponent_pool_max_distinct": 3,
       "evaluator": {
         "batch_size": 1024,
         "batch_timeout_us": 30,
@@ -54,23 +68,6 @@
       }
     }
   },
-  "mcts": {
-    "selfplay": {
-      "dirichlet_alpha": 0.3,
-      "dirichlet_epsilon": 0.25,
-      "simulations": 800,
-      "temperature": 1.0,
-      "temperature_schedule": {
-        "enabled": true,
-        "initial": 1.0,
-        "final": 0.1,
-        "decay_plies": 60
-      }
-    },
-    "eval": {
-      "simulations": 800
-    }
-  },
   "heuristic_guidance": {
     "name": "greedy_mcts_train",
     "hold_steps": 100,
@@ -79,10 +76,10 @@
     "temperature": 0.0
   },
   "runtime": {
-    "workers": 400,
-    "eval_every": 50,
-    "eval_games": 100,
-    "save_every": 25,
+    "workers": 200,
+    "eval_every": 100,
+    "eval_games": 200,
+    "save_every": 50,
     "seed": 20261111
   }
 }

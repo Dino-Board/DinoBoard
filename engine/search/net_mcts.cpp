@@ -90,9 +90,35 @@ static float clip_value(float v, float lim) {
   return std::max(-cap, std::min(cap, v));
 }
 
-static void apply_root_dirichlet_noise(Node& root, float alpha, float epsilon, std::uint64_t seed) {
+// Root priors p -> p^(1/T), renormalised (NetMctsConfig::root_policy_temperature).
+// Computed relative to the largest prior so the powers stay in range.
+static void apply_root_policy_temperature(Node& root, float temperature) {
+  if (temperature == 1.0f || root.edges.size() < 2) return;
+  float max_p = 0.0f;
+  for (const Edge& e : root.edges) max_p = std::max(max_p, e.prior);
+  if (max_p <= 0.0f) return;
+  const double inv_t = 1.0 / static_cast<double>(temperature);
+  std::vector<double> w(root.edges.size(), 0.0);
+  double sum = 0.0;
+  for (size_t i = 0; i < root.edges.size(); ++i) {
+    const double rel = static_cast<double>(std::max(0.0f, root.edges[i].prior)) /
+                       static_cast<double>(max_p);
+    w[i] = rel > 0.0 ? std::pow(rel, inv_t) : 0.0;
+    sum += w[i];
+  }
+  for (size_t i = 0; i < root.edges.size(); ++i) {
+    root.edges[i].prior = static_cast<float>(w[i] / sum);
+  }
+}
+
+// `total_alpha` > 0: per-action alpha = total_alpha / number of root actions
+// (NetMctsConfig::root_dirichlet_total_alpha); otherwise `alpha` as given.
+static void apply_root_dirichlet_noise(Node& root, float alpha, float total_alpha,
+                                       float epsilon, std::uint64_t seed) {
   if (root.edges.empty()) return;
-  const float a = std::max(0.0f, alpha);
+  const float a = total_alpha > 0.0f
+      ? total_alpha / static_cast<float>(root.edges.size())
+      : std::max(0.0f, alpha);
   const float eps = std::max(0.0f, std::min(1.0f, epsilon));
   if (a <= 1e-8f || eps <= 1e-8f) return;
   SplitMix64Engine rng(seed);
@@ -169,6 +195,23 @@ NetMcts::NetMcts(NetMctsConfig cfg) : cfg_(cfg) {
     throw std::invalid_argument(
         "NetMctsConfig.fpu_reduction must be a finite value >= 0, got " +
         std::to_string(*cfg_.fpu_reduction));
+  }
+  if (!(std::isfinite(cfg_.root_policy_temperature) &&
+        cfg_.root_policy_temperature > 0.0f)) {
+    throw std::invalid_argument(
+        "NetMctsConfig.root_policy_temperature must be a finite value > 0, got " +
+        std::to_string(cfg_.root_policy_temperature));
+  }
+  if (!(std::isfinite(cfg_.root_dirichlet_total_alpha) &&
+        cfg_.root_dirichlet_total_alpha >= 0.0f)) {
+    throw std::invalid_argument(
+        "NetMctsConfig.root_dirichlet_total_alpha must be a finite value >= 0, got " +
+        std::to_string(cfg_.root_dirichlet_total_alpha));
+  }
+  if (cfg_.root_dirichlet_total_alpha > 0.0f && cfg_.root_dirichlet_alpha > 0.0f) {
+    throw std::invalid_argument(
+        "NetMctsConfig: root_dirichlet_alpha and root_dirichlet_total_alpha are "
+        "two ways to size the same noise; set only one of them");
   }
 }
 
@@ -534,6 +577,14 @@ ActionId NetMcts::search_root(
   const std::vector<float> root_net_values =
       expand_node(nodes[0], root, *root_masked, cfg_.root_belief_tracker);
 
+  // The evaluator's own prior, kept for NetMctsStats::root_priors before the
+  // root temperature and noise below reshape the edges.
+  std::vector<float> raw_root_priors;
+  if (stats) {
+    raw_root_priors.reserve(nodes[0].edges.size());
+    for (const Edge& e : nodes[0].edges) raw_root_priors.push_back(e.prior);
+  }
+
   // Forced move: with exactly one legal action every simulation would pass
   // through the same root edge, so the visit distribution is one-hot on it
   // whatever the budget. Return it without simulating. The belief hook and
@@ -554,6 +605,7 @@ ActionId NetMcts::search_root(
       stats->expanded_nodes = 1;
       stats->root_actions = {nodes[0].edges[0].action};
       stats->root_action_visits = {1};
+      stats->root_priors = raw_root_priors;
       stats->best_action_value = rv[static_cast<size_t>(root_player)];
       stats->root_values = rv;
       stats->root_edge_values = {rv};
@@ -564,9 +616,11 @@ ActionId NetMcts::search_root(
   const std::uint64_t dirichlet_seed = board_ai::rng::derive_subseed(
       parent_seed, "mcts.dirichlet",
       static_cast<std::uint64_t>(root.current_player()));
+  apply_root_policy_temperature(nodes[0], cfg_.root_policy_temperature);
   apply_root_dirichlet_noise(
       nodes[0],
       cfg_.root_dirichlet_alpha,
+      cfg_.root_dirichlet_total_alpha,
       cfg_.root_dirichlet_epsilon,
       dirichlet_seed);
 
@@ -1107,6 +1161,7 @@ ActionId NetMcts::search_root(
       stats->root_actions.push_back(e.action);
       stats->root_action_visits.push_back(e.visit_count);
     }
+    stats->root_priors = std::move(raw_root_priors);
     const Edge& best = root_node.edges[best_edge];
     float q = 0.0f;
     if (best.visit_count > 0) q = best.value_sum / static_cast<float>(best.visit_count);

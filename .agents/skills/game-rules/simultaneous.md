@@ -129,16 +129,20 @@ Each round every player secretly chooses a card, then all reveal in ascending
 order and place onto rows. Map directly:
 
 - `acts_mask` = all-true during the commit phase, single `1` at `small_player`
-  during the sequential SMALL/apply pause, all-false at terminal.
+  during the sequential SMALL/apply pause.
 - `pending_commits[p]` = the card player `p` chose (`1..104`; `0` = not yet).
 - `current_player_` = scan cursor; rules advance it per commit, reset at
   round start.
-- `committed[]` is an **internal GT-only flag**, NOT a schema slot — it does
-  not enter hash/snapshot/wire. On a snapshot-driven session state (where
-  `do_action_fast` never runs) it stays at reset `0`; no session-side
-  consumer reads it. (See `state.md` "Key invariants": off-schema fields are
-  uninitialized in the session — `committed` is safe only because nothing on
-  the decision side reads it.)
+- There is no off-schema "has committed" flag: who has played is derived
+  from the public cursor (seats are served in ascending order).
+- A revealed slot **stays face up while it is emptied** and is hidden again
+  only when its owner commits the next card. A snapshot-driven session (where
+  `do_action_fast` never runs) receives only visible slots; hiding a slot in
+  the same transition that empties it would leave the stale card there and
+  `current_player()` would be wrong after a SMALL pause.
+- A match is several hands: the transition that places the last card of a
+  hand also deals the next one (`rng`), so new hands reach sessions through
+  the snapshot like any other owner-only slot.
 
 See `games/6nimmit/6nimmit_state.h` (slot comments + the `current_player()`
 override) and `games/6nimmit/6nimmit_rules.cpp` (commit / seal / phase

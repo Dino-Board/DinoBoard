@@ -404,8 +404,15 @@ void write_feature(float* f, const Feature& feat, bool city, int me) {
 
 // Offsets into a token's type-specific features (see the layout comment
 // above encode_features).
+constexpr int kCurrentRotation = 2;   // 4 rotations (meeple stage)
 constexpr int kCurrentSlots = 9;      // 13 meeple positions x kMeepleSlotFeatures
+constexpr int kTileSide = 13;         // 4 sides x kTileSideDim
+constexpr int kTileSideDim = 8;
+constexpr int kTileFarm = 45;         // 8 halves x kTileFarmDim
+constexpr int kTileFarmDim = 3;
 constexpr int kTileSameFeature = 71;  // 6 side pairs
+static_assert(kTileFarm == kTileSide + kSides * kTileSideDim);
+static_assert(kTileFarm + kFarmSides * kTileFarmDim == 69);
 constexpr int kFrontierSide = 2;      // 4 sides x kFrontierSideDim
 constexpr int kFrontierSideDim = 8;
 constexpr int kFrontierFarm = 34;     // 8 halves x 2
@@ -669,7 +676,7 @@ void CarcassonneTokenEncoder::encode_slots(const IGameState& masked_state, int p
     }
     for (int side = 0; side < kSides; ++side) {
       const int terrain = rt.edge[static_cast<size_t>(side)];
-      float* fs = f + 13 + side * 8;
+      float* fs = f + kTileSide + side * kTileSideDim;
       if (terrain == kCity) {
         write_feature(fs, b.cities[static_cast<size_t>(b.city[static_cast<size_t>(cell * 4 + rt.city_of_side[static_cast<size_t>(side)])])], true, me);
       } else if (terrain == kRoad) {
@@ -680,7 +687,7 @@ void CarcassonneTokenEncoder::encode_slots(const IGameState& masked_state, int p
       const int g = rt.farm_of_half[static_cast<size_t>(h)];
       if (g < 0) continue;
       const Farm& farm = b.farms[static_cast<size_t>(b.farm[static_cast<size_t>(cell * 4 + g)])];
-      float* fh = f + 45 + h * 3;
+      float* fh = f + kTileFarm + h * kTileFarmDim;
       fh[0] = static_cast<float>(farm.meeples[static_cast<size_t>(me)]) / 3.0f;
       fh[1] = static_cast<float>(farm.meeples[static_cast<size_t>(opp)]) / 3.0f;
       fh[2] = static_cast<float>(farm.complete_cities) / 5.0f;
@@ -818,6 +825,199 @@ void CarcassonneTokenEncoder::encode_slots(const IGameState& masked_state, int p
       const bool can_place = s.meeples_remaining[static_cast<size_t>(s.current_player_)] > 0 &&
                              s.board_meeple_owner[static_cast<size_t>(last_cell)] == kNoOwner;
       write_position_slots(f + kCurrentSlots, s, b, last_cell, can_place);
+    }
+  }
+}
+
+namespace {
+
+int turned_cell(int cell, int g) {
+  if (cell < 0 || cell >= kBoardCells) throw std::invalid_argument("CarcassonneTokenEncoder: cell out of range");
+  int row = cell / kBoardCols;
+  int col = cell % kBoardCols;
+  for (int i = 0; i < g; ++i) {
+    const int r = col;
+    col = kBoardRows - 1 - row;
+    row = r;
+  }
+  return row * kBoardCols + col;
+}
+
+// `count` consecutive blocks of `width` floats: block i moves to block (i + shift) % count.
+void turn_blocks(float* f, int count, int width, int shift) {
+  std::array<float, 64> old{};
+  std::copy(f, f + count * width, old.begin());
+  for (int i = 0; i < count; ++i) {
+    std::copy(old.begin() + i * width, old.begin() + (i + 1) * width, f + ((i + shift) % count) * width);
+  }
+}
+
+// Index of the one-hot among f[0..4).
+int one_hot_rotation(const float* f) {
+  int rot = -1;
+  for (int r = 0; r < 4; ++r) {
+    if (f[r] == 0.0f) continue;
+    if (f[r] != 1.0f || rot >= 0) throw std::invalid_argument("CarcassonneTokenEncoder: rotation is not one-hot");
+    rot = r;
+  }
+  if (rot < 0) throw std::invalid_argument("CarcassonneTokenEncoder: token has no rotation");
+  return rot;
+}
+
+int tile_of_token(const float* token) {
+  const int tile = static_cast<int>(token[1]) - 1;
+  if (tile < 0 || tile >= kTileTypes) throw std::invalid_argument("CarcassonneTokenEncoder: token has no tile type");
+  return tile;
+}
+
+// Anchor and position header of a board token after g quarter turns.
+void turn_token_cell(float* token, int cell, int g, bool anchored) {
+  const int turned = turned_cell(cell, g);
+  if (anchored) token[2] = static_cast<float>(1 + turned);
+  token[5] = static_cast<float>(turned % kBoardCols);
+  token[6] = static_cast<float>(turned / kBoardCols);
+}
+
+}  // namespace
+
+void CarcassonneTokenEncoder::apply_sample_symmetry(int g, float* features, std::size_t feature_len,
+                                                    float* const* action_rows, int num_action_rows) const {
+  if (g < 0 || g >= kBoardSymmetries) throw std::invalid_argument("CarcassonneTokenEncoder: symmetry out of range");
+  if (features == nullptr || feature_len == 0 || feature_len % kVarTokenDim != 0) {
+    throw std::invalid_argument("CarcassonneTokenEncoder: features are not a whole token encoding");
+  }
+  if (g == 0) return;
+  const int n = static_cast<int>(feature_len / kVarTokenDim);
+  auto token = [&](int i) { return features + static_cast<std::size_t>(i) * kVarTokenDim; };
+
+  int current = -1;
+  for (int i = 0; i < n; ++i) {
+    if (token(i)[0] == 0.0f || static_cast<int>(token(i)[3]) != kCurrentToken) continue;
+    if (current >= 0) throw std::invalid_argument("CarcassonneTokenEncoder: two current-tile tokens");
+    current = i;
+  }
+  if (current < 0) throw std::invalid_argument("CarcassonneTokenEncoder: no current-tile token");
+  float* cur = token(current);
+  float* cf = cur + kVarHeader;
+  const bool place_stage = cf[0] == 1.0f;
+  const bool meeple_stage = cf[1] == 1.0f;
+  if (place_stage == meeple_stage) {
+    throw std::invalid_argument("CarcassonneTokenEncoder: sample is neither a placement nor a meeple decision");
+  }
+  // Placement stage: the tile to place. Meeple stage: the tile just placed.
+  const int tile = tile_of_token(cur);
+  const int period = rotation_period(tile);
+  int placed_rotation = -1;
+
+  if (meeple_stage) {
+    if (cur[4] != 1.0f) throw std::invalid_argument("CarcassonneTokenEncoder: meeple stage without a position");
+    const int old_rotation = one_hot_rotation(cf + kCurrentRotation);
+    placed_rotation = CarcassonneState::canonical_rotation(tile, (old_rotation + g) % 4);
+    cf[kCurrentRotation + old_rotation] = 0.0f;
+    cf[kCurrentRotation + placed_rotation] = 1.0f;
+    turn_token_cell(cur, static_cast<int>(cur[6]) * kBoardCols + static_cast<int>(cur[5]), g, /*anchored=*/false);
+    float* slots = cf + kCurrentSlots;
+    turn_blocks(slots, kSides, kMeepleSlotFeatures, g);
+    turn_blocks(slots + kSides * kMeepleSlotFeatures, kFarmSides, kMeepleSlotFeatures, 2 * g);
+    // The "may be placed" flag sits on the lowest side / half-edge of each
+    // city, road and farm, and a farm's id is its lowest half-edge.
+    const RotTile& rt = rot_tile(tile, placed_rotation);
+    auto relabel = [&](unsigned mask, int first_slot, int members, bool farm) {
+      bool legal = false;
+      for (int m = 0; m < members; ++m) {
+        if (mask & (1u << m)) legal = legal || slots[(first_slot + m) * kMeepleSlotFeatures] == 1.0f;
+      }
+      const int lowest = lowest_bit(mask);
+      for (int m = 0; m < members; ++m) {
+        if (!(mask & (1u << m))) continue;
+        float* fp = slots + (first_slot + m) * kMeepleSlotFeatures;
+        fp[0] = legal && m == lowest ? 1.0f : 0.0f;
+        if (farm) fp[1] = static_cast<float>(lowest + 1) / static_cast<float>(kFarmSides);
+      }
+    };
+    for (int group = 0; group < rt.city_groups; ++group) {
+      relabel(rt.city_sides[static_cast<size_t>(group)], 0, kSides, false);
+    }
+    for (int group = 0; group < rt.road_groups; ++group) {
+      relabel(rt.road_sides[static_cast<size_t>(group)], 0, kSides, false);
+    }
+    for (int group = 0; group < rt.farm_groups; ++group) {
+      relabel(rt.farm_halves[static_cast<size_t>(group)], kSides, kFarmSides, true);
+    }
+  }
+
+  for (int i = 0; i < n; ++i) {
+    float* t = token(i);
+    if (t[0] == 0.0f) continue;
+    const int type = static_cast<int>(t[3]);
+    if (type != kTileToken && type != kFrontierToken) continue;
+    float* f = t + kVarHeader;
+    turn_token_cell(t, static_cast<int>(t[2]) - 1, g, /*anchored=*/true);
+    if (type == kTileToken) {
+      const int old_rotation = one_hot_rotation(f);
+      f[old_rotation] = 0.0f;
+      f[CarcassonneState::canonical_rotation(tile_of_token(t), (old_rotation + g) % 4)] = 1.0f;
+      turn_blocks(f + kTileSide, kSides, kTileSideDim, g);
+      turn_blocks(f + kTileFarm, kFarmSides, kTileFarmDim, 2 * g);
+      std::array<float, 6> pairs{};
+      std::array<std::array<int, kSides>, kSides> pair_index{};
+      int pair = 0;
+      for (int a = 0; a < kSides; ++a) {
+        for (int c = a + 1; c < kSides; ++c, ++pair) pair_index[static_cast<size_t>(a)][static_cast<size_t>(c)] = pair;
+      }
+      for (int a = 0; a < kSides; ++a) {
+        for (int c = a + 1; c < kSides; ++c) {
+          const int ta = (a + g) % kSides;
+          const int tc = (c + g) % kSides;
+          pairs[static_cast<size_t>(pair_index[static_cast<size_t>(std::min(ta, tc))][static_cast<size_t>(std::max(ta, tc))])] =
+              f[kTileSameFeature + pair_index[static_cast<size_t>(a)][static_cast<size_t>(c)]];
+        }
+      }
+      std::copy(pairs.begin(), pairs.end(), f + kTileSameFeature);
+    } else {
+      turn_blocks(f + kFrontierSide, kSides, kFrontierSideDim, g);
+      turn_blocks(f + kFrontierFarm, kFarmSides, 2, 2 * g);
+      // Per-rotation entries exist for the rotations below the period of the
+      // tile to place; rotation r of it becomes rotation (r + g) % period.
+      for (int r = place_stage ? period : 0; r < 4; ++r) {
+        if (f[kFrontierFits + r] != 0.0f) {
+          throw std::invalid_argument("CarcassonneTokenEncoder: placement marked legal at a rotation that is no action");
+        }
+      }
+      if (place_stage) {
+        turn_blocks(f + kFrontierFits, period, 1, g);
+        turn_blocks(f + kFrontierOutcome, period, kFrontierOutcomeDim, g);
+      }
+    }
+  }
+
+  for (int k = 0; k < num_action_rows; ++k) {
+    float* row = action_rows[k];
+    if (row == nullptr) throw std::invalid_argument("CarcassonneTokenEncoder: action row is null");
+    std::array<float, kPlaceActionCount> placed;
+    std::copy(row, row + kPlaceActionCount, placed.begin());
+    std::fill(row, row + kPlaceActionCount, 0.0f);
+    for (int cell = 0; cell < kBoardCells; ++cell) {
+      for (int r = 0; r < 4; ++r) {
+        const float v = placed[static_cast<size_t>(cell * 4 + r)];
+        if (v == 0.0f) continue;
+        if (!place_stage || r >= period) {
+          throw std::invalid_argument("CarcassonneTokenEncoder: action row has weight on a placement that is no action");
+        }
+        row[turned_cell(cell, g) * 4 + (r + g) % period] = v;
+      }
+    }
+    std::array<float, kSides + kFarmSides> meeples;
+    std::copy(row + kMeepleSideActionBase, row + kMeepleCenterAction, meeples.begin());
+    std::fill(row + kMeepleSideActionBase, row + kMeepleCenterAction, 0.0f);
+    for (int p = 0; p < kSides + kFarmSides; ++p) {
+      const float v = meeples[static_cast<size_t>(p)];
+      if (v == 0.0f) continue;
+      if (!meeple_stage) {
+        throw std::invalid_argument("CarcassonneTokenEncoder: action row has weight on a meeple outside the meeple stage");
+      }
+      const int turned = p < kSides ? (p + g) % kSides : kSides + (p - kSides + 2 * g) % kFarmSides;
+      row[kMeepleSideActionBase + canonical_meeple_position(tile, placed_rotation, turned)] += v;
     }
   }
 }

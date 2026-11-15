@@ -235,7 +235,15 @@
 
 `tests/harmonies/test_token_encoder.py` 检查这些表与引擎报告的布局一致，并用 `tests/harmonies/harmonies_reference.py`（独立实现的堆叠规则、图案匹配、计分）逐个特征核对真实对局。
 
-训练：`games/harmonies/config/train_transformer.json`（`relative_position_radius` 6 覆盖整个 B 面，`anchor_embedding: false` 让网络只通过相对位置看格子，`symmetry_augmentation: true`）：
+训练：`games/harmonies/config/train_transformer.json`（`relative_position_radius` 6 覆盖整个 B 面，`anchor_embedding: false` 让网络只通过相对位置看格子，`symmetry_augmentation: true`；`opponent_pool_self_ratio` 0.75 让四分之一对局对历史存档，防止自对弈风格漂移；`score_head` 用动物分 + 景观分的终局分差做辅助目标，`scale` 15 略高于规则 AI 对局分差的中位数 11.5，给更强的对局留出余量）。MCTS 参数照例只在 `train.json` 里，评估用 1000 次模拟。
+
+A 面的 MLP 训练曾经锁死在固定的地形摆法上，所以这份配方把框架的 selfplay 探索选项都打开了（含义和调法见 `/training` 技能的 `exploration.md`）：
+
+- `training.opening_exploration`：30% 的对局先按原始策略采样走 2–20 步不搜索的开局（一回合约 5–7 步，20 步大约是双方各两回合的地形摆放），温度 1.25，其中 20% 是完全随机落子。
+- `train.json::mcts.selfplay.root_policy_temperature`：根先验温度 1.25，60 步内线性降到 1.1。
+- `train.json::mcts.selfplay.dirichlet_total_alpha` 10：合法动作数在"选 5 组之一"和"几十个落点"之间变化很大，噪声 alpha 按合法动作数缩放。
+
+每步 200 局（约 5 千个训练样本、10 个 batch，和璀璨宝石配方一步的样本量、更新次数相当），共 20000 步；回放缓冲 30 万样本约等于最近 1.3 万局：
 
 ```bash
 python -m training.cli --game harmonies_tok --output runs/harmonies_tok \

@@ -278,8 +278,15 @@ void apply_public_state(IGameState& state, const AnyMap& snap,
 
 }  // namespace azul_events
 
+// `token_encoder` selects AzulTokenEncoder (transformer) over the flat
+// AzulFeatureEncoder (MLP). Rules and action ids are the same. The pv_512x4
+// guidance model is an MLP trained on the flat encoding, so in token
+// variants it gets its own flat encoder and loads its config (and model)
+// under the matching flat variant id: the old network keeps working and can
+// guide the training of the new one.
 template <int NPlayers>
-board_ai::GameBundle make_azul(const std::string& game_id, std::uint64_t seed) {
+board_ai::GameBundle make_azul(const std::string& game_id, std::uint64_t seed,
+                               bool token_encoder = false) {
   board_ai::GameBundle b;
   b.game_id = game_id;
   auto s = std::make_unique<board_ai::azul::AzulState<NPlayers>>();
@@ -287,7 +294,19 @@ board_ai::GameBundle make_azul(const std::string& game_id, std::uint64_t seed) {
   b.state = std::move(s);
   b.rules = std::make_unique<board_ai::azul::AzulRules<NPlayers>>();
   b.value_model = std::make_unique<board_ai::DefaultStateValueModel>();
-  b.encoder = std::make_unique<board_ai::azul::AzulFeatureEncoder<NPlayers>>();
+  const board_ai::IFeatureEncoder* pv_encoder = nullptr;
+  std::string pv_config_id = game_id;
+  if (token_encoder) {
+    b.encoder = std::make_unique<board_ai::azul::AzulTokenEncoder<NPlayers>>();
+    b.heuristic_encoders.push_back(
+        std::make_unique<board_ai::azul::AzulFeatureEncoder<NPlayers>>());
+    pv_encoder = b.heuristic_encoders.back().get();
+    pv_config_id = NPlayers == 2 ? std::string("azul")
+                                 : "azul_" + std::to_string(NPlayers) + "p";
+  } else {
+    b.encoder = std::make_unique<board_ai::azul::AzulFeatureEncoder<NPlayers>>();
+    pv_encoder = b.encoder.get();
+  }
   // No belief_tracker registered: every Azul state field is all_public; bag
   // and box_lid live in schema as per-color counts (also all_public). There
   // is no per-perspective hidden information to track and nothing for
@@ -300,11 +319,11 @@ board_ai::GameBundle make_azul(const std::string& game_id, std::uint64_t seed) {
   // from heuristic.json::named.pv_512x4.
   {
     const auto hc = board_ai::heuristic::load_mcts_pv_heuristic_config(
-        game_id, "pv_512x4", /*require_model_path=*/true);
+        pv_config_id, "pv_512x4", /*require_model_path=*/true);
     b.heuristics.register_named(
         "pv_512x4",
         board_ai::heuristic::MctsPVHeuristic::make_from_onnx(
-            "pv_512x4", hc.model_path, b.encoder.get(),
+            "pv_512x4", hc.model_path, pv_encoder,
             b.value_model.get(), hc.simulations, hc.c_puct, hc.world_cap,
             hc.leaf_batch_size));
   }
@@ -364,6 +383,16 @@ board_ai::GameBundle make_azul(const std::string& game_id, std::uint64_t seed) {
     }
     return empty_factories >= 2;
   };
+
+  // Final scores per seat, for the training-only score-margin head.
+  b.final_score_extractor = [](const board_ai::IGameState& state) -> std::vector<float> {
+    const auto& s = board_ai::checked_cast<board_ai::azul::AzulState<NPlayers>>(state);
+    std::vector<float> scores(NPlayers);
+    for (int p = 0; p < NPlayers; ++p) {
+      scores[static_cast<size_t>(p)] = static_cast<float>(s.scores[static_cast<size_t>(p)]);
+    }
+    return scores;
+  };
   return b;
 }
 
@@ -378,6 +407,15 @@ board_ai::GameRegistrar reg_azul_3p("azul_3p", [](std::uint64_t seed) {
 });
 board_ai::GameRegistrar reg_azul_4p("azul_4p", [](std::uint64_t seed) {
   return make_azul<4>("azul_4p", seed);
+});
+board_ai::GameRegistrar reg_azul_tok("azul_tok", [](std::uint64_t seed) {
+  return make_azul<2>("azul_tok", seed, /*token_encoder=*/true);
+});
+board_ai::GameRegistrar reg_azul_tok_3p("azul_tok_3p", [](std::uint64_t seed) {
+  return make_azul<3>("azul_tok_3p", seed, /*token_encoder=*/true);
+});
+board_ai::GameRegistrar reg_azul_tok_4p("azul_tok_4p", [](std::uint64_t seed) {
+  return make_azul<4>("azul_tok_4p", seed, /*token_encoder=*/true);
 });
 
 }  // namespace

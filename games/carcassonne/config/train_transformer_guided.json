@@ -20,8 +20,9 @@
     },
     "grad_clip_norm": 1.0,
     "weight_decay": 0.0001,
-    "train_batches_per_step": 28,
-    "replay_buffer_size": 300000,
+    "train_batches_per_step": 12,
+    "replay_buffer_size": 1500000,
+    "symmetry_augmentation": true,
     "compact_replay": {
       "features_dtype": "float16"
     },
@@ -33,9 +34,6 @@
     "score_head": {
       "loss_weight": 0.5,
       "scale": 30.0
-    },
-    "opponent_policy_head": {
-      "loss_weight": 0.15
     },
     "ema": {
       "decay": 0.99

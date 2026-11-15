@@ -17,6 +17,16 @@ class AzulRules final : public IGameRules {
   bool validate_action(const IGameState& state, ActionId action) const override;
   std::vector<ActionId> legal_actions(const IGameState& state) const override;
 
+  // Scoring rules, also read by the token encoder for its derived features.
+  static int wall_col_for_color(int row, int color_idx);
+  // Points for a tile placed at (row, col) given the rest of the wall.
+  static int score_wall_placement(const PlayerState& p, int row, int col);
+  // Points lost (>= 0) by `tiles` tiles landing on floor slots
+  // first_slot, first_slot + 1, ...; slots past the seventh cost nothing.
+  static int floor_penalty(int first_slot, int tiles);
+  // End-of-game bonus of a wall: rows, columns and colour sets.
+  static int final_bonus(const PlayerState& p);
+
  protected:
   void do_action_fast_impl(IGameState& state, ActionId action,
                            std::mt19937_64& rng) const override;
@@ -27,9 +37,6 @@ class AzulRules final : public IGameRules {
   static int decode_source(ActionId action);
   static int decode_color(ActionId action);
   static int decode_target_line(ActionId action);
-  static int wall_col_for_color(int row, int color_idx);
-  static int score_wall_placement(const PlayerState& p, int row, int col);
-  static int apply_final_bonus(AzulState<NPlayers>& state, int pid);
   static bool will_round_end_after_action(const AzulState<NPlayers>& state, ActionId action);
   static void apply_action_no_undo(AzulState<NPlayers>& state, ActionId action,
                                    std::mt19937_64& rng);

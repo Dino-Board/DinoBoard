@@ -111,7 +111,7 @@ Only for games that can implement `do_action_deterministic` cleanly. Games with 
 |--------|-----|---------|
 | Small network (2-4 layers, no residual) | 3e-4 ~ 5e-4 | tictactoe (5e-4), loveletter (3e-4) |
 | Large network, public/light hidden | 2e-4 ~ 3e-4 | quoridor (3e-4), azul (3e-4), splendor (2e-4) |
-| Large network, bluff/mixed strategy | 1e-4 ~ 1.5e-4 | coup (1.5e-4), 6nimmit (1.5e-4), liarsdice (1e-4) |
+| Large network, bluff/mixed strategy | 1e-4 ~ 1.5e-4 | coup (1.5e-4), liarsdice (1e-4) |
 
 Bluff games need lower lr because value signal is noisier (opponent behavior varies across determinizations).
 
@@ -124,7 +124,9 @@ Example: `lr=2e-4, lr_min=4e-6` (50x decay).
 
 ## Batch Size and Replay
 
-Target **replay ratio ~1-2**: `ratio = batch_size * train_batches_per_step / (episodes_per_step * avg_plies)`. Adjust batch_size and train_batches_per_step to hit this range.
+Target **replay ratio ~1-2**: `ratio = batch_size * train_batches_per_step / (episodes_per_step * avg_plies)`. Adjust batch_size and train_batches_per_step to hit this range. With `playout_cap`, count only the recorded (full-search) plies.
+
+Also check **draws per game** = `batch_size * train_batches_per_step / episodes_per_step`. Every sample of a game carries the same win/loss label, so a long game at the same replay ratio gets its one label trained proportionally more often, and the value head can memorise outcomes instead of generalising (symptom and probe: `training-diagnostics` row 12). Splendor's kata recipe runs at about 30 draws per game; Carcassonne overfitted at about 70 and was cut to 30 (effect of the cut not yet measured).
 
 | Field | Typical | Notes |
 |-------|---------|-------|
@@ -157,6 +159,11 @@ For bluff games, prefer a large buffer (150-200 steps of data) over the default.
 - splendor (70 actions): ~0.15-0.33
 - coup (~20 actions): ~0.5-1.2
 - loveletter (~10 actions): ~1.0
+
+When the number of legal moves changes a lot within a game, set
+`dirichlet_total_alpha` instead (per-action alpha = total / legal moves at
+that root). That option, the root policy temperature and random starting
+positions are covered in `training-exploration`.
 
 ---
 
@@ -217,7 +224,7 @@ Default recommendation: **match the PV network architecture** (same width, depth
 |-------|---------------|
 | architecture | Same hidden_layers as PV network (e.g. 12x256 if PV is 12x256) |
 | residual / block_size | Same as PV network |
-| training.loss | "ce" for categorical outputs (Coup), "bce" for per-face marginals (6nimmit) |
+| training.loss | "ce" for categorical outputs (Coup), "bce" for per-face marginals (Liar's Dice) |
 
 Belief logit temperature is framework-fixed at `1.0` and must not appear in
 `belief.json`; loaders reject it. Belief net trains alongside PV net — one SGD

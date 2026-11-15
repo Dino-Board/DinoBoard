@@ -110,8 +110,9 @@ def test_6nimmit_ai_commit_before_the_human_is_not_shown():
     revealed = {ev["payload"]["player"]: ev["payload"]["card"]
                 for ev in resp["events"] if ev["kind"] == "card_played"}
     assert revealed == {0: card, 1: my_card}
-    assert set(revealed.values()) <= table_cards | {
-        c for pl in resp["state"]["players"] for c in pl["bullhead_pile"]}
+    # A played card stays on the table for the round (taking a row leaves it as the new row head).
+    assert set(revealed.values()) <= table_cards
+    assert set(revealed.values()) <= set(resp["state"]["used"])
     # A rebuilt session (step-back, isolated search) replays the real ids.
     rebuilt = pipeline._build_isolated_gs({**sess, "action_history": sess["action_history"][:2]})
     assert rebuilt.get_state_dict()["table"] == resp["state"]["table"]

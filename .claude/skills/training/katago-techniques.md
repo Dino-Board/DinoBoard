@@ -43,8 +43,8 @@ instead of 0. With Q=0 an unvisited move looks like an even position, which
 in a winning line makes the search waste visits on poor moves and in a losing
 line makes it over-commit to the first ones it tried.
 
-- Typical value 0.2–0.3 (KataGo uses ~0.2). Splendor `train.json` sets 0.2 in
-  both `mcts.selfplay` and `mcts.eval`.
+- Typical value 0.2–0.3 (KataGo uses ~0.2). Splendor and Azul `train.json`
+  set 0.2 in both `mcts.selfplay` and `mcts.eval`.
 - It changes search behavior everywhere the profile is used, so eval win
   rates before and after enabling it are **not comparable** — compare
   checkpoints under the same setting.
@@ -61,9 +61,15 @@ head is not exported, so inference cost is unchanged.
   per seat from a terminal state; see `game-ai/registration.md`). Metadata
   reports it as `has_final_score_extractor`; enabling the head on a game
   without one raises.
-- `scale` ≈ a typical winning margin's order of magnitude (Splendor: 15, the
-  win threshold). `loss_weight` 0.5 is a reasonable start; KataGo keeps
-  auxiliary losses well below the main value loss.
+- `scale` is in game points. Size it from the spread of final margins, not
+  by copying another game's number: an untrained head starts at
+  `s_loss ≈ (margin std / scale)²`, and that should sit near 0.1 so the
+  weighted loss stays well below the value loss (KataGo keeps auxiliary
+  losses small). Splendor: margin std ≈ 4.5 points, scale 15, first
+  `s_loss` 0.09. Azul: std ≈ 11 (teacher games) to 21 (noisy selfplay),
+  scale 40; with 15 the score loss would have exceeded the value loss.
+  Measure the margins from `final_scores` of a few dozen episodes.
+  `loss_weight` 0.5 is a reasonable start.
 - Logged as `s_loss`.
 
 ## Opponent-policy auxiliary head
@@ -80,6 +86,13 @@ blocking).
   information. It is a training label only — inference never reads it — so
   it does not violate the hidden-information rule, in the same way the value
   target uses the final outcome.
+- Leave it off when the opponent's move depends on a chance event that
+  happens after the sampled position (Carcassonne: the opponent's tile is
+  drawn later, so the target is unpredictable; `o_loss` stayed flat over a
+  thousand steps). An `o_loss` that does not fall means the head teaches the
+  trunk nothing.
+- Exclusive with sample-dependent `symmetry_augmentation`
+  (`game-config/reference.md`).
 - Logged as `o_loss`.
 
 ## Weight EMA

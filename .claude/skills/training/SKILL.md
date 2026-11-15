@@ -1,5 +1,5 @@
 ---
-description: "Tune training hyperparameters, selfplay throughput and KataGo-style options; diagnose training issues"
+description: "Tune training hyperparameters, selfplay throughput, exploration and KataGo-style options; diagnose training issues"
 ---
 
 # Training Tuning & Diagnostics
@@ -11,5 +11,6 @@ Read the sub-document matching your current task:
 - **Diagnose issues** (symptom-to-cause checklist, concurrent inference setup, known BUGs): read [diagnostics.md](diagnostics.md)
 - **Selfplay throughput** (bottleneck diagnosis, workers / leaf batching, fp16, TensorRT, memory): read [performance.md](performance.md)
 - **KataGo-style techniques** (playout cap randomization, FPU reduction, score / opponent-policy auxiliary heads, weight EMA): read [katago-techniques.md](katago-techniques.md)
+- **Selfplay exploration / policy lock-in** (same opening every game, random starting positions, root policy temperature, Dirichlet noise by legal-action count, `prior_ent` / `policy_kl` log fields): read [exploration.md](exploration.md)
 
 Only read the file relevant to the current task.

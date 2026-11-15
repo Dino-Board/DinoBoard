@@ -22,6 +22,21 @@
       "feature_dim": 307,
       "action_space": 300,
       "num_players": 4
+    },
+    "azul_tok": {
+      "feature_dim": 1849,
+      "action_space": 180,
+      "num_players": 2
+    },
+    "azul_tok_3p": {
+      "feature_dim": 2537,
+      "action_space": 240,
+      "num_players": 3
+    },
+    "azul_tok_4p": {
+      "feature_dim": 3225,
+      "action_space": 300,
+      "num_players": 4
     }
   }
 }
