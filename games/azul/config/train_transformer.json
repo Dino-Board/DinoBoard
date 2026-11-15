@@ -33,6 +33,13 @@
       "decay": 0.99
     },
     "inference_precision": "fp16",
+    "opening_exploration": {
+      "episode_ratio": 0.3,
+      "min_plies": 1,
+      "max_plies": 8,
+      "temperature": 1.0,
+      "uniform_mix": 0.2
+    },
     "eval_benchmarks": [
       "heuristic_free"
     ],
@@ -51,16 +58,16 @@
   },
   "heuristic_guidance": {
     "name": "pv_512x4",
-    "hold_steps": 100,
-    "steps": 1000,
+    "hold_steps": 1000,
+    "steps": 2000,
     "initial_ratio": 1.0,
     "temperature": 0.0
   },
   "runtime": {
     "workers": 400,
-    "eval_every": 50,
-    "eval_games": 100,
+    "eval_every": 100,
+    "eval_games": 200,
     "save_every": 50,
-    "seed": 20261112
+    "seed": 20261115
   }
 }

@@ -198,7 +198,7 @@ P = 玩家数，F = 工厂数。2p / 3p / 4p 分别是 43 / 59 / 75 个 token，
 
 ### 训练配方（`train_transformer.json`，20000 步）
 
-与 Splendor 的 `train_transformer_kata_guided.json` 逐项相同（网络 d128×4、每步 400 局、批 1024×12、学习率 2e-4 余弦降到 4e-6、回放池 20 万、fp16 推理、旧网络引导到第 100 步后线性退到第 1000 步、每 50 步评估 100 局），KataGo 的五项也全部打开：
+网络和优化与 Splendor 的 `train_transformer_kata_guided.json` 相同（网络 d128×4、每步 400 局、批 1024×12、学习率 2e-4 余弦降到 4e-6、回放池 20 万、fp16 推理），KataGo 的五项也全部打开。不同的是：旧网络是强老师，引导全程 1.0 保持到第 1000 步，再线性退到第 2000 步；每 100 步评估 200 局（对手就是 `pv_512x4`，一次评估的误差约 ±7%）。
 
 | 项 | 配置 | 值 |
 |----|------|----|
@@ -207,6 +207,14 @@ P = 玩家数，F = 工厂数。2p / 3p / 4p 分别是 43 / 59 / 75 个 token，
 | 对手策略辅助头 | `training.opponent_policy_head` | 权重 0.15 |
 | 权重滑动平均 | `training.ema` | 0.99 |
 | FPU 降低 | `train.json::mcts.selfplay` / `mcts.eval` 的 `fpu_reduction` | 0.2 |
+
+自我对弈的探索（`.agents/skills/training/exploration.md`）：
+
+| 项 | 配置 | 值 |
+|----|------|----|
+| 开局随机走 | `training.opening_exploration` | 30% 的对局先按网络策略不搜索地走 1–8 步（温度 1.0，20% 完全随机），之后正常搜索；二人局一般 50–60 步 |
+| 按合法动作数分配的根噪声 | `train.json::mcts.selfplay.dirichlet_total_alpha` | 10（`dirichlet_alpha` 0）：开局 100 多个动作、终局几个动作，固定的单动作 alpha 不合适 |
+| 根节点策略温度 | `train.json::mcts.selfplay.root_policy_temperature` | 1.25 → 1.1，30 步线性 |
 
 唯一和 Splendor 数字不同的是 `score_head.scale`：它的单位是游戏分数。Splendor 的分差标准差约 4.5 分，除以 15 后目标方差约 0.09；Azul 旧网络对局的分差标准差约 11 分（带噪声的自我对弈约 21 分），要得到同样量级的目标需要除以 40（方差 0.08–0.29）。照搬 15 的话分差损失会比胜负损失还大。
 
@@ -218,8 +226,8 @@ P = 玩家数，F = 工厂数。2p / 3p / 4p 分别是 43 / 59 / 75 个 token，
 ```bash
 python3 -m training.cli --game azul_tok \
     --train-config games/azul/config/train_transformer.json \
-    --output runs/azul_tok_kata20k --providers cuda,cpu
-# 中断后继续：同一条命令加 --resume runs/azul_tok_kata20k
+    --output runs/azul_tok_guided20k --providers cuda,cpu
+# 中断后继续：同一条命令加 --resume runs/azul_tok_guided20k
 ```
 
 ---
