@@ -149,12 +149,12 @@ Example: `lr=2e-4, lr_min=4e-6` (50x decay).
 
 ## Batch Size and Replay
 
-Target **replay ratio ~1-2**: `ratio = batch_size * train_batches_per_step / (episodes_per_step * avg_plies)`. Adjust batch_size and train_batches_per_step to hit this range. With `playout_cap`, count only the recorded (full-search) plies. Also check **draws per game** = `batch_size * train_batches_per_step / episodes_per_step`. Every sample of a game carries the same win/loss label, so a long game at the same replay ratio gets its one label trained proportionally more often, and the value head can memorise outcomes instead of generalising (symptom and probe: diagnostics.md row 12). Splendor's kata recipe runs at about 30 draws per game; Carcassonne overfitted at about 70 and was cut to 30 (effect of the cut not yet measured).
+Target **sample reuse below 1**: `reuse = batch_size * train_batches_per_step / new samples per step` (with `playout_cap`, count only the recorded full-search plies), with a replay buffer of about 100 or more steps of data. Every sample of a game carries the same win/loss label, so high reuse trains each game's one label many times and the value head memorises outcomes instead of generalising (symptom: diagnostics.md row 12). Carcassonne and Harmonies turned overconfident at reuse near 2 and recovered below 1, confirmed by fresh-game value probes and head-to-head games against the old runs: see the `value-overfit` skill.
 
 | Field | Typical | Notes |
 |-------|---------|-------|
 | batch_size | 256-1024 | Larger = smoother gradients but slower per-step |
-| train_batches_per_step | 4-6 | Together with batch_size controls replay ratio |
+| train_batches_per_step | 4-12 | Together with batch_size sets sample reuse |
 | replay_buffer_size | 20000-400000 | Size by how many steps of data to retain: `buffer = episodes_per_step * avg_plies * N_steps`. More steps = more diversity but older samples. |
 
 ### Replay buffer and mixed-strategy oscillation
