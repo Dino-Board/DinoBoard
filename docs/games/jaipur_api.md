@@ -88,6 +88,34 @@
 
 ---
 
+## 训练配方（`games/jaipur/config/train.json`，25000 步）
+
+除了下面标出的几项，其余与 Splendor 的 `train_transformer_kata_guided.json` 相同：网络 d128×4、每步 400 局、批 1024×12、学习率 2e-4 余弦降到 4e-6、回放池 20 万、fp16 推理、每 50 步评估 100 局并存档。
+
+| 项 | 配置 | 值 |
+|----|------|----|
+| 随机搜索量（playout cap） | `training.playout_cap` | 完整 800 / 快速 150 / 完整概率 0.25 |
+| 分差辅助头 | `training.score_head` | 权重 0.5，`scale` 50 |
+| 对手策略辅助头 | `training.opponent_policy_head` | 权重 0.15 |
+| 权重滑动平均 | `training.ema` | 0.99 |
+| FPU 降低 | `mcts.selfplay` / `mcts.eval` 的 `fpu_reduction` | 0.2 |
+
+斋普尔自己的取值：
+
+- **`score_head.scale` 50**：单位是游戏分数。规则启发式对局的分差标准差约 15–16 分，除以 50 后目标方差约 0.1，与 Splendor（约 0.09）同量级。分数由 `final_score_extractor` 给出（`rupees + bonus_total`，训练标签，推理不读）。
+- **探索**：根节点噪声 `dirichlet_alpha` 1.0、温度在前 30 步内从 1.0 降到 0.1（回合起始约 7 个合法动作，一局 60–75 步）。
+- **引导**：没有旧网络，由 `rule_mcts`（规则启发式 + 搜索）带前 100 步，到第 200 步线性退完。它的作用是让网络一开始就见到能正常打完的对局。
+- **评估搜索次数** 800。
+
+实测速度（RTX 4070 Ti SUPER，400 局并行）：引导阶段约 19 秒一步；自我对弈约 50 万次搜索/秒，随机网络时一局约 95 步、21 秒一步；每次评估加门控（200 局）约 35 秒。对局缩短到 65 步左右后预计 15–17 秒一步，25000 步约 4.5–6 天。
+
+```bash
+python3 -m training.cli --game jaipur --output runs/jaipur_tok_kata25k --providers cuda,cpu
+# 中断后继续：同一条命令加 --resume runs/jaipur_tok_kata25k
+```
+
+---
+
 ## 常见踩坑
 
 - **交换必须整笔提交**：BGA 上交换是一个请求；接入方要把 AI 给出的原子攒到结算那一步再一起执行，不能拿到第一个原子就下单。

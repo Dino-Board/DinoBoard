@@ -7,25 +7,43 @@
     "ffn_dim": 256
   },
   "training": {
-    "episodes_per_step": 200,
+    "steps": 25000,
+    "episodes_per_step": 400,
     "batch_size": 1024,
-    "train_batches_per_step": 8,
-    "learning_rate": 2e-4,
+    "learning_rate": 0.0002,
     "lr_schedule": {
       "type": "cosine",
-      "lr_min": 4e-6
+      "lr_min": 4e-06
     },
-    "steps": 5000,
+    "train_batches_per_step": 12,
     "replay_buffer_size": 200000,
-    "eval_benchmarks": ["heuristic_free"],
+    "playout_cap": {
+      "full_simulations": 800,
+      "fast_simulations": 150,
+      "full_search_prob": 0.25
+    },
+    "score_head": {
+      "loss_weight": 0.5,
+      "scale": 50.0
+    },
+    "opponent_policy_head": {
+      "loss_weight": 0.15
+    },
+    "ema": {
+      "decay": 0.99
+    },
+    "inference_precision": "fp16",
+    "eval_benchmarks": [
+      "heuristic_free"
+    ],
     "selfplay_concurrency": {
       "enabled": true,
-      "leaf_batch_size": 8,
+      "leaf_batch_size": 16,
       "opponent_pool_max_distinct": 10,
       "evaluator": {
         "batch_size": 1024,
         "batch_timeout_us": 30,
-        "max_queue_size": 4096,
+        "max_queue_size": 8192,
         "intra_op_num_threads": 1,
         "num_inference_threads": 2,
         "providers": []
@@ -37,6 +55,7 @@
       "dirichlet_alpha": 1.0,
       "dirichlet_epsilon": 0.25,
       "simulations": 800,
+      "fpu_reduction": 0.2,
       "temperature": 1.0,
       "temperature_schedule": {
         "enabled": true,
@@ -46,7 +65,8 @@
       }
     },
     "eval": {
-      "simulations": 800
+      "simulations": 800,
+      "fpu_reduction": 0.2
     }
   },
   "heuristic_guidance": {
@@ -57,8 +77,10 @@
     "temperature": 0.0
   },
   "runtime": {
-    "eval_every": 100,
+    "workers": 400,
+    "eval_every": 50,
     "eval_games": 100,
-    "save_every": 100
+    "save_every": 50,
+    "seed": 20261112
   }
 }

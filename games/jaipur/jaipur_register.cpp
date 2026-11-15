@@ -105,6 +105,18 @@ GameBundle make_jaipur(std::uint64_t seed) {
   // the same negative reward as a loss, eliminating the wait-it-out
   // equilibrium we observed in early training (cap_hits 50/100, plies 150).
   b.adjudicator = [](const IGameState&) -> int { return -1; };
+  // Final score per seat for the training-only score-margin head: goods and
+  // camel tokens plus the face-down bonus tokens. Read from the truth state
+  // after the game; like the win/loss label it never reaches inference.
+  b.final_score_extractor = [](const IGameState& state) -> std::vector<float> {
+    const auto& d = checked_cast<JaipurState>(state).data;
+    std::vector<float> scores(kPlayers);
+    for (int p = 0; p < kPlayers; ++p) {
+      scores[static_cast<size_t>(p)] =
+          static_cast<float>(d.rupees[static_cast<size_t>(p)] + d.bonus_total[static_cast<size_t>(p)]);
+    }
+    return scores;
+  };
   return b;
 }
 
