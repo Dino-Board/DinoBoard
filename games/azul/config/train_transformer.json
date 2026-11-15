@@ -61,8 +61,8 @@
   },
   "heuristic_guidance": {
     "name": "pv_512x4",
-    "hold_steps": 1000,
-    "steps": 2000,
+    "hold_steps": 500,
+    "steps": 1000,
     "initial_ratio": 1.0,
     "temperature": 0.0
   },
