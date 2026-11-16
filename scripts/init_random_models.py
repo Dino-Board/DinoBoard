@@ -86,6 +86,9 @@ def _init_one(game_id: str, out_path: Path, belief_out_path: Path | None,
         torch.manual_seed(seed + 1)
         bnet = create_belief_model_from_config(
             belief_cfg, input_dim=in_dim, output_dim=out_dim,
+            # Each present only when the extractor declares one.
+            entity_layout=meta.get("belief_entity_layout"),
+            sequence_layout=meta.get("belief_sequence_layout"),
         )
         export_belief_onnx(bnet, belief_out_path, in_dim)
         print(f"  belief:       {belief_out_path} (input_dim={in_dim}, "

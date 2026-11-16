@@ -76,7 +76,8 @@ struct CachedBeliefSessionBundle {
   OrtEnvPtr env{};
   OrtSessionOptionsPtr opts{};
   OrtSessionPtr session{};
-  std::string input_name;
+  std::string input_name;   // the single input, or the autoregressive model's "features"
+  std::string prefix_name;  // the autoregressive model's "prefix"; empty for a single-input model
   std::string output_name;
 };
 }  // namespace
@@ -148,7 +149,23 @@ OnnxBeliefEvaluator::OnnxBeliefEvaluator(
 
         OrtAllocator* allocator = nullptr;
         throw_on_ort_error(ort_api().GetAllocatorWithDefaultOptions(&allocator));
-        bundle->input_name = get_session_name(bundle->session.get(), 0, allocator, true);
+        size_t input_count = 0;
+        throw_on_ort_error(ort_api().SessionGetInputCount(bundle->session.get(), &input_count));
+        if (input_count == 1) {
+          bundle->input_name = get_session_name(bundle->session.get(), 0, allocator, true);
+        } else if (input_count == 2) {
+          bundle->input_name = "features";
+          bundle->prefix_name = "prefix";
+          for (size_t i = 0; i < input_count; ++i) {
+            const std::string name = get_session_name(bundle->session.get(), i, allocator, true);
+            if (name != bundle->input_name && name != bundle->prefix_name) {
+              throw std::runtime_error("a two-input belief model must name its inputs 'features' and 'prefix', got '" +
+                                       name + "'");
+            }
+          }
+        } else {
+          throw std::runtime_error("a belief model has one or two inputs, got " + std::to_string(input_count));
+        }
         bundle->output_name = get_session_name(bundle->session.get(), 0, allocator, false);
         cache.map[cache_key] = bundle;
         while (cache.map.size() > kMaxCachedBeliefSessions) {
@@ -195,6 +212,26 @@ OnnxBeliefEvaluator::~OnnxBeliefEvaluator() {
 bool OnnxBeliefEvaluator::evaluate(
     const std::vector<float>& features,
     std::vector<float>* logits) const {
+  run(features, nullptr, 1, logits);
+  return true;
+}
+
+void OnnxBeliefEvaluator::evaluate_steps(
+    const std::vector<float>& features,
+    const std::vector<float>& prefixes,
+    int rows,
+    std::vector<float>* logits) const {
+  if (rows <= 0 || prefixes.empty() || prefixes.size() % static_cast<std::size_t>(rows) != 0) {
+    throw std::runtime_error("OnnxBeliefEvaluator::evaluate_steps: prefixes do not divide into rows");
+  }
+  run(features, &prefixes, rows, logits);
+}
+
+void OnnxBeliefEvaluator::run(
+    const std::vector<float>& features,
+    const std::vector<float>* prefixes,
+    int rows,
+    std::vector<float>* logits) const {
   if (!logits) {
     throw std::runtime_error("OnnxBeliefEvaluator::evaluate: logits pointer is null");
   }
@@ -207,30 +244,40 @@ bool OnnxBeliefEvaluator::evaluate(
     throw std::runtime_error("OnnxBeliefEvaluator::evaluate: model not loaded (ready=" +
         std::to_string(ready_) + ", last_error=" + last_error_ + ")");
   }
+  if ((prefixes != nullptr) != !impl_->bundle->prefix_name.empty()) {
+    throw std::runtime_error(prefixes
+        ? "OnnxBeliefEvaluator::evaluate_steps: '" + model_path_ + "' is not an autoregressive model"
+        : "OnnxBeliefEvaluator::evaluate: '" + model_path_ + "' is an autoregressive model (use evaluate_steps)");
+  }
 
   try {
-    std::array<int64_t, 2> shape = {1, static_cast<int64_t>(features.size())};
     OrtMemoryInfo* raw_memory_info = nullptr;
     throw_on_ort_error(ort_api().CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &raw_memory_info));
     OrtMemoryInfoPtr memory_info(raw_memory_info);
 
-    OrtValue* raw_input = nullptr;
-    throw_on_ort_error(ort_api().CreateTensorWithDataAsOrtValue(
-        memory_info.get(),
-        const_cast<float*>(features.data()),
-        features.size() * sizeof(float),
-        shape.data(),
-        shape.size(),
-        ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
-        &raw_input));
-    OrtValuePtr input(raw_input);
+    auto tensor = [&](const std::vector<float>& data, int tensor_rows) {
+      std::array<int64_t, 2> shape = {static_cast<int64_t>(tensor_rows),
+                                      static_cast<int64_t>(data.size() / static_cast<std::size_t>(tensor_rows))};
+      OrtValue* raw = nullptr;
+      throw_on_ort_error(ort_api().CreateTensorWithDataAsOrtValue(
+          memory_info.get(),
+          const_cast<float*>(data.data()),
+          data.size() * sizeof(float),
+          shape.data(),
+          shape.size(),
+          ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
+          &raw));
+      return OrtValuePtr(raw);
+    };
+    const OrtValuePtr input = tensor(features, 1);
+    const OrtValuePtr prefix_input = prefixes ? tensor(*prefixes, rows) : OrtValuePtr();
 
-    const char* in_names[] = {impl_->bundle->input_name.c_str()};
+    const char* in_names[] = {impl_->bundle->input_name.c_str(), impl_->bundle->prefix_name.c_str()};
     const char* out_names[] = {impl_->bundle->output_name.c_str()};
-    const OrtValue* input_values[] = {input.get()};
+    const OrtValue* input_values[] = {input.get(), prefix_input.get()};
     OrtValue* raw_outputs[1] = {nullptr};
     throw_on_ort_error(ort_api().Run(
-        impl_->bundle->session.get(), nullptr, in_names, input_values, 1, out_names, 1, raw_outputs));
+        impl_->bundle->session.get(), nullptr, in_names, input_values, prefixes ? 2 : 1, out_names, 1, raw_outputs));
     OrtValuePtr output(raw_outputs[0]);
 
     OrtTensorTypeAndShapeInfo* raw_shape = nullptr;
@@ -251,13 +298,15 @@ bool OnnxBeliefEvaluator::evaluate(
     void* out_raw = nullptr;
     throw_on_ort_error(ort_api().GetTensorMutableData(output.get(), &out_raw));
     const float* out_ptr = static_cast<const float*>(out_raw);
-    logits->assign(out_ptr, out_ptr + out_len);
+    if (dims.size() != 2 || dims[0] != static_cast<int64_t>(rows)) {
+      throw std::runtime_error("OnnxBeliefEvaluator::evaluate: output is not one row of logits per input row");
+    }
+    logits->assign(out_ptr, out_ptr + out_len * rows);
     for (float v : *logits) {
       if (!std::isfinite(v)) {
         throw std::runtime_error("OnnxBeliefEvaluator::evaluate: non-finite logit");
       }
     }
-    return true;
   } catch (const std::exception& e) {
     throw std::runtime_error(std::string("OnnxBeliefEvaluator::evaluate: ") + e.what());
   }

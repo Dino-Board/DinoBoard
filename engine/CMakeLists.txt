@@ -12,6 +12,7 @@ add_library(dinoboard_core STATIC
     core/action_constraint.cpp
     core/mask_state_impl.cpp
     core/heuristic_registry.cpp
+    core/belief_sequence.cpp
 )
 target_include_directories(dinoboard_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 

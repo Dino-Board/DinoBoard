@@ -235,16 +235,19 @@ Each selector in heuristic.json: `{ "name": "<named_key>", "temperature": 0.0 }`
 
 ## belief.json — Belief Network (Optional)
 
-Only for games with a learned belief network (coup, liarsdice).
+Only for games with a learned belief network (coup, liarsdice, maskmen, arknova, 6nimmit).
 
 | Field | Type | Description |
 |-------|------|-------------|
-| architecture | int[] | Hidden layer widths |
+| type | "mlp"\|"per_entity"\|"autoregressive" | `mlp`: one MLP over the flat features. `per_entity`: one shared MLP scores each entity (needs the extractor's `entity_layout()`). `autoregressive`: a trunk over the features and a head over [trunk output, prefix] score the next element of a sorted hand (needs `sequence_layout()`). See game-ai belief-net.md |
+| architecture | int[] | Hidden layer widths (`autoregressive`: of the trunk) |
+| head | int[] | `autoregressive` only: hidden layer widths of the per-step head |
 | activation | "relu" | Activation function. Only `"relu"` is implemented; other values are rejected. |
-| batch_norm | bool | Enable batch normalization |
-| residual | bool | Enable residual connections |
-| block_size | int | Layers per residual block |
-| training.loss | "ce"\|"bce"\|"mse" | Loss function (cross-entropy, binary cross-entropy, or MSE) |
+| batch_norm | bool | `mlp` / `autoregressive`: enable batch normalization |
+| residual | bool | `mlp` / `autoregressive`: enable residual connections |
+| block_size | int | `mlp` / `autoregressive`: layers per residual block |
+| embedding_dim | int | `per_entity` only: width of the learned per-entity embedding |
+| training.loss | "ce"\|"bce"\|"sequence_nll" | Loss function (cross-entropy, binary cross-entropy, or the autoregressive type's next-element loss; `sequence_nll` and `autoregressive` only go together) |
 
 Belief is enabled by engine capability plus the presence of `belief.json`.
 There is no `enabled` field. Belief logit temperature is framework-fixed at

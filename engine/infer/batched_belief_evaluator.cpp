@@ -82,7 +82,8 @@ struct BatchedBeliefEvaluator::Impl {
   OrtEnvPtrB env{};
   OrtSessionOptionsPtrB opts{};
   OrtSessionPtrB session{};
-  std::string input_name;
+  std::string input_name;   // the single input, or the autoregressive model's "features"
+  std::string prefix_name;  // the autoregressive model's "prefix"; empty for a single-input model
   std::string logits_output_name;
 };
 #endif
@@ -118,8 +119,10 @@ BatchedBeliefEvaluator::BatchedBeliefEvaluator(
         impl->opts.get(), GraphOptimizationLevel::ORT_ENABLE_EXTENDED));
 
     // Same EP append logic as BatchedPolicyValueEvaluator.
+    bool accelerated = false;
     for (const auto& provider : cfg_.providers) {
       if (provider == "cpu") continue;
+      accelerated = true;
 #if defined(__APPLE__)
       if (provider == "coreml") {
         const uint32_t coreml_flags = COREML_FLAG_USE_NONE;
@@ -146,20 +149,57 @@ BatchedBeliefEvaluator::BatchedBeliefEvaluator(
           "BatchedBeliefEvaluator: unknown execution provider '" + provider + "'");
     }
 
-    OrtSession* raw_session = nullptr;
+    auto create_session = [&](OrtSessionOptions* options) {
+      OrtSession* raw_session = nullptr;
 #if defined(_WIN32)
-    std::wstring model_path_w(model_path_.begin(), model_path_.end());
-    throw_on_ort_error_b(ort_api_b().CreateSession(
-        impl->env.get(), model_path_w.c_str(), impl->opts.get(), &raw_session));
+      std::wstring model_path_w(model_path_.begin(), model_path_.end());
+      throw_on_ort_error_b(ort_api_b().CreateSession(
+          impl->env.get(), model_path_w.c_str(), options, &raw_session));
 #else
-    throw_on_ort_error_b(ort_api_b().CreateSession(
-        impl->env.get(), model_path_.c_str(), impl->opts.get(), &raw_session));
+      throw_on_ort_error_b(ort_api_b().CreateSession(
+          impl->env.get(), model_path_.c_str(), options, &raw_session));
 #endif
-    impl->session.reset(raw_session);
+      return OrtSessionPtrB(raw_session);
+    };
+    auto input_count = [](OrtSession* session) {
+      size_t n = 0;
+      throw_on_ort_error_b(ort_api_b().SessionGetInputCount(session, &n));
+      return n;
+    };
+
+    // An autoregressive model (two inputs) is run by evaluate_steps on the
+    // calling thread, on the CPU whatever the providers (see there): load it
+    // on the CPU first to find out which kind this is.
+    OrtSessionOptions* raw_cpu_opts = nullptr;
+    throw_on_ort_error_b(ort_api_b().CreateSessionOptions(&raw_cpu_opts));
+    OrtSessionOptionsPtrB cpu_opts(raw_cpu_opts);
+    throw_on_ort_error_b(ort_api_b().SetIntraOpNumThreads(cpu_opts.get(), 1));
+    throw_on_ort_error_b(ort_api_b().SetInterOpNumThreads(cpu_opts.get(), 1));
+    throw_on_ort_error_b(ort_api_b().SetSessionGraphOptimizationLevel(
+        cpu_opts.get(), GraphOptimizationLevel::ORT_ENABLE_EXTENDED));
+    impl->session = create_session(accelerated ? cpu_opts.get() : impl->opts.get());
+    const size_t inputs = input_count(impl->session.get());
+    if (inputs == 1 && accelerated) {
+      impl->session = create_session(impl->opts.get());
+    }
 
     OrtAllocator* allocator = nullptr;
     throw_on_ort_error_b(ort_api_b().GetAllocatorWithDefaultOptions(&allocator));
-    impl->input_name = get_io_name_b(impl->session.get(), 0, allocator, true);
+    if (inputs == 1) {
+      impl->input_name = get_io_name_b(impl->session.get(), 0, allocator, true);
+    } else if (inputs == 2) {
+      impl->input_name = "features";
+      impl->prefix_name = "prefix";
+      for (size_t i = 0; i < inputs; ++i) {
+        const std::string name = get_io_name_b(impl->session.get(), i, allocator, true);
+        if (name != impl->input_name && name != impl->prefix_name) {
+          throw std::runtime_error(
+              "a two-input belief model must name its inputs 'features' and 'prefix', got '" + name + "'");
+        }
+      }
+    } else {
+      throw std::runtime_error("a belief model has one or two inputs, got " + std::to_string(inputs));
+    }
     impl->logits_output_name = get_io_name_b(impl->session.get(), 0, allocator, false);
 
     impl_ = impl.release();
@@ -215,6 +255,12 @@ bool BatchedBeliefEvaluator::evaluate(
   if (shutdown_.load(std::memory_order_acquire)) {
     throw std::runtime_error("BatchedBeliefEvaluator::evaluate: shut down");
   }
+#if defined(BOARD_AI_WITH_ONNX) && BOARD_AI_WITH_ONNX
+  if (!impl_->prefix_name.empty()) {
+    throw std::runtime_error(
+        "BatchedBeliefEvaluator::evaluate: '" + model_path_ + "' is an autoregressive model (use evaluate_steps)");
+  }
+#endif
 
   auto req = std::make_unique<PendingRequest>();
   req->features = features;
@@ -299,31 +345,78 @@ void BatchedBeliefEvaluator::run_batch(
                 feat_dim * sizeof(float));
   }
 
-  std::array<int64_t, 2> shape = {
-      static_cast<int64_t>(batch_n), static_cast<int64_t>(feat_dim)};
+  std::size_t logit_len = 0;
+  const std::vector<float> all_logits = forward(input_buf, batch_n, &logit_len, nullptr);
+  for (std::size_t i = 0; i < batch_n; ++i) {
+    EvalResult res{};
+    res.logits.assign(all_logits.begin() + static_cast<std::ptrdiff_t>(i * logit_len),
+                      all_logits.begin() + static_cast<std::ptrdiff_t>((i + 1) * logit_len));
+    requests[i]->promise.set_value(std::move(res));
+  }
+}
 
+void BatchedBeliefEvaluator::evaluate_steps(
+    const std::vector<float>& features,
+    const std::vector<float>& prefixes,
+    int rows,
+    std::vector<float>* logits) const {
+  if (!logits) {
+    throw std::runtime_error("BatchedBeliefEvaluator::evaluate_steps: out ptr null");
+  }
+  if (!ready_) {
+    throw std::runtime_error("BatchedBeliefEvaluator::evaluate_steps: not ready");
+  }
+  if (impl_->prefix_name.empty()) {
+    throw std::runtime_error(
+        "BatchedBeliefEvaluator::evaluate_steps: '" + model_path_ + "' is not an autoregressive model");
+  }
+  if (features.empty() || rows <= 0 || prefixes.empty() ||
+      prefixes.size() % static_cast<std::size_t>(rows) != 0) {
+    throw std::runtime_error("BatchedBeliefEvaluator::evaluate_steps: prefixes do not divide into rows");
+  }
+  // The caller's rows are already a batch: one run on the calling thread
+  // (sessions are safe to run from several threads), not the queue, and on
+  // the CPU. A search thread calls this several times per search root;
+  // measured on 6 nimmt! (256 concurrent games, one GPU shared with the
+  // policy/value net, a 4x256 MLP on 128 rows a call), selfplay took 17 s a
+  // step this way, 22 s with the callers' rows merged into shared GPU runs
+  // through the queue, and 24 s with a GPU run per call.
+  std::size_t logit_len = 0;
+  *logits = forward(prefixes, static_cast<std::size_t>(rows), &logit_len, &features);
+}
+
+std::vector<float> BatchedBeliefEvaluator::forward(
+    const std::vector<float>& input_buf, std::size_t batch_n, std::size_t* out_logit_len,
+    const std::vector<float>* position) const {
   OrtMemoryInfo* raw_meminfo = nullptr;
   throw_on_ort_error_b(ort_api_b().CreateCpuMemoryInfo(
       OrtArenaAllocator, OrtMemTypeDefault, &raw_meminfo));
   OrtMemoryInfoPtrB meminfo(raw_meminfo);
 
-  OrtValue* raw_input = nullptr;
-  throw_on_ort_error_b(ort_api_b().CreateTensorWithDataAsOrtValue(
-      meminfo.get(),
-      input_buf.data(),
-      input_buf.size() * sizeof(float),
-      shape.data(),
-      shape.size(),
-      ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
-      &raw_input));
-  OrtValuePtrB input(raw_input);
+  auto tensor = [&](const std::vector<float>& data, std::size_t rows) {
+    std::array<int64_t, 2> shape = {
+        static_cast<int64_t>(rows), static_cast<int64_t>(data.size() / rows)};
+    OrtValue* raw = nullptr;
+    throw_on_ort_error_b(ort_api_b().CreateTensorWithDataAsOrtValue(
+        meminfo.get(),
+        const_cast<float*>(data.data()),
+        data.size() * sizeof(float),
+        shape.data(),
+        shape.size(),
+        ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
+        &raw));
+    return OrtValuePtrB(raw);
+  };
+  // Single-input model: the rows. Autoregressive: the position, then the rows.
+  const OrtValuePtrB first = position ? tensor(*position, 1) : tensor(input_buf, batch_n);
+  const OrtValuePtrB second = position ? tensor(input_buf, batch_n) : OrtValuePtrB();
 
-  const char* in_names[] = {impl_->input_name.c_str()};
+  const char* in_names[] = {impl_->input_name.c_str(), impl_->prefix_name.c_str()};
   const char* out_names[] = {impl_->logits_output_name.c_str()};
-  const OrtValue* input_values[] = {input.get()};
+  const OrtValue* input_values[] = {first.get(), second.get()};
   OrtValue* raw_outputs[1] = {nullptr};
   throw_on_ort_error_b(ort_api_b().Run(
-      impl_->session.get(), nullptr, in_names, input_values, 1,
+      impl_->session.get(), nullptr, in_names, input_values, position ? 2 : 1,
       out_names, 1, raw_outputs));
   OrtValuePtrB logits_output(raw_outputs[0]);
 
@@ -351,27 +444,27 @@ void BatchedBeliefEvaluator::run_batch(
       logits_output.get(), &logits_raw));
   const float* logits_ptr = static_cast<const float*>(logits_raw);
 
-  for (std::size_t i = 0; i < batch_n; ++i) {
-    auto& req = *requests[i];
-    EvalResult res{};
-    try {
-      res.logits.assign(static_cast<size_t>(logit_len), 0.0f);
-      const float* this_logits = logits_ptr + i * logit_len;
-      std::copy(this_logits, this_logits + logit_len, res.logits.begin());
-      // Sanity: NaN check
-      for (auto v : res.logits) {
-        if (!std::isfinite(v)) {
-          throw std::runtime_error("BatchedBeliefEvaluator: non-finite logit");
-        }
-      }
-    } catch (...) {
-      res.error = std::current_exception();
+  std::vector<float> out(logits_ptr, logits_ptr + batch_n * static_cast<std::size_t>(logit_len));
+  for (float v : out) {
+    if (!std::isfinite(v)) {
+      throw std::runtime_error("BatchedBeliefEvaluator: non-finite logit");
     }
-    req.promise.set_value(std::move(res));
   }
+  *out_logit_len = static_cast<std::size_t>(logit_len);
+  return out;
 }
 
 #else
+
+void BatchedBeliefEvaluator::evaluate_steps(
+    const std::vector<float>&, const std::vector<float>&, int, std::vector<float>*) const {
+  throw std::runtime_error("BatchedBeliefEvaluator: ONNX runtime not enabled at build time");
+}
+
+std::vector<float> BatchedBeliefEvaluator::forward(
+    const std::vector<float>&, std::size_t, std::size_t*, const std::vector<float>*) const {
+  throw std::runtime_error("BatchedBeliefEvaluator: ONNX runtime not enabled at build time");
+}
 
 void BatchedBeliefEvaluator::run_batch(
     std::vector<std::unique_ptr<PendingRequest>>& requests) {

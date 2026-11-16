@@ -198,7 +198,7 @@ Rule of thumb: **anything do_action_fast / legal_actions reads must be on schema
 Examples:
 - Liar's Dice `bids_by_player_` — full public bid log, encoder reads last 5 per seat.
 - Coup `pre_/post_claim_counts_` — per-role claim tallies split across reshuffles.
-- 6 nimmt! per-round played-card history — what each seat dropped this round.
+- 6 nimmt! `rounds_` — per finished round, the rows it started from and each seat's card (belief features only).
 
 If a value is only ever consumed by the encoder and is fully reconstructable from public events, prefer tracker over schema — it keeps the DAG hash narrow (fewer hot bytes) and avoids snapshot bloat.
 
@@ -242,4 +242,14 @@ For games whose tracker is event-free (all info flows through snapshot/viz):
 b.install_event_protocol(
     viz::no_events_extractor,
     []() -> const viz::VisibilitySchema& { return MyGameState::schema(); });
+```
+
+When only the belief features read the tracker's memory (they run at the
+search root, never inside a simulation), keep the events-only extractor empty
+and give real moves their own events, so simulations pay nothing (mirror
+Ark Nova's `belief_events`):
+```cpp
+b.install_event_protocol(viz::no_events_extractor, schema);
+b.public_event_extractor =
+    viz::make_public_event_extractor_from_events_only(belief_events, schema);
 ```

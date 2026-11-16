@@ -4,8 +4,9 @@ Two to four players, one hand: ten cards each from all 104, ten rounds; the
 fewest bullheads win. The value of a game is its bullhead margin (the
 others' average minus mine, /25, clipped to +-1), so a 66-point match is
 played one hand at a time. Private hands, simultaneous face-down play. Token
-encoder only; the belief tracker samples the other hands uniformly from the
-unseen cards (no belief network). Heuristics `rule_v1` / `lkf_v1`. No tail
+encoder only; the belief tracker deals the other hands from the unseen cards,
+uniformly here (no belief model; with one see test_belief.py). Heuristics
+`rule_v1` / `lkf_v1`. No tail
 solver. An adjudicator gives a ply-capped game to the only player with the
 fewest bullheads.
 

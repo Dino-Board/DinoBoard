@@ -1,4 +1,5 @@
 {
+  "type": "mlp",
   "architecture": [
     512,
     512,

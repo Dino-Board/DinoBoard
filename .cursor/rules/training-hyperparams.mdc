@@ -246,7 +246,7 @@ Enable for bluff/deception games (coup, liarsdice) where playing only against se
 
 ## Belief Network (belief.json)
 
-Default recommendation: **match the PV network architecture** (same width, depth, residual, block_size). The belief net is smaller in input/output dims but benefits from the same capacity.
+Default recommendation (`type: "mlp"`): **match the PV network architecture** (same width, depth, residual, block_size). When each logit belongs to one entity (a card), prefer `type: "per_entity"` (one shared scorer per entity; Ark Nova uses 2x128). When opponents hold sets of cards from one pool, prefer `type: "autoregressive"` (whole deals, card by card; 6 nimmt! uses a 4x256 trunk and a 2x256 head; the head runs for every sampled prefix, so keep it small).
 
 | Field | Recommendation |
 |-------|---------------|

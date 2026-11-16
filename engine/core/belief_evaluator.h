@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+#include <stdexcept>
 #include <vector>
 
 namespace board_ai {
@@ -31,6 +33,19 @@ class IBeliefEvaluator {
   virtual bool evaluate(
       const std::vector<float>& features,
       std::vector<float>* logits) const = 0;
+
+  // Autoregressive models (belief_sequence.h) have two inputs: the features
+  // of one position and `rows` prefixes of equal length, concatenated.
+  // `logits` gets one row of logits per prefix, concatenated. The model runs
+  // its position part once however many rows there are. Evaluators of
+  // single-input models do not implement it.
+  virtual void evaluate_steps(
+      const std::vector<float>& /*features*/,
+      const std::vector<float>& /*prefixes*/,
+      int /*rows*/,
+      std::vector<float>* /*logits*/) const {
+    throw std::logic_error("IBeliefEvaluator::evaluate_steps: this evaluator has no autoregressive model");
+  }
 };
 
 }  // namespace board_ai

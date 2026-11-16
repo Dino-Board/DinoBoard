@@ -75,8 +75,6 @@ def test_layout_contract(game):
         assert aa[card - 1, play] == card - 1 and aa[card - 1, take] == -1
     for row in range(NUM_ROWS):
         assert aa[NUM_CARDS + row, take] == NUM_CARDS + row and aa[NUM_CARDS + row, play] == -1
-    assert meta["belief_feature_dim"] == 0, "hands are sampled uniformly, without a belief network"
-
 
 def _bindings(x, lay):
     """action -> list of (token row, head) scoring it, over the tokens present."""

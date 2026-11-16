@@ -19,6 +19,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "../engine/core/belief_sequence.h"
 #include "../engine/core/game_interfaces.h"
 #include "../engine/core/rng_salt.h"
 #include "../engine/core/schema_hash.h"
@@ -3526,6 +3527,32 @@ class GameSessionWrapper {
     return out;
   }
 
+  // The belief features `perspective`'s search would read at this position:
+  // from the state and tracker that seat searches with (the session's own
+  // when it is fed observations, else that seat's AI view).
+  std::vector<float> belief_features(int perspective) {
+    if (!bundle_->belief_feature_extractor) {
+      throw std::runtime_error("GameSession.belief_features: this game has no belief feature extractor");
+    }
+    const IGameState* state = nullptr;
+    const IBeliefTracker* tracker = nullptr;
+    if (external_obs_mode_) {
+      state = bundle_->state.get();
+      tracker = bt_;
+    } else {
+      if (perspective < 0 || perspective >= static_cast<int>(ai_views_.size()) || !ai_views_[perspective]) {
+        throw std::runtime_error("GameSession.belief_features: no AI view for this perspective");
+      }
+      state = ai_views_[perspective].get();
+      tracker = ai_trackers_[perspective].get();
+    }
+    std::vector<float> out;
+    if (!bundle_->belief_feature_extractor->extract_from_state(*state, perspective, tracker, &out)) {
+      throw std::runtime_error("GameSession.belief_features: the extractor returned the wrong size");
+    }
+    return out;
+  }
+
   void configure_tail_solve(bool enabled, int depth_limit, std::int64_t node_budget,
                             float auxiliary_weight) {
     ts_enabled_ = enabled;
@@ -4398,6 +4425,30 @@ PYBIND11_MODULE(dinoboard_engine, m) {
     out["has_belief_extractor"] = has_belief_extractor;
     out["belief_feature_dim"] = belief_feature_dim;
     out["belief_logit_count"] = belief_logit_count;
+    if (has_belief_extractor) {
+      const BeliefEntityLayout bl = bundle.belief_feature_extractor->entity_layout();
+      if (bl.entities > 0) {
+        if (bl.global_dim + bl.entities * bl.entity_dim != belief_feature_dim || bl.entities != belief_logit_count) {
+          throw std::logic_error("game_metadata: belief entity layout disagrees with feature_dim / logit count");
+        }
+        py::dict layout;
+        layout["global_dim"] = bl.global_dim;
+        layout["entities"] = bl.entities;
+        layout["entity_dim"] = bl.entity_dim;
+        out["belief_entity_layout"] = layout;
+      }
+      const BeliefSequenceLayout sl = bundle.belief_feature_extractor->sequence_layout();
+      if (sl.classes > 0) {
+        if (sl.classes != belief_logit_count || sl.segments <= 0) {
+          throw std::logic_error("game_metadata: belief sequence layout disagrees with the logit count");
+        }
+        py::dict layout;
+        layout["classes"] = sl.classes;
+        layout["segments"] = sl.segments;
+        layout["prefix_dim"] = belief_sequence::prefix_dim(sl);
+        out["belief_sequence_layout"] = layout;
+      }
+    }
     if (const TokenLayout* tl = bundle.encoder->token_layout()) {
       py::dict layout;
       layout["num_tokens"] = tl->num_tokens;
@@ -4572,6 +4623,93 @@ PYBIND11_MODULE(dinoboard_engine, m) {
     bundle.external_rules_switch(enabled);
   }, py::arg("game_id"), py::arg("enabled"));
 
+  // Autoregressive belief (engine/core/belief_sequence.h): the training rows
+  // of a batch of positions. pool [B, classes] and hands [B, segments,
+  // classes] are the label extractor's `remaining` and `hand_counts`. Every
+  // step of every true hand becomes a row: "prefix" [R, prefix_dim] (the
+  // net's second input, next to the position features), "log_prior" [R, classes] (the
+  // next element's log-probability under a uniform deal, -inf where it
+  // cannot come next; the net's logits are added to it), "target" [R] and
+  // "position" [R] (the row's index in the batch).
+  m.def("belief_sequence_training_rows",
+        [](int classes, int segments, py::array_t<int, py::array::c_style | py::array::forcecast> pool,
+           py::array_t<int, py::array::c_style | py::array::forcecast> hands) {
+    if (pool.ndim() != 2 || hands.ndim() != 3 || pool.shape(0) != hands.shape(0) || pool.shape(1) != classes ||
+        hands.shape(1) != segments || hands.shape(2) != classes) {
+      throw std::invalid_argument("belief_sequence_training_rows: expected pool [B, classes] and hands [B, segments, classes]");
+    }
+    const BeliefSequenceLayout layout{classes, segments};
+    const py::ssize_t batch = pool.shape(0);
+    const int* pool_data = pool.data();
+    const int* hand_data = hands.data();
+    belief_sequence::TrainingRows rows;
+    std::vector<std::int64_t> position;
+    {
+      py::gil_scoped_release release;
+      std::vector<int> p(static_cast<std::size_t>(classes));
+      std::vector<std::vector<int>> h(static_cast<std::size_t>(segments), std::vector<int>(static_cast<std::size_t>(classes)));
+      for (py::ssize_t b = 0; b < batch; ++b) {
+        p.assign(pool_data + b * classes, pool_data + (b + 1) * classes);
+        for (int s = 0; s < segments; ++s) {
+          const int* first = hand_data + (b * segments + s) * classes;
+          h[static_cast<std::size_t>(s)].assign(first, first + classes);
+        }
+        const std::size_t before = rows.target.size();
+        belief_sequence::append_training_rows(layout, p, h, &rows);
+        position.insert(position.end(), rows.target.size() - before, static_cast<std::int64_t>(b));
+      }
+    }
+    const py::ssize_t n = static_cast<py::ssize_t>(rows.target.size());
+    const py::ssize_t pd = belief_sequence::prefix_dim(layout);
+    py::array_t<float> prefix({n, pd});
+    std::copy(rows.prefix.begin(), rows.prefix.end(), prefix.mutable_data());
+    py::array_t<float> log_prior({n, static_cast<py::ssize_t>(classes)});
+    std::copy(rows.log_prior.begin(), rows.log_prior.end(), log_prior.mutable_data());
+    py::array_t<std::int64_t> target(n);
+    std::copy(rows.target.begin(), rows.target.end(), target.mutable_data());
+    py::dict out;
+    out["prefix"] = prefix;
+    out["log_prior"] = log_prior;
+    out["target"] = target;
+    out["position"] = to_ndarray(position);
+    return out;
+  }, py::arg("classes"), py::arg("segments"), py::arg("pool"), py::arg("hands"));
+
+  // Samples hands the way a tracker does (belief_sequence::sample), for
+  // tests: from the belief model at `model_path` given the position
+  // `features`, or with an empty path from fixed `logits` (the same for
+  // every step). Returns [n][segments][classes ascending].
+  m.def("belief_sequence_sample",
+        [](int classes, int segments, const std::vector<int>& pool, const std::vector<int>& sizes, int n,
+           std::uint64_t seed, const std::vector<float>& logits, const std::string& model_path,
+           const std::vector<float>& features) {
+    py::gil_scoped_release release;
+    const BeliefSequenceLayout layout{classes, segments};
+    std::mt19937_64 rng(seed);
+    if (!model_path.empty()) {
+      const infer::OnnxBeliefEvaluator evaluator(model_path);
+      return belief_sequence::sample(layout, {pool, sizes}, features, evaluator, n, rng);
+    }
+    class Fixed final : public IBeliefEvaluator {
+     public:
+      explicit Fixed(std::vector<float> logits) : logits_(std::move(logits)) {}
+      bool evaluate(const std::vector<float>&, std::vector<float>*) const override {
+        throw std::logic_error("belief_sequence_sample: the sampler runs evaluate_steps");
+      }
+      void evaluate_steps(const std::vector<float>&, const std::vector<float>&, int rows,
+                          std::vector<float>* out) const override {
+        out->clear();
+        for (int r = 0; r < rows; ++r) out->insert(out->end(), logits_.begin(), logits_.end());
+      }
+
+     private:
+      std::vector<float> logits_;
+    };
+    return belief_sequence::sample(layout, {pool, sizes}, features, Fixed(logits), n, rng);
+  }, py::arg("classes"), py::arg("segments"), py::arg("pool"), py::arg("sizes"), py::arg("n"), py::arg("seed"),
+     py::arg("logits") = std::vector<float>{}, py::arg("model_path") = std::string(""),
+     py::arg("features") = std::vector<float>{});
+
   // GameBundle::external_rules_query: a rule question about a state in the other engine's layout.
   m.def("external_rules_query", [](const std::string& game_id, const std::string& state_json,
                                    const std::string& question) {
@@ -4674,6 +4812,7 @@ PYBIND11_MODULE(dinoboard_engine, m) {
            &GameSessionWrapper::_debug_do_undo_roundtrip,
            py::arg("nested") = 2)
       .def("get_belief_snapshot", &GameSessionWrapper::get_belief_snapshot)
+      .def("belief_features", &GameSessionWrapper::belief_features, py::arg("perspective"))
       .def("get_ai_action", &GameSessionWrapper::get_ai_action,
            py::arg("simulations") = 200,
            py::arg("temperature") = 0.0,

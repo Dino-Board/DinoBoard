@@ -46,8 +46,19 @@ class BatchedBeliefEvaluator final : public IBeliefEvaluator {
   bool evaluate(
       const std::vector<float>& features,
       std::vector<float>* logits) const override;
+  void evaluate_steps(
+      const std::vector<float>& features,
+      const std::vector<float>& prefixes,
+      int rows,
+      std::vector<float>* logits) const override;
 
  private:
+  // One session run: `batch_n` rows in, their logits out (row-major).
+  // `position` null: rows of the single-input model. Else the autoregressive
+  // model: the rows are prefixes, `position` the features they share.
+  std::vector<float> forward(const std::vector<float>& input_buf, std::size_t batch_n,
+                             std::size_t* out_logit_len, const std::vector<float>* position) const;
+
   struct EvalResult {
     std::vector<float> logits;
     std::exception_ptr error;

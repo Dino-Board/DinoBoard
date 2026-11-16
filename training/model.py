@@ -88,6 +88,30 @@ def validate_belief_config(belief_config: dict, *, where: str = "belief.json") -
         raise ValueError(
             f"{where}: activation={activation!r} is not supported; only 'relu' "
             f"is implemented today.")
+    belief_type = belief_config["type"]
+    if belief_type not in BELIEF_TYPES:
+        raise ValueError(f"{where}: type={belief_type!r} is not supported; expected one of {sorted(BELIEF_TYPES)}.")
+    missing = BELIEF_TYPES[belief_type] - set(belief_config)
+    if missing:
+        raise ValueError(f"{where}: type {belief_type!r} needs {sorted(missing)}.")
+    loss = belief_config["training"]["loss"]
+    if (belief_type == "autoregressive") != (loss == BELIEF_SEQUENCE_LOSS):
+        raise ValueError(f"{where}: type 'autoregressive' and training.loss {BELIEF_SEQUENCE_LOSS!r} go together; "
+                         f"got type={belief_type!r}, loss={loss!r}.")
+
+
+# Keys each belief net type reads from belief.json (besides activation and training).
+BELIEF_TYPES = {
+    "mlp": {"architecture", "batch_norm", "residual", "block_size"},
+    "per_entity": {"architecture", "embedding_dim"},
+    # Sorted hands written one element at a time (engine/core/belief_sequence.h): `architecture`
+    # (with batch_norm / residual / block_size) is the trunk that reads the position, `head` the
+    # hidden widths of the head that reads [trunk output, prefix] at every step.
+    "autoregressive": {"architecture", "batch_norm", "residual", "block_size", "head"},
+}
+
+# belief.json::training.loss of the "autoregressive" type (and of no other).
+BELIEF_SEQUENCE_LOSS = "sequence_nll"
 
 
 class ResidualBlock(nn.Module):
@@ -582,10 +606,118 @@ class BeliefNet(nn.Module):
         return self.net(x)
 
 
+class PerEntityBeliefNet(nn.Module):
+    """Belief net that scores every entity (e.g. a card: is it in the opponent's hand?) with one
+    shared MLP over [the entity's features, the global features, a learned embedding of the
+    entity]. The input is the extractor's flat vector, laid out as
+    game_metadata()["belief_entity_layout"] says: global_dim features, then entities blocks of
+    entity_dim; the output is one logit per entity."""
+
+    def __init__(self, global_dim: int, entities: int, entity_dim: int,
+                 hidden_layers: Sequence[int], embedding_dim: int):
+        super().__init__()
+        self.global_dim = global_dim
+        self.entities = entities
+        self.entity_dim = entity_dim
+        self.embedding = nn.Parameter(torch.randn(entities, embedding_dim) * 0.02)
+        layers: list[nn.Module] = []
+        width = entity_dim + global_dim + embedding_dim
+        for h in hidden_layers:
+            layers += [nn.Linear(width, h), nn.ReLU()]
+            width = h
+        layers.append(nn.Linear(width, 1))
+        self.mlp = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        g = x[:, :self.global_dim]
+        e = x[:, self.global_dim:].reshape(-1, self.entities, self.entity_dim)
+        h = torch.cat([e, g.unsqueeze(1).expand(-1, self.entities, -1),
+                       self.embedding.unsqueeze(0).expand(e.shape[0], -1, -1)], dim=2)
+        return self.mlp(h).squeeze(2)
+
+
+class AutoregressiveBeliefNet(nn.Module):
+    """Belief net of type "autoregressive" (engine/core/belief_sequence.h): scores the next element
+    of the hand being written. A trunk reads the position features; a head reads [trunk output,
+    prefix] and returns one logit per class. One position has many prefixes (every step of every
+    sampled deal), so the trunk runs once per position and only the head once per prefix.
+
+    forward(features [B, F], prefix [R, P], position [R]): row r belongs to position[r]. The
+    exported model (export_belief_onnx) takes one position: features [1, F], prefix [rows, P]."""
+
+    def __init__(self, feature_dim: int, prefix_dim: int, classes: int,
+                 trunk_layers: Sequence[int], head_layers: Sequence[int],
+                 batch_norm: bool, *, residual: bool, block_size: int):
+        super().__init__()
+        if not head_layers:
+            raise ValueError("AutoregressiveBeliefNet: 'head' needs at least one hidden layer")
+        self.feature_dim = feature_dim
+        self.prefix_dim = prefix_dim
+        trunk, width = _build_backbone(
+            feature_dim, trunk_layers, residual=residual, block_size=block_size, batch_norm=batch_norm,
+            where="AutoregressiveBeliefNet")
+        self.trunk = trunk
+        layers: list[nn.Module] = []
+        width += prefix_dim
+        for h in head_layers:
+            layers += [nn.Linear(width, h), nn.ReLU()]
+            width = h
+        layers.append(nn.Linear(width, classes))
+        self.head = nn.Sequential(*layers)
+        # The logits are added to the uniform deal's log-probabilities, so a net that outputs
+        # zeros deals uniformly: an untrained net starts there.
+        nn.init.zeros_(self.head[-1].weight)
+        nn.init.zeros_(self.head[-1].bias)
+
+    def forward(self, features: torch.Tensor, prefix: torch.Tensor, position: torch.Tensor) -> torch.Tensor:
+        return self.head(torch.cat([self.trunk(features)[position], prefix], dim=1))
+
+
+class _OnePositionBelief(nn.Module):
+    """Export wrapper of AutoregressiveBeliefNet: every prefix row belongs to the one position."""
+
+    def __init__(self, net: AutoregressiveBeliefNet):
+        super().__init__()
+        self.net = net
+
+    def forward(self, features: torch.Tensor, prefix: torch.Tensor) -> torch.Tensor:
+        context = self.net.trunk(features).expand(prefix.shape[0], -1)
+        return self.net.head(torch.cat([context, prefix], dim=1))
+
+
 def create_belief_model_from_config(belief_config: dict, *,
                                     input_dim: int,
-                                    output_dim: int) -> BeliefNet:
+                                    output_dim: int,
+                                    entity_layout: dict | None = None,
+                                    sequence_layout: dict | None = None) -> nn.Module:
+    """`input_dim` / `output_dim`: game_metadata()'s belief_feature_dim / belief_logit_count.
+    `entity_layout`: game_metadata()["belief_entity_layout"], which type "per_entity" needs.
+    `sequence_layout`: game_metadata()["belief_sequence_layout"]; a game that declares one samples
+    hands autoregressively and takes type "autoregressive" and no other."""
     validate_belief_config(belief_config)
+    if (belief_config["type"] == "autoregressive") != (sequence_layout is not None):
+        raise ValueError(
+            "belief type 'autoregressive' needs the extractor's sequence layout "
+            "(game_metadata()['belief_sequence_layout']); this game declares none"
+            if sequence_layout is None else
+            f"this game's tracker samples hands autoregressively; belief.json type must be "
+            f"'autoregressive', not {belief_config['type']!r}")
+    if belief_config["type"] == "autoregressive":
+        if sequence_layout["classes"] != output_dim:
+            raise ValueError(f"belief sequence layout {sequence_layout} disagrees with output_dim={output_dim}")
+        return AutoregressiveBeliefNet(
+            input_dim, sequence_layout["prefix_dim"], output_dim,
+            belief_config["architecture"], belief_config["head"], belief_config["batch_norm"],
+            residual=bool(belief_config["residual"]), block_size=int(belief_config["block_size"]))
+    if belief_config["type"] == "per_entity":
+        if entity_layout is None:
+            raise ValueError("belief type 'per_entity' needs the extractor's entity layout "
+                             "(game_metadata()['belief_entity_layout']); this game declares none")
+        g, n, d = entity_layout["global_dim"], entity_layout["entities"], entity_layout["entity_dim"]
+        if g + n * d != input_dim or n != output_dim:
+            raise ValueError(f"belief entity layout {entity_layout} disagrees with input_dim={input_dim}, "
+                             f"output_dim={output_dim}")
+        return PerEntityBeliefNet(g, n, d, belief_config["architecture"], int(belief_config["embedding_dim"]))
     hidden = belief_config["architecture"]
     batch_norm = belief_config["batch_norm"]
     residual = bool(belief_config["residual"])
@@ -594,7 +726,7 @@ def create_belief_model_from_config(belief_config: dict, *,
                      residual=residual, block_size=block_size)
 
 
-def export_belief_onnx(net: BeliefNet, path: Path, input_dim: int) -> str:
+def export_belief_onnx(net: nn.Module, path: Path, input_dim: int) -> str:
     net.eval()
     path.parent.mkdir(parents=True, exist_ok=True)
     # BN with batch=1 in eval mode reads running stats — safe. The exported
@@ -604,6 +736,24 @@ def export_belief_onnx(net: BeliefNet, path: Path, input_dim: int) -> str:
     if saved_device.type != "cpu":
         net.to("cpu")
     try:
+        if isinstance(net, AutoregressiveBeliefNet):
+            # Two inputs: one position's features and any number of prefixes (see the class).
+            if input_dim != net.feature_dim:
+                raise ValueError(f"export_belief_onnx: input_dim={input_dim}, the net reads {net.feature_dim} features")
+            torch.onnx.export(
+                # eval(): the exporter puts the module it was given back into the mode it found it
+                # in, and a new wrapper in training mode would take the net with it.
+                _OnePositionBelief(net).eval(),
+                (torch.zeros((1, input_dim), dtype=torch.float32),
+                 torch.zeros((2, net.prefix_dim), dtype=torch.float32)),
+                str(path),
+                input_names=["features", "prefix"],
+                output_names=["logits"],
+                dynamic_axes={"prefix": {0: "rows"}, "logits": {0: "rows"}},
+                opset_version=13,
+                dynamo=False,
+            )
+            return str(path)
         dummy = torch.zeros((1, input_dim), dtype=torch.float32)
         torch.onnx.export(
             net, dummy, str(path),

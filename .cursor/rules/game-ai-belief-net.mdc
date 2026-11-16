@@ -55,8 +55,9 @@ Convenience: `extract_from_state()` materializes the masked clone and forwards.
 
 `K` is the per-opponent output width, not necessarily a mutually-exclusive
 class count. Coup uses two categorical branches, Liar's Dice uses per-face
-categoricals that are reconstructed into a 252-outcome joint, and 6 nimmt! uses
-104 independent sigmoid logits.
+categoricals that are reconstructed into a 252-outcome joint, Ark Nova uses one
+independent sigmoid logit per card, and 6 nimmt!'s 104 logits score the next
+card of a hand that is written card by card (autoregressive type, below).
 
 ## IBeliefLabelExtractor (engine/core/belief_label_extractor.h)
 
@@ -70,7 +71,8 @@ common tensor shape (sized to observer, N-1, K):
 
 The framework transports these tensors but does not impose one universal loss.
 Coup uses alive-selected categorical CE, Liar's Dice uses per-face categorical
-targets, and 6 nimmt! uses multi-hot BCE over 104 cards.
+targets, Ark Nova uses multi-hot BCE over its cards, and 6 nimmt! uses the
+autoregressive loss (`hand_counts` = the true hands, `remaining` = the pool).
 
 ```cpp
 class IBeliefLabelExtractor {
@@ -90,12 +92,14 @@ Runtime evaluator. Single input (flat feature vector), single output (flat
 (`engine/infer/onnx_belief_evaluator.h`). Logits returned uncalibrated; the
 tracker applies per-game post-processing (softmax branches, sigmoid marginals,
 joint reconstruction, feasibility masks) before `randomize_unseen` samples a
-world.
+world. `evaluate_steps(features, prefixes, rows, logits)` runs a two-input
+autoregressive model (below); single-input models do not implement it.
 
 ## belief.json config (games/<id>/config/belief.json)
 
 ```json
 {
+  "type": "mlp",
   "architecture": [256, 256, 256, 256, 256, 256],
   "activation": "relu",
   "batch_norm": true,
@@ -104,6 +108,16 @@ world.
   "training": { "loss": "ce" }
 }
 ```
+
+`"type": "per_entity"` (Ark Nova) scores each entity (a card: does the
+opponent hold it?) with one shared MLP over [its features, the global
+features, a learned embedding] instead of one MLP over everything, so what it
+learns about one card carries over to similar cards. It needs the extractor to
+declare `entity_layout()` (`BeliefEntityLayout`: `global_dim` features, then
+`entities` blocks of `entity_dim`, one logit per entity; `game_metadata`
+reports it as `belief_entity_layout`) and reads `architecture` and
+`embedding_dim`. The ONNX input and output stay flat, so the C++ evaluator is
+unchanged.
 
 Separate from PV net. Independent ONNX session, independent cache slot.
 Per-variant independent training (e.g. coup_belief_2p.onnx).
@@ -124,7 +138,61 @@ temperature inside those transforms stays `1.0`. Calibration belongs in the
 trained model, not a hidden runtime transform.
 
 Current training losses are game-specific (`ce` for categorical heads, `bce`
-for 6 nimmt!'s multi-hot card ownership head).
+for multi-hot card ownership heads, `sequence_nll` for the autoregressive type).
+
+## Autoregressive type (sorted hands)
+
+`"type": "autoregressive"` writes the hidden hands one element at a time
+instead of scoring every card on its own, so a sampled world is a joint draw:
+what one opponent holds changes what the next can hold, and cards that go
+together are dealt together. `engine/core/belief_sequence.h` is the whole
+mechanism, shared by sampling and training:
+
+- The hidden information is, per segment (an opponent), a set of distinct
+  elements out of a pool the observer cannot place. Hands are written lowest
+  element first, one segment after another.
+- The net reads the position features and a prefix and returns one logit per
+  class for the next element. The prefix holds the elements given to each
+  segment so far, a one-hot of the segment being filled and a one-hot of its
+  previous element (`prefix_dim(layout)` floats).
+- The net is a trunk over the features (`architecture`) plus a head over
+  `[trunk output | prefix]` (`head`). One position has many prefixes, so the
+  exported ONNX has two inputs, `features` `[1, F]` and `prefix` `[rows, P]`:
+  the trunk runs once per position and only the head per prefix
+  (`IBeliefEvaluator::evaluate_steps`).
+- The logits are added to the log-probabilities of the next element under a
+  uniform deal, which are `-inf` for an element that cannot come next (not in
+  the pool, not above the previous one, or too high for the segment to be
+  completed). So every sample is a possible deal, a net that outputs zeros is
+  the uniform deal (a new net's last layer is zero), and the net only has to
+  learn how the hands differ from uniform.
+
+To opt in: the extractor returns `sequence_layout()` (`BeliefSequenceLayout
+{classes, segments}`, with `output_logit_count() == classes`; `game_metadata`
+reports it as `belief_sequence_layout`, including `prefix_dim`); the label
+extractor returns the true hands in `hand_counts` and the pool in `remaining`;
+the tracker calls `belief_sequence::sample(...)` once in `prepare_for_root`
+(a batch of whole deals, one `evaluate_steps` call per hidden element with one
+row per distinct prefix) and `randomize_unseen` gives each world one of them.
+`training.loss` must be `"sequence_nll"`: the trainer takes its rows (prefix,
+prior, target) from the same C++ code (`belief_sequence_training_rows`), and
+the training log shows `b_loss` (nats per hidden element) and `b_gain` (how
+far that is below the uniform deal's; zero means the net knows nothing beyond
+the rules).
+
+Cost rules, measured on 6 nimmt! selfplay (256 concurrent games, 1000
+simulations, one GPU):
+
+- The search clones the tracker for every world and every simulation. Keep
+  the sampled deals behind a `shared_ptr`; deep copies cost more than the
+  whole search.
+- `evaluate_steps` runs on the calling search thread on a CPU session even
+  when selfplay uses a GPU. A GPU run per call, or the callers' rows merged
+  into shared GPU runs, were both slower: they queue with the policy/value
+  batches.
+- With the trunk/head split and shared rows, sampling 128 deals per root
+  costs about a tenth of the step; a single MLP over `[features | prefix]`
+  evaluated for every sample cost about a third.
 
 ## Tracker integration: prepare_for_root
 
@@ -137,7 +205,8 @@ virtual void prepare_for_root(
     const IBeliefEvaluator* evaluator);
 ```
 
-Called once at MCTS root before any simulation. Flow:
+Called once at MCTS root before any simulation. Flow (the autoregressive type
+replaces steps 2-3 with a batch of sampled deals):
 1. Extractor produces feature vector from masked root state + tracker
 2. Evaluator returns (N-1) x K logits
 3. Tracker converts logits into a per-game posterior cache
@@ -151,7 +220,7 @@ Called once at MCTS root before any simulation. Flow:
 |------|--------------|-----------------|------------------------------|
 | Coup | Per opp 20 logits: `[15 two-card multiset | 5 single-card]` | Pick branch by current unknown alive count, softmax within that branch at fixed `T=1.0`, cache `pi_hand_[opp]` | Shuffle opponent order. For each opponent, mask infeasible hands whose required role counts exceed remaining deck counts, renormalize, sample one whole hand, subtract it from `remaining`, then write the selected role multiset into viz=0 influence/exchange slots. |
 | Liar's Dice | Per opp 36 logits: `6 faces x 6 count bins` | Softmax each face's count distribution at fixed `T=1.0`, build the 252 legal `sum=5` outcome joint by product and IPF renormalization, cache `pi_outcome_[opp]` | For each opponent, sample one of the 252 cached dice-count outcomes and write it into that opponent's hidden `dice_count`. |
-| 6 nimmt! | Per opp 104 logits, one per card | Apply sigmoid at fixed `T=1.0` to get marginal `P(opp holds card c)`, cache `belief_probs_[opp][card]` | Build the unseen card pool from public played cards and observer-known hand/pending cards. For each opponent, sample the needed number of cards without replacement by Plackett-Luce / weighted multinomial using cached marginals; fall back to uniform if the residual weight mass is degenerate. |
+| 6 nimmt! | 104 logits: the next card of the hand being written | Autoregressive type: at the root, draw a batch of whole deals of the unseen cards (lowest card first, seat after seat), one evaluator call per hidden card; cache the deals with the root's observer and hash | Each world takes one of the cached deals and writes it into the other seats' hands (a face-down played card counts as still in hand). Without a model, or at any other position, a uniform draw from the unseen cards. |
 
 These shapes are deliberately per-game. Do not assume every belief net is a
 single categorical distribution or that every tracker consumes `pi[opp][R]`

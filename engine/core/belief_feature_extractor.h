@@ -9,6 +9,28 @@ namespace board_ai {
 
 class IBeliefTracker;
 
+// Optional layout of the belief features: `global_dim` features of the position, then
+// `entities` blocks of `entity_dim` features, one per output logit (e.g. one per card, whose
+// logit says whether an opponent holds it). Lets the belief net score every entity with shared
+// weights (belief.json "type": "per_entity"). entities == 0: no layout (one flat vector).
+struct BeliefEntityLayout {
+  int global_dim = 0;
+  int entities = 0;
+  int entity_dim = 0;
+};
+
+// Optional: the hidden information is, per segment (an opponent), a sorted
+// hand of elements of `classes` kinds (cards), and the belief net predicts it
+// one element at a time, smallest first (belief.json "type":
+// "autoregressive", engine/core/belief_sequence.h). feature_dim() is then the
+// width of the position features; the net's input adds the prefix of
+// elements chosen so far, and output_logit_count() == classes.
+// classes == 0: not autoregressive.
+struct BeliefSequenceLayout {
+  int classes = 0;
+  int segments = 0;
+};
+
 // Belief-network feature extractor.
 //
 // Mirrors IFeatureEncoder's input surface (a perspective-masked state
@@ -39,6 +61,11 @@ class IBeliefFeatureExtractor {
   virtual ~IBeliefFeatureExtractor() = default;
   virtual int feature_dim() const = 0;
   virtual int output_logit_count() const = 0;
+  // When set: feature_dim() == global_dim + entities * entity_dim and
+  // output_logit_count() == entities.
+  virtual BeliefEntityLayout entity_layout() const { return {}; }
+  // When set: output_logit_count() == classes.
+  virtual BeliefSequenceLayout sequence_layout() const { return {}; }
 
   virtual void extract(
       const IGameState& masked_state,

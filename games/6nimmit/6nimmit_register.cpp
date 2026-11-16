@@ -24,7 +24,9 @@ using namespace board_ai::sixnimmt;
 // One `card_played` event per card that was placed in this transition (put
 // on a row, or started a row anew after its owner took one): the moment a
 // played card stops being a pending card. The UI animates from these; the
-// belief tracker needs none (the card is in `used` by then).
+// belief tracker remembers them with the rows the round started from (every
+// card of a round is placed in one transition, before which no card of the
+// round has touched the table), which is what the players saw when they chose.
 //
 // The seat that completes the round has its card played and placed inside
 // the same transition, so its slot reads 0 before and after; its card is
@@ -36,6 +38,13 @@ std::vector<board_ai::PublicEvent> extract_events_sixnimmit(const IGameState& be
   const auto& a = board_ai::checked_cast<SixNimmtState<NPlayers>>(after).data;
   std::vector<board_ai::PublicEvent> events;
   const bool is_commit = !b.small_phase_active && action >= kCommitOffset && action < kCommitOffset + kNumCards;
+  std::vector<int> row_ends, row_lens;  // of the table before the round's cards were placed
+  for (const auto& row : b.table) {
+    int len = 0;
+    while (len < kRowCapacity && row[static_cast<std::size_t>(len)] != 0) ++len;
+    row_ends.push_back(len > 0 ? static_cast<int>(row[static_cast<std::size_t>(len - 1)]) : 0);
+    row_lens.push_back(len);
+  }
   for (int p = 0; p < NPlayers; ++p) {
     int card = static_cast<int>(b.pending_commits[static_cast<std::size_t>(p)]);
     if (is_commit && p == b.current_player) card = static_cast<int>(action) - kCommitOffset + 1;
@@ -43,6 +52,9 @@ std::vector<board_ai::PublicEvent> extract_events_sixnimmit(const IGameState& be
       AnyMap payload;
       payload["player"] = std::any(p);
       payload["card"] = std::any(card);
+      payload["round"] = std::any(b.current_round);
+      payload["round_start_ends"] = std::any(row_ends);
+      payload["round_start_lens"] = std::any(row_lens);
       events.emplace_back("card_played", std::move(payload));
     }
   }
@@ -165,6 +177,8 @@ board_ai::GameBundle make_sixnimmit(const std::string& game_id, std::uint64_t se
   b.value_model = std::make_unique<SixNimmtMarginValueModel<NPlayers>>();
   b.encoder = std::make_unique<SixNimmtTokenEncoder<NPlayers>>();
   b.belief_tracker = std::make_unique<SixNimmtBeliefTracker<NPlayers>>();
+  b.belief_feature_extractor = std::make_unique<SixNimmtBeliefFeatureExtractor<NPlayers>>();
+  b.belief_label_extractor = std::make_unique<SixNimmtBeliefLabelExtractor<NPlayers>>();
   b.state_serializer = [](const IGameState& state) {
     // Static: the encoder's feature layout, for tests and documentation.
     static const std::string layout = SixNimmtTokenEncoder<NPlayers>::layout_json();
@@ -175,8 +189,8 @@ board_ai::GameBundle make_sixnimmit(const std::string& game_id, std::uint64_t se
   b.action_descriptor = describe_sixnimmit;
   b.heuristics.register_named("rule_v1", std::make_unique<SixNimmtRuleHeuristic<NPlayers>>("rule_v1"));
   b.heuristics.register_named("lkf_v1", std::make_unique<SixNimmtLkfHeuristic<NPlayers>>("lkf_v1"));
-  // The tracker keeps no memory (everything it needs is on the state); the
-  // events are for the UI.
+  // The events are for the UI and for the tracker's memory of the rounds
+  // (belief features only; world sampling needs nothing but the state).
   b.install_event_protocol(extract_events_sixnimmit<NPlayers>,
                            []() -> const board_ai::viz::VisibilitySchema& { return SixNimmtState<NPlayers>::schema(); });
   // A game cut off by the ply cap goes to the only player with the fewest bullheads.

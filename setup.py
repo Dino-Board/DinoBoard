@@ -89,6 +89,7 @@ sources = [
     "engine/core/action_constraint.cpp",
     "engine/core/mask_state_impl.cpp",
     "engine/core/heuristic_registry.cpp",
+    "engine/core/belief_sequence.cpp",
     "engine/search/net_mcts.cpp",
     "engine/search/tail_solver.cpp",
     "engine/infer/onnx_policy_value_evaluator.cpp",

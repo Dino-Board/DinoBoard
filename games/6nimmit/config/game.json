@@ -12,17 +12,23 @@
     "6nimmit": {
       "feature_dim": 0,
       "action_space": 108,
-      "num_players": 2
+      "num_players": 2,
+      "belief_feature_dim": 529,
+      "belief_logit_count": 104
     },
     "6nimmit_3p": {
       "feature_dim": 0,
       "action_space": 108,
-      "num_players": 3
+      "num_players": 3,
+      "belief_feature_dim": 750,
+      "belief_logit_count": 104
     },
     "6nimmit_4p": {
       "feature_dim": 0,
       "action_space": 108,
-      "num_players": 4
+      "num_players": 4,
+      "belief_feature_dim": 971,
+      "belief_logit_count": 104
     }
   }
 }

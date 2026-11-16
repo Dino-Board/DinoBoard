@@ -29,6 +29,7 @@ import torch
 
 from .mcts_profile import MctsProfile, max_game_plies, profile_as_dict, resolve_profile
 from .model import (
+    BELIEF_SEQUENCE_LOSS,
     AuxHead,
     PVNet,
     create_belief_model_from_config,
@@ -1005,6 +1006,66 @@ def _train_belief_step_bce_multihot(
     return total / max(1, batches_per_step)
 
 
+def _train_belief_step_sequence(
+    net: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    buffer: deque,
+    *,
+    layout: dict,
+    batch_size: int,
+    batches_per_step: int,
+    grad_clip: float,
+) -> tuple[float, float]:
+    """Autoregressive belief (engine/core/belief_sequence.h): every hidden
+    element of every sampled position is one row — the net reads the position
+    features and the prefix written so far, its logits are added to the uniform
+    deal's log-probabilities of the next element, and the loss is the
+    cross-entropy against the element the true hand has there. The rows come
+    from the engine, which also samples with them.
+
+    Returns (loss, uniform): the net's and the uniform deal's nats per hidden
+    element. Their difference is what the net knows beyond the rules.
+    """
+    import dinoboard_engine
+
+    if not buffer:
+        return float("nan"), float("nan")
+    classes, segments = layout["classes"], layout["segments"]
+    device = next(net.parameters()).device
+    buf = list(buffer)
+    n = len(buf)
+    net.train()
+    total = 0.0
+    total_uniform = 0.0
+    done = 0
+    for _ in range(batches_per_step):
+        idx = torch.randint(n, (min(batch_size, n),)).tolist()
+        batch = [buf[i] for i in idx]
+        pool = np.stack([np.asarray(s[2], dtype=np.int32) for s in batch])
+        hands = np.stack([np.asarray(s[1], dtype=np.int32) for s in batch])
+        rows = dinoboard_engine.belief_sequence_training_rows(classes, segments, pool, hands)
+        if rows["target"].shape[0] == 0:
+            continue  # nothing hidden in any sampled position
+        f = _belief_feature_batch(batch, device)
+        position = torch.from_numpy(rows["position"]).to(device)
+        prefix = torch.from_numpy(rows["prefix"]).to(device)
+        prior = torch.from_numpy(rows["log_prior"]).to(device)
+        target = torch.from_numpy(rows["target"]).to(device)
+        loss = torch.nn.functional.cross_entropy(net(f, prefix, position) + prior, target)
+        optimizer.zero_grad()
+        loss.backward()
+        if grad_clip > 0:
+            torch.nn.utils.clip_grad_norm_(net.parameters(), grad_clip)
+        optimizer.step()
+        total += float(loss.item())
+        total_uniform += float(-prior.gather(1, target.unsqueeze(1)).mean().item())
+        done += 1
+    net.eval()
+    if done == 0:
+        return float("nan"), float("nan")
+    return total / done, total_uniform / done
+
+
 def _train_belief_step(
     net: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
@@ -1022,7 +1083,7 @@ def _train_belief_step(
     The belief target's shape is a per-game design choice (see each game's
     `<game>_net_adapter.cpp::BeliefLabelExtractor`). This entry picks the
     matching trainer:
-      - loss == "bce" → BCE-with-logits multi-hot (6nimmit; independent
+      - loss == "bce" → BCE-with-logits multi-hot (Ark Nova; independent
         per-card bernoulli — cards don't compete, opp holds many at once)
       - loss == "ce" + K == 20 → coup two-branch (15 two-card + 5 single)
       - loss == "ce" + K == 36 → liar's dice per-face CE × 6
@@ -1916,6 +1977,17 @@ def rotate_z_values(z_values: list[float], player: int, num_players: int = 0) ->
     return [z_values[(player + i) % n] for i in range(n)]
 
 
+def format_match_result(r: dict) -> str:
+    """`win_rate` is (W + D/2) / games. `share` is r["win_rate"], the mean
+    candidate share that gating and guidance thresholds compare against; it
+    differs from win_rate when terminal values are not +-1 (score margins,
+    loser-pays)."""
+    games = max(1, r["wins"] + r["losses"] + r["draws"])
+    win_rate = (r["wins"] + 0.5 * r["draws"]) / games
+    return (f"win_rate={win_rate:.1%} (W={r['wins']}, L={r['losses']}, D={r['draws']}, "
+            f"share={r['win_rate']:.1%})")
+
+
 def compute_schedule_ratio(
     step: int,
     decay_end_step: int,
@@ -2345,6 +2417,9 @@ def run_training_loop(
         belief_out = meta["belief_logit_count"]
         belief_net = create_belief_model_from_config(
             belief_cfg, input_dim=belief_in, output_dim=belief_out,
+            # Each present only when the extractor declares one.
+            entity_layout=meta.get("belief_entity_layout"),
+            sequence_layout=meta.get("belief_sequence_layout"),
         ).to(device)
         b_train = belief_cfg["training"]
         # Belief training schedule mirrors PV — see find_belief_config: PV-side
@@ -2830,25 +2905,34 @@ def run_training_loop(
                 belief_lr = compute_lr(step, steps, belief_lr_init, belief_lr_schedule)
                 for pg in belief_optimizer.param_groups:
                     pg["lr"] = belief_lr
-                belief_loss_val = _train_belief_step(
-                    belief_net, belief_optimizer, belief_buffer,
-                    num_players=num_players, K=belief_K,
-                    batch_size=belief_batch_size,
-                    batches_per_step=belief_batches_per_step,
-                    grad_clip=train_cfg.get("grad_clip_norm", 1.0),
-                    loss=belief_loss_kind,
-                )
+                if belief_loss_kind == BELIEF_SEQUENCE_LOSS:
+                    belief_loss_val, belief_uniform_val = _train_belief_step_sequence(
+                        belief_net, belief_optimizer, belief_buffer,
+                        layout=meta["belief_sequence_layout"],
+                        batch_size=belief_batch_size,
+                        batches_per_step=belief_batches_per_step,
+                        grad_clip=train_cfg.get("grad_clip_norm", 1.0),
+                    )
+                else:
+                    belief_loss_val = _train_belief_step(
+                        belief_net, belief_optimizer, belief_buffer,
+                        num_players=num_players, K=belief_K,
+                        batch_size=belief_batch_size,
+                        batches_per_step=belief_batches_per_step,
+                        grad_clip=train_cfg.get("grad_clip_norm", 1.0),
+                        loss=belief_loss_kind,
+                    )
                 if not math.isfinite(belief_loss_val):
                     raise RuntimeError(
                         f"belief loss diverged: {belief_loss_val} — abort to "
                         "prevent training-on-NaN drift (Plan §2.4)"
                     )
                 belief_latest = models_dir / "belief_latest.onnx"
-                export_belief_onnx(belief_net, belief_latest, meta["belief_feature_dim"])
+                export_belief_onnx(belief_net, belief_latest, belief_in)
                 current_belief_model_path = str(belief_latest)
                 if step % save_every == 0:
                     with atomic_write(models_dir / f"belief_step_{step:05d}.onnx") as tmp:
-                        export_belief_onnx(belief_net, tmp, meta["belief_feature_dim"])
+                        export_belief_onnx(belief_net, tmp, belief_in)
 
             elapsed = time.perf_counter() - t0
             train_elapsed = time.perf_counter() - t_train_start
@@ -2907,6 +2991,9 @@ def run_training_loop(
                         f"b_loss={belief_loss_val:.4f}, b_buf={buf_n}, "
                         f"b_step={belief_step_samples}"
                     )
+                    if belief_loss_kind == BELIEF_SEQUENCE_LOSS:
+                        # Nats per hidden element the net gains over a uniform deal.
+                        log_parts.append(f"b_gain={belief_uniform_val - belief_loss_val:.4f}")
                 else:
                     log_parts.append(f"b_buf={buf_n}, b_step={belief_step_samples}")
             # Game-defined per-episode stats (averaged over the step's
@@ -2965,8 +3052,7 @@ def run_training_loop(
                             uct2_arrival_visits=eval_profile.uct2_arrival_visits)
                         eval_win_rates[bench] = r["win_rate"]
                         logger.info(
-                            f"  eval vs heuristic (constrained): win_rate={r['win_rate']:.1%} "
-                            f"(W={r['wins']}, L={r['losses']}, D={r['draws']})")
+                            f"  eval vs heuristic (constrained): {format_match_result(r)}")
                     elif bench == "heuristic_free":
                         r = run_eval_vs_heuristic(
                             game_id, eval_infer, eval_games, eval_seed_base + step * 100000 + 50000,
@@ -2990,8 +3076,7 @@ def run_training_loop(
                             uct2_arrival_visits=eval_profile.uct2_arrival_visits)
                         eval_win_rates[bench] = r["win_rate"]
                         logger.info(
-                            f"  eval vs heuristic (free): win_rate={r['win_rate']:.1%} "
-                            f"(W={r['wins']}, L={r['losses']}, D={r['draws']})")
+                            f"  eval vs heuristic (free): {format_match_result(r)}")
                     else:
                         bench_result = run_eval_batch(
                             game_id, eval_infer, bench,
@@ -3017,8 +3102,7 @@ def run_training_loop(
                         )
                         eval_win_rates[bench] = bench_result["win_rate"]
                         logger.info(
-                            f"  eval vs {Path(bench).stem}: win_rate={bench_result['win_rate']:.1%} "
-                            f"(W={bench_result['wins']}, L={bench_result['losses']}, D={bench_result['draws']})")
+                            f"  eval vs {Path(bench).stem}: {format_match_result(bench_result)}")
 
                 if (guidance_until is not None and guidance_trigger_step is None
                         and step >= heuristic_guidance_hold_steps
@@ -3064,8 +3148,7 @@ def run_training_loop(
                 )
                 gating_wr = gating_result["win_rate"]
                 logger.info(
-                    f"  gating vs best: win_rate={gating_wr:.1%} "
-                    f"(W={gating_result['wins']}, L={gating_result['losses']}, D={gating_result['draws']})")
+                    f"  gating vs best: {format_match_result(gating_result)}")
                 gating_threshold = train_cfg.get(
                     "gating_accept_win_rate",
                     _default_gating_threshold(num_players, eval_games,
@@ -3078,7 +3161,7 @@ def run_training_loop(
                     if belief_enabled:
                         with atomic_write(models_dir / "belief_best.onnx") as tmp:
                             shutil.copy2(belief_latest, tmp)
-                    logger.info(f"  new best model: step {step}, win_rate={gating_wr:.1%}")
+                    logger.info(f"  new best model: step {step}, share={gating_wr:.1%}")
 
             checkpoint = {
                 "step": step,
