@@ -246,8 +246,7 @@ b.install_event_protocol(
 
 When only the belief features read the tracker's memory (they run at the
 search root, never inside a simulation), keep the events-only extractor empty
-and give real moves their own events, so simulations pay nothing (mirror
-Ark Nova's `belief_events`):
+and give real moves their own events, so simulations pay nothing:
 ```cpp
 b.install_event_protocol(viz::no_events_extractor, schema);
 b.public_event_extractor =

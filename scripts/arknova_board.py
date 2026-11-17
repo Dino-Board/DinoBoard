@@ -10,7 +10,8 @@ come from C++). This script starts the server with two opponents only, on Map 0:
   - beam_3x8: the rule-based search of that name (DinoBoard's C++ port of ark-nova-ai's strongest
     one, heuristic.json `named`); the human's hints then come from the network.
 
-    python scripts/arknova_board.py --ref ~/ref/ark-nova-ai [--model m.onnx] [--profile web_expert]
+    git clone -b rulebook https://github.com/Zhiqi-Wang/ark-nova-ai.git ~/ark-nova-fork
+    python scripts/arknova_board.py --ref ~/ark-nova-fork [--model m.onnx] [--profile web_expert]
 
 Then open http://127.0.0.1:8765 once the page is built (in the ark-nova-ai checkout:
 cd web && pnpm install && pnpm build), or run `pnpm dev` there and open the address it prints.
@@ -19,9 +20,10 @@ the ark-nova-ai checkout; a browser on this machine is signed in as `player` wit
 
 Each DinoBoard decision loads the table's state into a truth GameSession, which searches on the
 mover's masked view (it never reads the opponent's hidden cards), one atom at a time, until the
-chosen atoms name one of the board's options. --ref must be an ark-nova-ai checkout with the board's
-table hook (arknova/play/table.py) whose rules follow the rulebook where ark-nova-ai departs from it
-(see docs/games/arknova_api.md): the board's hints still read that engine's rules.
+chosen atoms name one of the board's options. --ref must be a checkout with the board's table and
+rules hooks (arknova/play/table.py, arknova/play/rules.py; the rulebook branch of
+github.com/Zhiqi-Wang/ark-nova-ai, see docs/games/arknova_api.md): the script points both at C++
+(host_table.HostTable, HostRules), so the board's hints follow the same rules as the game.
 """
 from __future__ import annotations
 

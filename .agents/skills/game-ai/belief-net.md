@@ -48,9 +48,9 @@ Convenience: `extract_from_state()` materializes the masked clone and forwards.
 
 `K` is the per-opponent output width, not necessarily a mutually-exclusive
 class count. Coup uses two categorical branches, Liar's Dice uses per-face
-categoricals that are reconstructed into a 252-outcome joint, Ark Nova uses one
-independent sigmoid logit per card, and 6 nimmt!'s 104 logits score the next
-card of a hand that is written card by card (autoregressive type, below).
+categoricals that are reconstructed into a 252-outcome joint, and the logits of
+Ark Nova (240) and 6 nimmt! (104) score the next card of a hand that is written
+card by card (autoregressive type, below).
 
 ## IBeliefLabelExtractor (engine/core/belief_label_extractor.h)
 
@@ -64,8 +64,8 @@ common tensor shape (sized to observer, N-1, K):
 
 The framework transports these tensors but does not impose one universal loss.
 Coup uses alive-selected categorical CE, Liar's Dice uses per-face categorical
-targets, Ark Nova uses multi-hot BCE over its cards, and 6 nimmt! uses the
-autoregressive loss (`hand_counts` = the true hands, `remaining` = the pool).
+targets, and Ark Nova and 6 nimmt! use the autoregressive loss
+(`hand_counts` = the true hands, `remaining` = the pool).
 
 ```cpp
 class IBeliefLabelExtractor {
@@ -102,7 +102,7 @@ autoregressive model (below); single-input models do not implement it.
 }
 ```
 
-`"type": "per_entity"` (Ark Nova) scores each entity (a card: does the
+`"type": "per_entity"` scores each entity (a card: does the
 opponent hold it?) with one shared MLP over [its features, the global
 features, a learned embedding] instead of one MLP over everything, so what it
 learns about one card carries over to similar cards. It needs the extractor to
@@ -213,6 +213,7 @@ replaces steps 2-3 with a batch of sampled deals):
 |------|--------------|-----------------|------------------------------|
 | Coup | Per opp 20 logits: `[15 two-card multiset | 5 single-card]` | Pick branch by current unknown alive count, softmax within that branch at fixed `T=1.0`, cache `pi_hand_[opp]` | Shuffle opponent order. For each opponent, mask infeasible hands whose required role counts exceed remaining deck counts, renormalize, sample one whole hand, subtract it from `remaining`, then write the selected role multiset into viz=0 influence/exchange slots. |
 | Liar's Dice | Per opp 36 logits: `6 faces x 6 count bins` | Softmax each face's count distribution at fixed `T=1.0`, build the 252 legal `sum=5` outcome joint by product and IPF renormalization, cache `pi_outcome_[opp]` | For each opponent, sample one of the 252 cached dice-count outcomes and write it into that opponent's hidden `dice_count`. |
+| Ark Nova | 240 logits: the next card of the opponent's hidden hand | Autoregressive type: at the root, the maybe-tucked cards take their places uniformly in each sample, then a batch of hands of the unseen regular cards is drawn for the hand cards left (one batch per count); cache the samples with the root's observer and hash | Each world takes one of the cached samples for the opponent's hand; tucked cards, private draws and the decks are uniform from what is left. Without a model, or at any other position, uniform. |
 | 6 nimmt! | 104 logits: the next card of the hand being written | Autoregressive type: at the root, draw a batch of whole deals of the unseen cards (lowest card first, seat after seat), one evaluator call per hidden card; cache the deals with the root's observer and hash | Each world takes one of the cached deals and writes it into the other seats' hands (a face-down played card counts as still in hand). Without a model, or at any other position, a uniform draw from the unseen cards. |
 
 These shapes are deliberately per-game. Do not assume every belief net is a

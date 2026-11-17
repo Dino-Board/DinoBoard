@@ -123,15 +123,18 @@ open http://localhost:8000
 DinoBoard has no Ark Nova page of its own. `scripts/arknova_board.py` starts the server of
 [ark-nova-ai](https://github.com/collinfeng/ark-nova-ai) (MIT, a separate checkout) for its page and
 logins, with DinoBoard's C++ engine as the referee: the game, the option texts, the activity feed and
-the page's rule hints come from C++, and ark-nova-ai's rules are not loaded. `--ref` is a modified
-checkout: the three places where ark-nova-ai departs from the rulebook fixed, and the
-`arknova/play/table.py` and `arknova/play/rules.py` hooks (see `docs/games/arknova_api.md`). Two
-opponents on Map 0: `dinoboard`, DinoBoard's token transformer with MCTS
-(`games/arknova/model/arknova_2p.onnx`; `--model` picks another), and the C++ `beam_3x8` search.
+the page's rule hints come from C++, and ark-nova-ai's rules are not loaded. `--ref` is a checkout
+of the `rulebook` branch of [Zhiqi-Wang/ark-nova-ai](https://github.com/Zhiqi-Wang/ark-nova-ai/tree/rulebook):
+the three places where ark-nova-ai departs from the rulebook fixed, and the `arknova/play/table.py`
+and `arknova/play/rules.py` hooks (see `docs/games/arknova_api.md`). Its card data is not
+distributed; build it as that repository's README says. Two opponents on Map 0: `dinoboard`,
+DinoBoard's token transformer with MCTS (`games/arknova/model/arknova_2p.onnx`; `--model` picks
+another), and the C++ `beam_3x8` search.
 
 ```bash
-python scripts/arknova_board.py --ref <modified checkout>   # [--model m.onnx] [--profile web_casual]
-# the page: cd web && pnpm install && pnpm build in that checkout, then open http://127.0.0.1:8765
+git clone -b rulebook https://github.com/Zhiqi-Wang/ark-nova-ai.git ~/ark-nova-fork
+python scripts/arknova_board.py --ref ~/ark-nova-fork   # [--model m.onnx] [--profile web_casual]
+# the page: cd ~/ark-nova-fork/web && pnpm install && pnpm build, then open http://127.0.0.1:8765
 ```
 
 ### AI API

@@ -12,9 +12,10 @@
 // The counts are public, so a pool whose size does not match its slots means a card location is
 // missing from the derivation; that throws.
 //
-// Belief net (sigmoid per card, as in 6nimmit): P(the opponent holds card c in a hidden hand
-// slot). With a posterior installed by prepare_for_root, hidden hand slots are filled by
-// weighted sampling without replacement; everything else is uniform.
+// Belief net (belief.json type "autoregressive", engine/core/belief_sequence.h): the opponent's
+// hidden hand cards from the regular pool, lowest CardIdx first. prepare_for_root draws
+// kBeliefSamples hands for the position and every world of that search uses one of them;
+// everything else (tucked cards, private draws, the decks) is uniform.
 
 #include <array>
 #include <memory>
@@ -31,6 +32,10 @@ namespace board_ai::arknova {
 
 constexpr int kBeliefClasses = kCardSlots;
 
+// Hands the belief net is asked for at a search root. A world picks one of them at random, so
+// more samples than the search has worlds (mcts.json world_cap) would not be used.
+constexpr int kBeliefSamples = 128;
+
 // Per CardIdx, 1 when the observer knows where the card is: the public zones (discard pile,
 // display, projects, zoos, Hunter reveals) and the hidden-field slots visible to the observer.
 // `by_viz`: visibility from the viz tensors (truth or world states); false for a state masked
@@ -38,8 +43,25 @@ constexpr int kBeliefClasses = kCardSlots;
 // features and the token encoder's unseen-card summary.
 std::vector<std::uint8_t> known_cards(const ArknovaState& st, int observer, bool by_viz);
 
+// The opponent's hand as the observer can place it, from the viz tensors (truth or world states).
+struct HiddenHand {
+  std::vector<int> regular;  // unseen regular cards, not named, not maybe-tucked: the hand's pool
+  std::vector<int> endgame;  // unseen endgame cards
+  std::vector<int> named;    // hand cards the mover named in the public prefix
+  std::vector<int> maybe;    // maybe-tucked cards, not named: in the hand or tucked
+  int hidden = 0;            // hand cards neither visible nor named (the maybe ones among them)
+};
+HiddenHand hidden_hand(const ArknovaState& st, int observer);
+
 class ArknovaBeliefTracker final : public IBeliefTracker {
  public:
+  // One world's opponent hand from the belief net: the maybe-tucked cards placed in the hand, and
+  // the cards drawn from the regular pool for the rest (ascending).
+  struct HandSample {
+    std::vector<int> maybe_in_hand;
+    std::vector<int> drawn;
+  };
+
   void init(IGameState& state, int perspective, const AnyMap& payload) override;
   AnyMap pack_init_payload(const IGameState& gt_state, int perspective) const override;
   void observe_public_event(int, ActionId, const std::vector<PublicEvent>&) override {}
@@ -49,28 +71,32 @@ class ArknovaBeliefTracker final : public IBeliefTracker {
   std::unique_ptr<IBeliefTracker> clone() const override { return std::make_unique<ArknovaBeliefTracker>(*this); }
 
  private:
-  void sample_world(ArknovaState& st, int observer, bool weighted, std::mt19937_64& rng) const;
+  void sample_world(ArknovaState& st, int observer, const HandSample* sample, std::mt19937_64& rng) const;
 
-  // The belief net's posterior, the observer it was computed for and that observer's hash of the
-  // root position: it is only used to sample worlds of that very position.
-  std::array<float, kBeliefClasses> hand_probs_{};
-  int probs_observer_ = -1;
-  StateHash64 probs_state_ = 0;
+  // The belief net's hands, the observer they were drawn for and that observer's hash of the
+  // root position: only worlds of that very position use them. Shared: the search clones the
+  // tracker for every world.
+  std::shared_ptr<const std::vector<HandSample>> samples_;
+  int samples_observer_ = -1;
+  StateHash64 samples_state_ = 0;
 };
 
 // Input: unseen regular pool, the opponent's known hand cards, its maybe-tucked cards (in the hand
-// or tucked), its zoo, the discard pile (kBeliefClasses each), then opponent / table scalars.
+// or tucked), its zoo, the discard pile (kBeliefClasses each), then opponent / table scalars. The
+// net's input adds the prefix of belief_sequence.h; its output is the next card of the hand.
 class ArknovaBeliefFeatureExtractor final : public IBeliefFeatureExtractor {
  public:
   static constexpr int kScalars = 18;
   static constexpr int kFeatureDim = 5 * kBeliefClasses + kScalars;
   int feature_dim() const override { return kFeatureDim; }
-  int output_logit_count() const override { return (kPlayers - 1) * kBeliefClasses; }
+  int output_logit_count() const override { return kBeliefClasses; }
+  BeliefSequenceLayout sequence_layout() const override { return {kBeliefClasses, kPlayers - 1}; }
   void extract(const IGameState& masked_state, int perspective_player, const IBeliefTracker* tracker,
                std::vector<float>* out) const override;
 };
 
-// Label: multi-hot of the cards in the opponent's hand slots hidden from the observer.
+// Labels: hand_counts[0][c] = 1 for the opponent's hand cards in HiddenHand::regular (hidden from
+// the observer, not named, not maybe-tucked); remaining[c] = 1 for HiddenHand::regular.
 class ArknovaBeliefLabelExtractor final : public IBeliefLabelExtractor {
  public:
   int label_class_count() const override { return kBeliefClasses; }

@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 import dinoboard_engine as engine
 from conftest import get_test_model
@@ -201,18 +202,40 @@ def test_layout_is_what_the_network_is_built_from():
         "variants"]["arknova"]["action_space"]
 
 
-def test_search_does_not_depend_on_hidden_slots():
+def _random_belief_model(tmp_path):
+    import torch
+
+    from training.model import create_belief_model_from_config, export_belief_onnx
+
+    meta = engine.game_metadata(GAME)
+    cfg = json.loads((ROOT / "games/arknova/config/belief.json").read_text())
+    torch.manual_seed(5)
+    net = create_belief_model_from_config(cfg, input_dim=meta["belief_feature_dim"],
+                                          output_dim=meta["belief_logit_count"],
+                                          sequence_layout=meta["belief_sequence_layout"]).eval()
+    # A new net's last layer is zero (the uniform deal); a random one makes its hands depend on the features.
+    torch.nn.init.normal_(net.head[-1].weight, std=0.3)
+    path = tmp_path / "belief.onnx"
+    export_belief_onnx(net, path, meta["belief_feature_dim"])
+    return str(path)
+
+
+@pytest.mark.parametrize("with_belief", [False, True])
+def test_search_does_not_depend_on_hidden_slots(with_belief, tmp_path):
     """Three sessions with the same seed (so the search and its world sampling use the same random
     numbers) whose states differ only in the slots hidden from the searching player: the truth's own
     view (placeholders), an observation-fed session still holding the initial deal's true values
     (like selfplay's per-seat states), and one whose hidden slots are overwritten with garbage
-    before every search. The root visit counts and the searched values must be identical."""
+    before every search. The root visit counts and the searched values must be identical. With a
+    belief net its hands are dealt into every sampled world, so its features and the pool it draws
+    from must not read hidden slots either."""
     model = get_test_model(GAME)
+    belief = _random_belief_model(tmp_path) if with_belief else ""
     table = cards()
     for seed, p in ((2, 0), (4, 1)):
-        truth = engine.GameSession(GAME, seed=seed, model_path=model)
-        stale = engine.GameSession(GAME, seed=seed, model_path=model)
-        garbage = engine.GameSession(GAME, seed=seed, model_path=model)
+        truth = engine.GameSession(GAME, seed=seed, model_path=model, belief_model_path=belief)
+        stale = engine.GameSession(GAME, seed=seed, model_path=model, belief_model_path=belief)
+        garbage = engine.GameSession(GAME, seed=seed, model_path=model, belief_model_path=belief)
         first = truth.extract_initial_observation(p)
         stale.apply_initial_observation(p, first)
         garbage.apply_initial_observation(p, first)

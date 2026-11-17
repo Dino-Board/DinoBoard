@@ -1,10 +1,12 @@
 #include "arknova_belief.h"
 
 #include <algorithm>
-#include <cmath>
+#include <map>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
+#include "../../engine/core/belief_sequence.h"
 #include "../../engine/core/schema_hash.h"
 #include "../../engine/core/snapshot_io.h"
 #include "../../engine/core/viz_runtime.h"
@@ -82,30 +84,66 @@ std::vector<std::uint8_t> known_cards(const ArknovaState& st, int observer, bool
   return known;
 }
 
+HiddenHand hidden_hand(const ArknovaState& st, int observer) {
+  const State& s = st.core;
+  const SlotView view(st, observer, true);
+  const std::vector<std::uint8_t> known = known_cards(st, observer, true);
+  const int q = opponent_of(observer);
+  // Hand cards the mover already named in the (public) prefix are in its hand.
+  std::vector<std::uint8_t> named(static_cast<std::size_t>(num_cards()), 0);
+  if (st.current_player() == q) {
+    for (ActionId a : st.prefix) {
+      for (int base : {atom::kHand, atom::kHandDiscard}) {
+        if (a >= base && a < base + num_cards()) named[static_cast<std::size_t>(a - base)] = 1;
+      }
+    }
+  }
+  const Player& opp = s.players[q];
+  HiddenHand h;
+  // Cards seen in the hand before a face-down tuck: each is in the hand or among the tucked cards.
+  for (int c = 0; c < num_cards(); ++c) {
+    if (opp.maybe_tucked[c] && !named[static_cast<std::size_t>(c)]) h.maybe.push_back(c);
+  }
+  for (int c = 0; c < num_cards(); ++c) {
+    if (!known[static_cast<std::size_t>(c)] && !named[static_cast<std::size_t>(c)] && !opp.maybe_tucked[c]) {
+      (is_endgame(c) ? h.endgame : h.regular).push_back(c);
+    }
+  }
+  h.hidden = opp.hand_size;
+  for (int c = 0; c < num_cards(); ++c) {
+    if (view.visible(kFieldHand, {q, c}, 0)) {
+      if (st.hand[q][c] == 1) --h.hidden;
+    } else if (named[static_cast<std::size_t>(c)]) {
+      if (known[static_cast<std::size_t>(c)]) throw std::logic_error("arknova tracker: a named hand card is elsewhere");
+      h.named.push_back(c);
+      --h.hidden;
+    }
+  }
+  if (h.hidden < 0) throw std::logic_error("arknova tracker: more visible hand cards than the hand size");
+  if (static_cast<int>(h.maybe.size()) > h.hidden + opp.n_tucked) {
+    throw std::logic_error("arknova tracker: more maybe-tucked cards than hidden hand and tucked cards");
+  }
+  return h;
+}
+
 namespace {
 
 class Pool {
  public:
-  explicit Pool(const char* name) : name_(name) {}
-  void add(int c) { cards_.push_back(c); }
+  Pool(const char* name, std::vector<int> cards) : name_(name), cards_(std::move(cards)) {}
   std::size_t size() const { return cards_.size(); }
   int draw(std::mt19937_64& rng) {
     if (cards_.empty()) throw std::logic_error(std::string("arknova tracker: ") + name_ + " pool exhausted");
     std::size_t i = std::uniform_int_distribution<std::size_t>(0, cards_.size() - 1)(rng);
     return take(i);
   }
-  // Weighted draw without replacement; uniform when the weights of the remaining cards vanish.
-  int draw_weighted(const std::array<float, kBeliefClasses>& w, std::mt19937_64& rng) {
-    double total = 0.0;
-    for (int c : cards_) total += w[static_cast<std::size_t>(c)];
-    if (!(total > 0.0) || !std::isfinite(total)) return draw(rng);
-    double r = std::uniform_real_distribution<double>(0.0, total)(rng);
-    double acc = 0.0;
-    for (std::size_t i = 0; i < cards_.size(); ++i) {
-      acc += w[static_cast<std::size_t>(cards_[i])];
-      if (r <= acc) return take(i);
+  void remove(int c) {
+    auto it = std::find(cards_.begin(), cards_.end(), c);
+    if (it == cards_.end()) {
+      throw std::logic_error(std::string("arknova tracker: card ") + std::to_string(c) + " is not in the " + name_ +
+                             " pool");
     }
-    return take(cards_.size() - 1);
+    take(static_cast<std::size_t>(it - cards_.begin()));
   }
   std::vector<CardIdx> rest(std::size_t expected, std::mt19937_64& rng) {
     if (cards_.size() != expected) {
@@ -128,6 +166,28 @@ class Pool {
   const char* name_;
   std::vector<int> cards_;
 };
+
+// The maybe-tucked cards placed uniformly over the free hand and tucked places.
+struct MaybeSplit {
+  std::vector<int> hand;
+  std::vector<int> tucked;
+};
+MaybeSplit split_maybe(std::vector<int> maybe, int hidden, int tucked, std::mt19937_64& rng) {
+  std::shuffle(maybe.begin(), maybe.end(), rng);
+  MaybeSplit out;
+  for (int c : maybe) {
+    const double p_hand = static_cast<double>(hidden) / (hidden + tucked);
+    const bool to_hand = tucked == 0 || (hidden > 0 && std::uniform_real_distribution<double>(0.0, 1.0)(rng) < p_hand);
+    if (to_hand) {
+      out.hand.push_back(c);
+      --hidden;
+    } else {
+      out.tucked.push_back(c);
+      --tucked;
+    }
+  }
+  return out;
+}
 
 std::vector<int> flat_owner_slots(const ArknovaState& st, int p) {
   std::vector<int> out;
@@ -172,80 +232,64 @@ void ArknovaBeliefTracker::init(IGameState& state, int perspective, const AnyMap
 
 void ArknovaBeliefTracker::randomize_unseen(IGameState& state, int observer, std::mt19937_64& rng) const {
   auto& st = checked_cast<ArknovaState>(state);
-  // The posterior belongs to the position prepare_for_root computed it for (the observer's hash
-  // covers the step count too). Any other position is sampled uniformly, e.g. a later heuristic
-  // decision of the same seat, for which the cached numbers are stale.
-  const bool weighted = probs_observer_ == observer && st.state_hash_for_perspective(observer) == probs_state_;
+  // The belief net's hands belong to the position prepare_for_root drew them for (the observer's
+  // hash covers the step count too). Any other position is sampled uniformly, e.g. a later
+  // heuristic decision of the same seat, for which the cached hands are stale.
+  const bool learned = samples_observer_ == observer && samples_ && !samples_->empty() &&
+                       st.state_hash_for_perspective(observer) == samples_state_;
   constexpr int kMaxTries = 1000;
   for (int t = 0; t < kMaxTries; ++t) {
-    sample_world(st, observer, weighted, rng);
+    const HandSample* sample = nullptr;
+    if (learned) sample = &(*samples_)[std::uniform_int_distribution<std::size_t>(0, samples_->size() - 1)(rng)];
+    sample_world(st, observer, sample, rng);
     if (st.current_player() == observer || prefix_consistent(st)) return;
   }
   throw std::runtime_error("arknova tracker: no sampled world fits the mover's chosen atoms");
 }
 
-void ArknovaBeliefTracker::sample_world(ArknovaState& st, int observer, bool weighted, std::mt19937_64& rng) const {
+void ArknovaBeliefTracker::sample_world(ArknovaState& st, int observer, const HandSample* sample,
+                                        std::mt19937_64& rng) const {
   const State& s = st.core;
   SlotView view(st, observer, true);
-  std::vector<std::uint8_t> known = known_cards(st, observer, true);
-  int q = opponent_of(observer);
-  // Hand cards the mover already named in the (public) prefix are in its hand.
-  std::vector<std::uint8_t> named(static_cast<std::size_t>(num_cards()), 0);
-  if (st.current_player() == q) {
-    for (ActionId a : st.prefix) {
-      for (int base : {atom::kHand, atom::kHandDiscard}) {
-        if (a >= base && a < base + num_cards()) named[static_cast<std::size_t>(a - base)] = 1;
-      }
-    }
-  }
+  const int q = opponent_of(observer);
   const Player& opp = s.players[q];
-  // Cards seen in the hand before a face-down tuck: each is in the hand or among the tucked cards.
-  std::vector<int> maybe;
-  for (int c = 0; c < num_cards(); ++c) {
-    if (opp.maybe_tucked[c] && !named[static_cast<std::size_t>(c)]) maybe.push_back(c);
-  }
-  Pool regular("regular"), endgame("endgame");
-  for (int c = 0; c < num_cards(); ++c) {
-    if (!known[static_cast<std::size_t>(c)] && !named[static_cast<std::size_t>(c)] && !opp.maybe_tucked[c]) {
-      (is_endgame(c) ? endgame : regular).add(c);
-    }
-  }
+  HiddenHand h = hidden_hand(st, observer);
+  Pool regular("regular", std::move(h.regular)), endgame("endgame", std::move(h.endgame));
 
-  int hidden_in_hand = opp.hand_size;
   for (int c = 0; c < kCardSlots; ++c) {
-    if (c < num_cards() && view.visible(kFieldHand, {q, c}, 0)) {
-      if (st.hand[q][c] == 1) --hidden_in_hand;
-    } else if (c < num_cards() && named[static_cast<std::size_t>(c)]) {
-      if (known[static_cast<std::size_t>(c)]) throw std::logic_error("arknova tracker: a named hand card is elsewhere");
-      st.hand[q][c] = 1;
-      --hidden_in_hand;
-    } else {
-      st.hand[q][c] = 0;
-    }
+    if (!(c < num_cards() && view.visible(kFieldHand, {q, c}, 0))) st.hand[q][c] = 0;
   }
-  if (hidden_in_hand < 0) throw std::logic_error("arknova tracker: more visible hand cards than the hand size");
+  for (int c : h.named) st.hand[q][c] = 1;
+  int hidden_in_hand = h.hidden;
   int tucked_left = opp.n_tucked;
-  if (static_cast<int>(maybe.size()) > hidden_in_hand + tucked_left) {
-    throw std::logic_error("arknova tracker: more maybe-tucked cards than hidden hand and tucked cards");
-  }
-  std::shuffle(maybe.begin(), maybe.end(), rng);
-  std::vector<int> tucked_cards;
-  for (int c : maybe) {
-    // Uniform over the free hand and tucked places, or the belief net's hand probability.
-    double p_hand = weighted ? hand_probs_[static_cast<std::size_t>(c)]
-                             : static_cast<double>(hidden_in_hand) / (hidden_in_hand + tucked_left);
-    bool to_hand = tucked_left == 0 || (hidden_in_hand > 0 && std::uniform_real_distribution<double>(0.0, 1.0)(rng) < p_hand);
-    if (to_hand) {
-      st.hand[q][c] = 1;
-      --hidden_in_hand;
-    } else {
-      tucked_cards.push_back(c);
-      --tucked_left;
+  MaybeSplit split;
+  if (sample) {
+    split.hand = sample->maybe_in_hand;
+    for (int c : h.maybe) {
+      if (std::find(split.hand.begin(), split.hand.end(), c) == split.hand.end()) split.tucked.push_back(c);
     }
+    if (split.hand.size() + split.tucked.size() != h.maybe.size()) {
+      throw std::logic_error("arknova tracker: a sampled hand places a card that is not maybe-tucked");
+    }
+  } else {
+    split = split_maybe(h.maybe, hidden_in_hand, tucked_left, rng);
   }
-  for (int i = 0; i < hidden_in_hand; ++i) {
-    st.hand[q][weighted ? regular.draw_weighted(hand_probs_, rng) : regular.draw(rng)] = 1;
+  for (int c : split.hand) st.hand[q][c] = 1;
+  hidden_in_hand -= static_cast<int>(split.hand.size());
+  tucked_left -= static_cast<int>(split.tucked.size());
+  if (hidden_in_hand < 0 || tucked_left < 0) throw std::logic_error("arknova tracker: maybe-tucked cards overfill");
+  if (sample) {
+    if (static_cast<int>(sample->drawn.size()) != hidden_in_hand) {
+      throw std::logic_error("arknova tracker: a sampled hand has the wrong size");
+    }
+    for (int c : sample->drawn) {
+      regular.remove(c);
+      st.hand[q][c] = 1;
+    }
+  } else {
+    for (int i = 0; i < hidden_in_hand; ++i) st.hand[q][regular.draw(rng)] = 1;
   }
+  std::vector<int> tucked_cards = std::move(split.tucked);
   for (int i = 0; i < tucked_left; ++i) tucked_cards.push_back(regular.draw(rng));
   std::shuffle(tucked_cards.begin(), tucked_cards.end(), rng);
   for (int i = 0; i < kMaxTucked; ++i) {
@@ -280,24 +324,45 @@ void ArknovaBeliefTracker::sample_world(ArknovaState& st, int observer, bool wei
 void ArknovaBeliefTracker::prepare_for_root(const IGameState& root_state, int root_player,
                                             const IBeliefFeatureExtractor* extractor,
                                             const IBeliefEvaluator* evaluator) {
-  probs_observer_ = -1;
-  hand_probs_.fill(0.0f);
+  samples_.reset();
+  samples_observer_ = -1;
   if (!extractor || !evaluator) return;
+  const BeliefSequenceLayout layout = extractor->sequence_layout();
+  if (layout.classes != kBeliefClasses || layout.segments != kPlayers - 1) {
+    throw std::logic_error("arknova tracker: the belief extractor's sequence layout is not this game's");
+  }
+  const auto& st = checked_cast<ArknovaState>(root_state);
+  const HiddenHand h = hidden_hand(st, root_player);
+  if (h.hidden == 0) return;
   std::vector<float> features;
   if (!extractor->extract_from_state(root_state, root_player, this, &features)) {
     throw std::logic_error("arknova tracker: belief features have the wrong size");
   }
-  std::vector<float> logits;
-  if (!evaluator->evaluate(features, &logits)) throw std::runtime_error("arknova tracker: belief evaluation failed");
-  if (static_cast<int>(logits.size()) != kBeliefClasses) {
-    throw std::logic_error("arknova tracker: belief net returned the wrong logit count");
+  // The same position always draws the same hands; the worlds' own seeds decide which of them
+  // each world gets.
+  const StateHash64 hash = root_state.state_hash_for_perspective(root_player);
+  std::mt19937_64 rng(static_cast<std::uint64_t>(hash) ^ 0x61726b6e6f7661ULL);
+  // The maybe-tucked cards take their places uniformly, as without the net; the net writes the
+  // rest of the hand, one batch of samples per number of cards left to write.
+  const int tucked = st.core.players[opponent_of(root_player)].n_tucked;
+  auto samples = std::make_shared<std::vector<HandSample>>(static_cast<std::size_t>(kBeliefSamples));
+  std::map<int, std::vector<std::size_t>> by_size;
+  for (std::size_t i = 0; i < samples->size(); ++i) {
+    (*samples)[i].maybe_in_hand = split_maybe(h.maybe, h.hidden, tucked, rng).hand;
+    by_size[h.hidden - static_cast<int>((*samples)[i].maybe_in_hand.size())].push_back(i);
   }
-  for (int c = 0; c < kBeliefClasses; ++c) {
-    double z = static_cast<double>(logits[static_cast<std::size_t>(c)]) / kBeliefTemperature;
-    hand_probs_[static_cast<std::size_t>(c)] = static_cast<float>(1.0 / (1.0 + std::exp(-z)));
+  belief_sequence::Problem problem;
+  problem.pool.assign(static_cast<std::size_t>(kBeliefClasses), 0);
+  for (int c : h.regular) problem.pool[static_cast<std::size_t>(c)] = 1;
+  for (const auto& [size, members] : by_size) {
+    if (size == 0) continue;
+    problem.sizes = {size};
+    auto hands = belief_sequence::sample(layout, problem, features, *evaluator, static_cast<int>(members.size()), rng);
+    for (std::size_t j = 0; j < members.size(); ++j) (*samples)[members[j]].drawn = std::move(hands[j][0]);
   }
-  probs_observer_ = root_player;
-  probs_state_ = root_state.state_hash_for_perspective(root_player);
+  samples_ = std::move(samples);
+  samples_observer_ = root_player;
+  samples_state_ = hash;
 }
 
 // ---- belief net features / labels ---------------------------------------------------------------
@@ -357,13 +422,22 @@ void ArknovaBeliefLabelExtractor::extract(const IGameState& truth_state, int obs
                                           std::vector<std::vector<int>>* out_hand_counts,
                                           std::vector<int>* out_remaining, std::vector<int>* out_alive) const {
   const auto& st = checked_cast<ArknovaState>(truth_state);
-  int q = opponent_of(observer);
-  SlotView view(st, observer, true);
-  out_hand_counts->assign(1, std::vector<int>(kBeliefClasses, 0));
+  const int q = opponent_of(observer);
+  const HiddenHand h = hidden_hand(st, observer);
+  out_remaining->assign(static_cast<std::size_t>(kBeliefClasses), 0);
+  for (int c : h.regular) (*out_remaining)[static_cast<std::size_t>(c)] = 1;
+  out_hand_counts->assign(1, std::vector<int>(static_cast<std::size_t>(kBeliefClasses), 0));
+  auto& hand = (*out_hand_counts)[0];
+  const SlotView view(st, observer, true);
+  const Player& opp = st.core.players[q];
   for (int c = 0; c < num_cards(); ++c) {
-    if (st.hand[q][c] == 1 && !view.visible(kFieldHand, {q, c}, 1)) (*out_hand_counts)[0][static_cast<std::size_t>(c)] = 1;
+    const bool named = std::find(h.named.begin(), h.named.end(), c) != h.named.end();
+    if (st.hand[q][c] != 1 || view.visible(kFieldHand, {q, c}, 1) || opp.maybe_tucked[c] || named) continue;
+    if (!(*out_remaining)[static_cast<std::size_t>(c)]) {
+      throw std::logic_error("arknova belief labels: a hidden hand card is outside the regular pool");
+    }
+    hand[static_cast<std::size_t>(c)] = 1;
   }
-  out_remaining->assign(kBeliefClasses, 0);
   out_alive->assign(1, 1);
 }
 

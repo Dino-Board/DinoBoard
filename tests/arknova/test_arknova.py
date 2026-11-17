@@ -128,11 +128,13 @@ def test_lookahead_heuristics_finish_a_game(beam):
 def test_belief_config_builds():
     meta = engine.game_metadata(GAME)
     cfg = json.loads((Path(__file__).parents[2] / "games/arknova/config/belief.json").read_text())
+    layout = meta["belief_sequence_layout"]
     net = create_belief_model_from_config(cfg, input_dim=meta["belief_feature_dim"],
-                                          output_dim=meta["belief_logit_count"])
+                                          output_dim=meta["belief_logit_count"], sequence_layout=layout)
     net.eval()
-    out = net(torch.zeros(2, meta["belief_feature_dim"]))
-    assert out.shape == (2, meta["belief_logit_count"])
+    out = net(torch.zeros(2, meta["belief_feature_dim"]), torch.zeros(3, layout["prefix_dim"]),
+              torch.tensor([0, 1, 1]))
+    assert out.shape == (3, meta["belief_logit_count"])
 
 
 def _net(seed=0):

@@ -197,18 +197,22 @@ leaves unseen, then
 tucked cards and private draws from the regular pool and opponent finals from
 the endgame pool; the rest is the shuffled deck. Hand cards the opponent named
 in the public prefix go into its hand first, and each maybe-tucked card goes
-into its hidden hand or among its tucked cards (uniform over the free places,
-or the belief net's hand probability); if it is still mid-decision, worlds are
-resampled until the prefix is legal. The belief net predicts, per card, whether
-it is a hidden opponent hand card (240 sigmoid logits, BCE; feature dim 1218,
-including the maybe-tucked cards and the tucked count).
+into its hidden hand or among its tucked cards (uniform over the free places);
+if it is still mid-decision, worlds are resampled until the prefix is legal.
 
-The belief net's probabilities are computed by `prepare_for_root` for one
-observer and one position; the tracker stores that position's masked state hash
-with them. `randomize_unseen` weights its draws by them only for that observer
-at exactly that position and draws uniformly everywhere else (a heuristic
-player's sampled world, a later position): probabilities from an earlier
-search are never reused.
+The belief net is of the autoregressive type (`belief.json` `"type":
+"autoregressive"`, `engine/core/belief_sequence.h`): it writes the opponent's
+hidden hand cards from the unseen regular cards (not named, not maybe-tucked),
+lowest card first, scoring the next card (240 logits, `sequence_nll`; position
+features 1218, including the maybe-tucked cards and the tucked count, plus the
+481-wide prefix). `prepare_for_root` draws 128 samples for one observer and one
+position: in each, the maybe-tucked cards take their places uniformly, and the
+net writes the rest of the hand (one batch per number of cards left). The
+tracker stores that position's masked state hash with them. `randomize_unseen`
+gives each world one of the samples only for that observer at exactly that
+position and draws uniformly everywhere else (a heuristic player's sampled
+world, a later position): samples from an earlier search are never reused.
+Labels are the opponent's hand cards in that pool, the pool is `remaining`.
 
 ## Token Encoder
 

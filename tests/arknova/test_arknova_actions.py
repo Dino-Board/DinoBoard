@@ -370,16 +370,19 @@ def _belief_model(tmp_path, seed=11):
     cfg = json.loads((Path(__file__).parents[2] / "games/arknova/config/belief.json").read_text())
     torch.manual_seed(seed)
     net = create_belief_model_from_config(cfg, input_dim=meta["belief_feature_dim"],
-                                          output_dim=meta["belief_logit_count"]).eval()
+                                          output_dim=meta["belief_logit_count"],
+                                          sequence_layout=meta["belief_sequence_layout"]).eval()
+    # A new net's last layer is zero (the uniform deal); a random one makes its hands depend on the features.
+    torch.nn.init.normal_(net.head[-1].weight, std=0.3)
     path = tmp_path / f"belief_{seed}.onnx"
     export_belief_onnx(net, path, meta["belief_feature_dim"])
     return str(path)
 
 
 def test_search_samples_worlds_from_its_own_posterior(tmp_path):
-    """The other half of F10: at the root it was computed for, the posterior is used. Two belief
-    nets with different weights make the same search sample different worlds, so some visit counts
-    differ; without a belief net they are reproducible."""
+    """The other half of F10: at the root they were drawn for, the belief net's hands are used. Two
+    belief nets with different weights make the same search sample different worlds, so some visit
+    counts differ; without a belief net they are reproducible."""
     model = get_test_model(GAME)
     sessions = [engine.GameSession(GAME, seed=5, model_path=model, belief_model_path=_belief_model(tmp_path, s))
                 for s in (11, 12)]
@@ -397,11 +400,11 @@ def test_search_samples_worlds_from_its_own_posterior(tmp_path):
         action = rng.choice(legal)
         for g in sessions + plain:
             g.apply_action(action)
-    assert searches >= 10 and differ > 0, "the belief net's posterior never changed a search"
+    assert searches >= 10 and differ > 0, "the belief net's hands never changed a search"
 
 
 def test_belief_posterior_is_not_reused_for_a_later_position(tmp_path):
-    """F10. A search caches the belief net's posterior on the seat's tracker. A later heuristic
+    """F10. A search caches the belief net's hands on the seat's tracker. A later heuristic
     decision of that seat must sample its world as if no search had happened: two sessions playing
     the same moves, one of which searched once on the way, choose the same heuristic moves."""
     model, belief = get_test_model(GAME), _belief_model(tmp_path)
