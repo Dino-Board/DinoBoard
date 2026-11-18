@@ -3,7 +3,7 @@
 Each scenario builds a position with ark-nova-ai, loads it into arknova_diff_cli and plays it there.
 Started with --rulebook the C++ engine must follow the rulebook; without it, ark-nova-ai.
 
-    python games/arknova/tools/rule_scenarios.py --ref ~/ref/ark-nova-ai --cli build/arknova_diff_cli
+    python games/arknova/tools/rule_scenarios.py --ref ~/ark-nova-fork --cli build/arknova_diff_cli
 """
 
 import argparse

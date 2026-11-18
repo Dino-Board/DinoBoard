@@ -51,18 +51,21 @@ and checks both behaviours. Not modelled:
 the player choosing the order of simultaneous effects and of "after finishing"
 effects (fixed order here).
 
-Against a checkout of ark-nova-ai with those three places fixed (the board's
-reference, see "Playing on ark-nova-ai's Board"), `diff_test.py --rulebook` runs
-the CLI with `--rulebook`. Every step it also checks that `import_state` (the
+Against a checkout of ark-nova-ai with those three places fixed (the
+`rulebook` branch of the fork, the board's reference, see "Playing on
+ark-nova-ai's Board"), `diff_test.py --rulebook` runs the CLI with
+`--rulebook`; the fork's `main` branch is ark-nova-ai as published. Every step it also checks that `import_state` (the
 inverse of `export_state`) rebuilds the Python state exactly, types included,
 and that both engines report the same activity feed: the ledger of gains and
 notes with their causes, and the log lines (`Feed`, `R` in the CLI). 2000 games
 over all ten maps (about 1.23 million steps) agree this way.
 
 ```bash
-python games/arknova/tools/diff_test.py --ref ~/ref/ark-nova-ai \
+git -C ~/ark-nova-fork checkout main
+python games/arknova/tools/diff_test.py --ref ~/ark-nova-fork \
     --cli build/<dir>/arknova_diff_cli --games 200
-python games/arknova/tools/diff_test.py --ref <fixed checkout> --rulebook \
+git -C ~/ark-nova-fork checkout rulebook
+python games/arknova/tools/diff_test.py --ref ~/ark-nova-fork --rulebook \
     --cli build/<dir>/arknova_diff_cli --games 200
 ```
 

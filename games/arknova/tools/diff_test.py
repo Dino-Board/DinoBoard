@@ -7,7 +7,10 @@ arknova_diff_cli runs with g_upstream_rules, so the few places where ark-nova-ai
 rulebook (listed at its declaration in arknova_core.h) follow ark-nova-ai here; rule_scenarios.py
 checks the rulebook behaviour of those places.
 
-    python games/arknova/tools/diff_test.py --ref ~/ref/ark-nova-ai --cli build/.../arknova_diff_cli --games 200 [--maps all]
+    git -C ~/ark-nova-fork checkout main      # ark-nova-ai as published
+    python games/arknova/tools/diff_test.py --ref ~/ark-nova-fork --cli build/.../arknova_diff_cli --games 200 [--maps all]
+    git -C ~/ark-nova-fork checkout rulebook  # those places fixed
+    python games/arknova/tools/diff_test.py --ref ~/ark-nova-fork --rulebook --cli build/.../arknova_diff_cli --games 200
 """
 import argparse
 import json
