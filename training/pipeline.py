@@ -471,13 +471,18 @@ def train_step(
     opp_targets: torch.Tensor | None = None,
     opp_weights: torch.Tensor | None = None,
     opp_loss_weight: float = 0.0,
+    breakdown_head: AuxHead | None = None,
+    breakdown_targets: torch.Tensor | None = None,
+    breakdown_loss_weight: float = 0.0,
 ) -> dict[str, float]:
     if (score_head is None) != (score_targets is None):
         raise ValueError("train_step: score_head and score_targets must be passed together")
     if not ((opp_head is None) == (opp_targets is None) == (opp_weights is None)):
         raise ValueError("train_step: opp_head, opp_targets and opp_weights must be passed together")
+    if (breakdown_head is None) != (breakdown_targets is None):
+        raise ValueError("train_step: breakdown_head and breakdown_targets must be passed together")
     net.train()
-    aux_heads = [h for h in (score_head, opp_head) if h is not None]
+    aux_heads = [h for h in (score_head, opp_head, breakdown_head) if h is not None]
     for h in aux_heads:
         h.train()
     if aux_heads:
@@ -500,6 +505,10 @@ def train_step(
         opp_ce = -(opp_targets * torch.nn.functional.log_softmax(opp_head(embedding), dim=-1)).sum(dim=-1)
         opp_loss = (opp_ce * opp_weights).sum() / opp_weights.sum().clamp_min(1.0)
         loss = loss + opp_loss_weight * opp_loss
+    breakdown_loss = None
+    if breakdown_head is not None:
+        breakdown_loss = torch.nn.functional.mse_loss(breakdown_head(embedding), breakdown_targets)
+        loss = loss + breakdown_loss_weight * breakdown_loss
 
     optimizer.zero_grad()
     loss.backward()
@@ -518,7 +527,24 @@ def train_step(
         metrics["score_loss"] = score_loss.item()
     if opp_loss is not None:
         metrics["opp_loss"] = opp_loss.item()
+    if breakdown_loss is not None:
+        metrics["breakdown_loss"] = breakdown_loss.item()
     return metrics
+
+
+def score_breakdown_targets(breakdown: list[float], player: int, num_players: int, categories: int,
+                            scale: float) -> list[float]:
+    """Seat-rotated (like the value target) final points per scoring category: the mover's
+    `categories` values first, then the next seats', each divided by `scale`."""
+    if len(breakdown) != num_players * categories:
+        raise ValueError(
+            f"final_score_breakdown has {len(breakdown)} entries, expected "
+            f"{num_players} seats x {categories} categories")
+    out = []
+    for i in range(num_players):
+        q = (player + i) % num_players
+        out.extend(v / scale for v in breakdown[q * categories:(q + 1) * categories])
+    return out
 
 
 def score_margin_targets(final_scores: list[float], player: int, num_players: int,
@@ -2256,8 +2282,39 @@ def run_training_loop(
             logger.info("Resume: opponent policy head restored")
         else:
             logger.info("opponent_policy_head: freshly initialized")
+    # Final points per scoring category and seat (the game's
+    # final_score_breakdown_extractor). Absent block = disabled.
+    breakdown_head_cfg = train_cfg.get("score_breakdown_head")
+    breakdown_head: AuxHead | None = None
+    breakdown_loss_weight = 0.0
+    breakdown_scale = 1.0
+    breakdown_categories = 0
+    if breakdown_head_cfg is not None:
+        if not isinstance(breakdown_head_cfg, dict) or set(breakdown_head_cfg) != {"loss_weight", "scale"}:
+            raise ValueError(
+                f"training.score_breakdown_head must be an object with exactly 'loss_weight' and "
+                f"'scale', got {breakdown_head_cfg!r}")
+        breakdown_loss_weight = float(breakdown_head_cfg["loss_weight"])
+        breakdown_scale = float(breakdown_head_cfg["scale"])
+        if not (math.isfinite(breakdown_loss_weight) and breakdown_loss_weight > 0):
+            raise ValueError(
+                f"training.score_breakdown_head.loss_weight must be > 0, got {breakdown_loss_weight}")
+        if not (math.isfinite(breakdown_scale) and breakdown_scale > 0):
+            raise ValueError(f"training.score_breakdown_head.scale must be > 0, got {breakdown_scale}")
+        breakdown_categories = int(_engine.game_metadata(game_id)["score_breakdown_categories"])
+        if breakdown_categories <= 0:
+            raise ValueError(
+                f"training.score_breakdown_head is set but game {game_id!r} registers no "
+                f"final_score_breakdown_extractor in its GameBundle")
+        breakdown_head = AuxHead(net.embedding_dim, num_players * breakdown_categories).to(device)
+        if resume_ckpt is not None and "score_breakdown_head_state_dict" in resume_ckpt:
+            breakdown_head.load_state_dict(resume_ckpt["score_breakdown_head_state_dict"])
+            logger.info("Resume: score breakdown head restored")
+        else:
+            logger.info("score_breakdown_head: freshly initialized")
     aux_heads = {n: h for n, h in (("score_head", score_head),
-                                   ("opponent_policy_head", opp_head)) if h is not None}
+                                   ("opponent_policy_head", opp_head),
+                                   ("score_breakdown_head", breakdown_head)) if h is not None}
 
     # EMA of the PV weights. When enabled, the averaged net (not the raw
     # training weights) is what gets exported for selfplay / eval / gating.
@@ -2339,7 +2396,13 @@ def run_training_loop(
             guidance_trigger_step = resume_ckpt.get("guidance_trigger_step")
     heuristic_cfg = train_config["heuristic"]
     selectors = heuristic_cfg["selectors"]
-    selector_eval = selectors["eval_vs_heuristic"]["name"]
+    # training.eval_heuristic: this run's eval opponent instead of the game's
+    # selectors.eval_vs_heuristic (e.g. a heuristic only one variant registers).
+    selector_eval = train_cfg.get("eval_heuristic", selectors["eval_vs_heuristic"]["name"])
+    if selector_eval not in heuristic_cfg["named"]:
+        raise ValueError(
+            f"training.eval_heuristic {selector_eval!r} is not in heuristic.json::named "
+            f"({sorted(heuristic_cfg['named'])})")
     eval_constrained_temperature = float(selectors["eval_vs_heuristic"].get("temperature", 0.0))
     eval_free_temperature = eval_constrained_temperature
     training_filter_hold_steps = train_cfg.get("training_filter_hold_steps", 0)
@@ -2512,6 +2575,9 @@ def run_training_loop(
     logger.info(f"  replay_buffer: maxlen={replay_buffer_size}, "
                 f"storage={'compact/' + compact_dtype.name if compact_dtype is not None else 'lists'}")
     logger.info(f"  score_head: {score_head_cfg if score_head is not None else 'disabled'}")
+    logger.info(f"  score_breakdown_head: "
+                f"{breakdown_head_cfg if breakdown_head is not None else 'disabled'}"
+                + (f" ({breakdown_categories} categories per seat)" if breakdown_head is not None else ""))
     logger.info(f"  opponent_policy_head: {opp_head_cfg if opp_head is not None else 'disabled'}")
     logger.info(f"  ema: {ema_cfg if ema_net is not None else 'disabled'}")
     if lr_schedule:
@@ -2695,6 +2761,10 @@ def run_training_loop(
                     raise ValueError(
                         f"step {step}: training.score_head is enabled but a selfplay "
                         f"episode carries no 'final_scores'")
+                if breakdown_head is not None and "final_score_breakdown" not in ep:
+                    raise ValueError(
+                        f"step {step}: training.score_breakdown_head is enabled but a selfplay "
+                        f"episode carries no 'final_score_breakdown'")
                 ep_samples = ep["samples"]
                 next_opp = (next_opponent_indices([s["player"] for s in ep_samples])
                             if opp_head is not None else None)
@@ -2740,7 +2810,12 @@ def run_training_loop(
                             has_target = (len(opp_policy[0]) > 0 if compact_dtype is not None
                                           else any(opp_policy))
                             opp_target = (opp_policy, 1.0 if has_target else 0.0)
-                    replay_buffer.append((feats, policy, z_rotated, mask, score_target, opp_target))
+                    breakdown_target = (
+                        score_breakdown_targets(ep["final_score_breakdown"], player, num_players,
+                                                breakdown_categories, breakdown_scale)
+                        if breakdown_head is not None else None)
+                    replay_buffer.append((feats, policy, z_rotated, mask, score_target, opp_target,
+                                          breakdown_target))
                     step_samples += 1
                     trained_samples.append(sample)
 
@@ -2797,6 +2872,7 @@ def run_training_loop(
             total_value_loss = 0.0
             total_score_loss = 0.0
             total_opp_loss = 0.0
+            total_breakdown_loss = 0.0
             t_train_start = time.perf_counter()
             for b in range(train_batches):
                 idx = torch.randint(n, (min(batch_size, n),)).tolist()
@@ -2857,6 +2933,10 @@ def run_training_loop(
                         opp_tensor = torch.tensor(opp_rows, dtype=torch.float32, device=device)
                     opp_weight_tensor = torch.tensor(
                         [s[5][1] for s in batch], dtype=torch.float32, device=device)
+                breakdown_tensor = None
+                if breakdown_head is not None:
+                    breakdown_tensor = torch.tensor(
+                        [s[6] for s in batch], dtype=torch.float32, device=device)
                 metrics = train_step(
                     net, optimizer,
                     feat_tensor, policy_tensor, value_tensor,
@@ -2869,6 +2949,9 @@ def run_training_loop(
                     opp_targets=opp_tensor,
                     opp_weights=opp_weight_tensor,
                     opp_loss_weight=opp_loss_weight,
+                    breakdown_head=breakdown_head,
+                    breakdown_targets=breakdown_tensor,
+                    breakdown_loss_weight=breakdown_loss_weight,
                 )
                 if ema_net is not None:
                     ema_update(ema_net, net, ema_decay)
@@ -2877,8 +2960,10 @@ def run_training_loop(
                 total_value_loss += metrics["value_loss"]
                 total_score_loss += metrics.get("score_loss", 0.0)
                 total_opp_loss += metrics.get("opp_loss", 0.0)
+                total_breakdown_loss += metrics.get("breakdown_loss", 0.0)
             avg_loss = total_loss / max(1, train_batches)
             avg_opp_loss = total_opp_loss / max(1, train_batches)
+            avg_breakdown_loss = total_breakdown_loss / max(1, train_batches)
             avg_policy_loss = total_policy_loss / max(1, train_batches)
             avg_value_loss = total_value_loss / max(1, train_batches)
             avg_score_loss = total_score_loss / max(1, train_batches)
@@ -2940,7 +3025,8 @@ def run_training_loop(
                 f"Step {step}/{steps}: p_loss={avg_policy_loss:.4f}, "
                 f"v_loss={avg_value_loss:.4f}"
                 + (f", s_loss={avg_score_loss:.4f}" if score_head is not None else "")
-                + (f", o_loss={avg_opp_loss:.4f}" if opp_head is not None else ""),
+                + (f", o_loss={avg_opp_loss:.4f}" if opp_head is not None else "")
+                + (f", sb_loss={avg_breakdown_loss:.4f}" if breakdown_head is not None else ""),
                 f"episodes={len(episodes)}, samples={n}",
                 # pX = (z+1)/N share accumulated over episodes; total over p
                 # equals len(episodes). One decimal — share is fractional.
@@ -3173,6 +3259,8 @@ def run_training_loop(
                 checkpoint["score_head_state_dict"] = score_head.state_dict()
             if opp_head is not None:
                 checkpoint["opponent_policy_head_state_dict"] = opp_head.state_dict()
+            if breakdown_head is not None:
+                checkpoint["score_breakdown_head_state_dict"] = breakdown_head.state_dict()
             if ema_net is not None:
                 checkpoint["ema_state_dict"] = ema_net.state_dict()
             # Rewritten every step and required by --resume: never write in place.

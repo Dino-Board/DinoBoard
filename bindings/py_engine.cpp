@@ -316,6 +316,9 @@ py::dict result_to_py(const runtime::SelfplayEpisodeResult& result,
   if (bundle.final_score_extractor && result.final_state) {
     out["final_scores"] = bundle.final_score_extractor(*result.final_state);
   }
+  if (bundle.final_score_breakdown_extractor && result.final_state) {
+    out["final_score_breakdown"] = bundle.final_score_breakdown_extractor(*result.final_state);
+  }
   out["winner"] = result.winner;
   out["draw"] = result.draw;
   // Per-seat terminal z, length num_players. Pipeline converts to
@@ -3762,6 +3765,8 @@ class GameSessionWrapper {
     const board_ai::IHeuristic& heuristic = bundle_->heuristics.get(selector);
 
     ActionId chosen;
+    std::vector<ActionId> actions;
+    std::vector<double> scores;
     {
       py::gil_scoped_release release;
       // GameSession's heuristic call routes through the acting player's
@@ -3800,11 +3805,15 @@ class GameSessionWrapper {
       const size_t idx = runtime::sample_heuristic_index(
           hr.scores, temperature, u01);
       chosen = hr.actions[idx];
+      actions = std::move(hr.actions);
+      scores = std::move(hr.scores);
     }
 
     py::dict out;
     out["action"] = chosen;
     out["action_info"] = get_action_info(chosen);
+    out["actions"] = actions;
+    out["scores"] = scores;
     return out;
   }
 
@@ -4400,6 +4409,8 @@ PYBIND11_MODULE(dinoboard_engine, m) {
     const bool has_tail_solver = static_cast<bool>(bundle.tail_solver);
     const bool has_tail_solve_trigger = static_cast<bool>(bundle.tail_solve_trigger);
     const bool has_final_score_extractor = static_cast<bool>(bundle.final_score_extractor);
+    const int score_breakdown_categories =
+        bundle.final_score_breakdown_extractor ? bundle.score_breakdown_categories : 0;
     const bool has_belief_extractor =
         static_cast<bool>(bundle.belief_feature_extractor);
     const int belief_feature_dim =
@@ -4422,6 +4433,7 @@ PYBIND11_MODULE(dinoboard_engine, m) {
     out["has_tail_solver"] = has_tail_solver;
     out["has_tail_solve_trigger"] = has_tail_solve_trigger;
     out["has_final_score_extractor"] = has_final_score_extractor;
+    out["score_breakdown_categories"] = score_breakdown_categories;
     out["has_belief_extractor"] = has_belief_extractor;
     out["belief_feature_dim"] = belief_feature_dim;
     out["belief_logit_count"] = belief_logit_count;

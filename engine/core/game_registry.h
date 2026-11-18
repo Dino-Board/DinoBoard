@@ -62,6 +62,11 @@ using GameAdjudicator = std::function<int(const IGameState& state)>;
 // training target; games without a meaningful score leave it unset.
 using FinalScoreExtractor = std::function<std::vector<float>(const IGameState& state)>;
 
+// The same points split by scoring category: seat-major, score_breakdown_categories values per
+// seat, summing to that seat's final score. Feeds the optional score-breakdown auxiliary target
+// (training.score_breakdown_head); games that do not split their score leave it unset.
+using FinalScoreBreakdownExtractor = std::function<std::vector<float>(const IGameState& state)>;
+
 // depth_remaining is the tail-solver's remaining alpha-beta depth at the
 // current node — game-side scorers can fold it in for "prefer faster wins"
 // e.g. `depth_remaining + 0.1f * normalized_margin`.
@@ -224,6 +229,8 @@ struct GameBundle {
   TailSolveTrigger tail_solve_trigger;
   EpisodeStatsExtractor episode_stats_extractor;
   FinalScoreExtractor final_score_extractor;
+  FinalScoreBreakdownExtractor final_score_breakdown_extractor;
+  int score_breakdown_categories = 0;
   GameAdjudicator adjudicator;
   AuxiliaryScorer auxiliary_scorer;
   TrainingActionFilter training_action_filter;
