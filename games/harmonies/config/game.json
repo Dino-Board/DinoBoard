@@ -55,6 +55,11 @@
       "feature_dim": 0,
       "action_space": 988,
       "num_players": 2
+    },
+    "harmonies_a_tok": {
+      "feature_dim": 0,
+      "action_space": 912,
+      "num_players": 2
     }
   }
 }

@@ -16,6 +16,19 @@
       "simulations": 1000,
       "c_puct": 1.4
     },
+    "greedy_mcts_teacher": {
+      "type": "mcts_pv",
+      "simulations": 500,
+      "c_puct": 1.4
+    },
+    "a_flat_mcts": {
+      "type": "mcts_pv",
+      "model_path": "games/harmonies/model/harmonies_a_2p.onnx",
+      "simulations": 800,
+      "c_puct": 1.4,
+      "world_cap": 150,
+      "leaf_batch_size": 32
+    },
     "tok_v2_mcts": {
       "type": "mcts_pv",
       "model_path": "games/harmonies/model/harmonies_tok_v2_teacher.onnx",

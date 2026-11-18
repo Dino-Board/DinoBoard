@@ -78,14 +78,17 @@ class HarmoniesBeliefTracker final : public IBeliefTracker {
 HARMONIES_FOR_EACH_VARIANT(HARMONIES_EXTERN_HarmoniesBeliefTracker)
 #undef HARMONIES_EXTERN_HarmoniesBeliefTracker
 
-// ---- Token encoder (`harmonies_tok`, side B) ----
+// ---- Token encoder (`harmonies_tok` side B, `harmonies_a_tok` side A) ----
 //
 // Variable-length tokens with positions (TokenLayout::variable_tokens,
 // token_positions); header [valid, entity, anchor, type, has position, q, r].
 // "Me" = the perspective (the player to move when the policy is queried).
+// Both sides share the layout; the water columns follow the side's water
+// scoring: islands on side B, the river on side A (layout_json() names them
+// `river`, `river_reach`, `river_join` there).
 //   global     turn phase, my token pool, pouch, deck, end-of-game proximity
 //   player     one per player (me first, then the others in seat order):
-//              scores and their landscape breakdown, islands, spaces left,
+//              scores and their landscape breakdown, islands / river, spaces left,
 //              and the animal points their held cards could score right now
 //              (cubes players keep back until they place them all at once)
 //   slot  x5   one per central-board space: its tokens and what they could do
@@ -159,8 +162,6 @@ namespace hqf { enum : int { HARMONIES_CUBE_FEATURES(HARMONIES_FEATURE_ENUM) kCo
 
 template <int NPlayers, int Side>
 class HarmoniesTokenEncoder final : public IFeatureEncoder {
-  static_assert(Side == kSideB, "the token encoder's water features follow side B (islands)");
-
  public:
   using Geo = Board<Side>;
   static constexpr int kHexes = Geo::kHexes;
@@ -201,8 +202,8 @@ class HarmoniesTokenEncoder final : public IFeatureEncoder {
   TokenLayout layout_;
 };
 
-extern template class HarmoniesTokenEncoder<2, kSideB>;
-extern template class HarmoniesTokenEncoder<3, kSideB>;
-extern template class HarmoniesTokenEncoder<4, kSideB>;
+#define HARMONIES_EXTERN_HarmoniesTokenEncoder(N, S) extern template class HarmoniesTokenEncoder<N, S>;
+HARMONIES_FOR_EACH_VARIANT(HARMONIES_EXTERN_HarmoniesTokenEncoder)
+#undef HARMONIES_EXTERN_HarmoniesTokenEncoder
 
 }  // namespace board_ai::harmonies

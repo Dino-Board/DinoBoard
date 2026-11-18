@@ -6,6 +6,7 @@
   - B 面（岛屿计分，默认）：`harmonies` / `harmonies_2p` / `harmonies_3p` / `harmonies_4p`
   - A 面（河流计分）：`harmonies_a` / `harmonies_a_2p` / `harmonies_a_3p` / `harmonies_a_4p`
   - B 面 2 人、token 编码器（Transformer）：`harmonies_tok`
+  - A 面 2 人、token 编码器：`harmonies_a_tok`
 - **玩家数**：2–4
 - **范围**：个人版图 A/B 两面；不含 Nature's Spirit 牌和单人模式；0 号位先手
 - **动作空间**：B 面 988，A 面 912（与人数无关）
@@ -238,7 +239,20 @@
 |----|---------|------|
 | `card` | 1 | 32 |
 
-`tests/harmonies/test_token_encoder.py` 检查这些表与引擎报告的布局一致，并用 `tests/harmonies/harmonies_reference.py`（独立实现的堆叠规则、图案匹配、计分）逐个特征核对真实对局。
+#### A 面（`harmonies_a_tok`）
+
+与 B 面同一套布局（同样的 token 类型、偏移、宽度，`token_dim` 相同），只是格子 23 个（`cell` ×23、`opp_cell` ×23×(N−1)，`cube` 锚点 23×32），动作空间 912。水的三列按 A 面的河流计分换了含义和名字（布局 JSON 里就是这些名字）：
+
+| token | 偏移 | B 面 | A 面名称 | A 面含义 |
+|---|---|---|---|---|
+| `player` | 15 | `islands` | `river` | 计分河流的长度（格数，含两端；没有蓝色为 0）÷8 |
+| `cell` | 17 | `island` | `river_reach` | 蓝格：以它为一端的最长河流（同一片蓝色里到最远蓝格的最短路径格数）÷8；非蓝格 0 |
+| `cell` | 18 | `island_split` | `river_join` | 蓝格：它是某条最长河流的一端（1/0）÷3；非蓝格：相邻的不同蓝色片数 ÷3（在此放蓝会把它们连起来） |
+| `opp_cell` | 20、21 | `island`、`island_split` | `river_reach`、`river_join` | 同 `cell` |
+
+放某个颜色立刻多拿的河流分已经在 `delta` 里；这三列给的是河流的形状：现在多长、从哪一端还能接长、哪里能把两段连起来。
+
+`tests/harmonies/test_token_encoder.py` 检查这些表与引擎报告的布局一致（A 面：等于 B 面的布局换上这三个名字），并用 `tests/harmonies/harmonies_reference.py`（独立实现的堆叠规则、图案匹配、计分）对两面逐个特征核对真实对局。
 
 训练：`games/harmonies/config/train_transformer.json`（`relative_position_radius` 6 覆盖整个 B 面，`anchor_embedding: false` 让网络只通过相对位置看格子，`symmetry_augmentation: true`；`opponent_pool_self_ratio` 0.75 让四分之一对局对历史存档，防止自对弈风格漂移；`score_head` 用动物分 + 景观分的终局分差做辅助目标，`scale` 15 略高于规则 AI 对局分差的中位数 11.5，给更强的对局留出余量）。MCTS 参数照例只在 `train.json` 里，评估用 1000 次模拟。
 
@@ -254,6 +268,8 @@ A 面的 MLP 训练曾经锁死在固定的地形摆法上，所以这份配方�
 python -m training.cli --game harmonies_tok --output runs/harmonies_tok \
     --train-config games/harmonies/config/train_transformer.json
 ```
+
+A 面用同一份配方（`--game harmonies_a_tok`），引导老师是规则 AI `greedy_mcts_teacher`：和 `greedy_mcts_train` 同一个规则 MCTS，模拟 500 次。A 面实测对 1000 次的胜率：300 次 44%、3000 次 47%、5000 次 52%、10000 次约 64%（192 局，平均多 3 分）；5000 次以内强度差别不大，而规则 AI 的叶子评估只在 CPU 上算，引导期的步时和模拟次数成正比，所以取 500 次。评估对手可以选 `a_flat_mcts`：随附的 A 面 MLP（`harmonies_a_2p.onnx`，用它自己的 MLP 编码读状态）加 800 次模拟的 MCTS（`heuristic.json`），用 `training.eval_heuristic` 选它。
 
 ---
 

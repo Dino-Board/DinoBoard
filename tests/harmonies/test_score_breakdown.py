@@ -15,9 +15,10 @@ from conftest import get_test_model
 
 ROOT = Path(__file__).resolve().parents[2]
 TEACHER = ROOT / "games/harmonies/model/harmonies_tok_v2_teacher.onnx"
+SIDE_A_TEACHER = ROOT / "games/harmonies/model/harmonies_a_2p.onnx"
 
 
-@pytest.mark.parametrize("game", ["harmonies", "harmonies_a", "harmonies_tok", "harmonies_3p"])
+@pytest.mark.parametrize("game", ["harmonies", "harmonies_a", "harmonies_tok", "harmonies_a_tok", "harmonies_3p"])
 def test_breakdown_sums_to_final_scores(game, tmp_path_factory):
     meta = engine.game_metadata(game)
     assert meta["score_breakdown_categories"] == 6
@@ -67,5 +68,15 @@ def test_teacher_plays_legal_moves():
     gs = engine.GameSession("harmonies_tok", seed=7)
     for _ in range(6):
         r = gs.get_heuristic_action("tok_v2_mcts")
+        assert r["action"] in gs.get_legal_actions()
+        gs.apply_action(int(r["action"]))
+
+
+@pytest.mark.skipif(not SIDE_A_TEACHER.exists(), reason="the side A MLP is not in games/harmonies/model")
+def test_side_a_teacher_plays_legal_moves():
+    """a_flat_mcts reads the state with the MLP encoding inside the token variant harmonies_a_tok."""
+    gs = engine.GameSession("harmonies_a_tok", seed=7)
+    for _ in range(12):
+        r = gs.get_heuristic_action("a_flat_mcts")
         assert r["action"] in gs.get_legal_actions()
         gs.apply_action(int(r["action"]))

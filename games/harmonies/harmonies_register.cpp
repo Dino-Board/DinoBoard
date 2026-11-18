@@ -159,18 +159,14 @@ board_ai::GameBundle make_harmonies(const std::string& game_id, std::uint64_t se
   b.value_model = std::make_unique<board_ai::DefaultStateValueModel>();
   b.state_serializer = serialize_harmonies<NPlayers, Side>;
   if (encoder == EncoderKind::kTokens) {
-    if constexpr (Side == kSideB) {
-      b.encoder = std::make_unique<HarmoniesTokenEncoder<NPlayers, Side>>();
-      // Static: the token encoder's feature layout, for tests and documentation.
-      b.state_serializer = [](const IGameState& state) {
-        static const std::string layout = HarmoniesTokenEncoder<NPlayers, Side>::layout_json();
-        AnyMap m = serialize_harmonies<NPlayers, Side>(state);
-        m["encoder_layout"] = std::any(layout);
-        return m;
-      };
-    } else {
-      throw std::logic_error("harmonies: the token encoder exists for side B only");
-    }
+    b.encoder = std::make_unique<HarmoniesTokenEncoder<NPlayers, Side>>();
+    // Static: the token encoder's feature layout, for tests and documentation.
+    b.state_serializer = [](const IGameState& state) {
+      static const std::string layout = HarmoniesTokenEncoder<NPlayers, Side>::layout_json();
+      AnyMap m = serialize_harmonies<NPlayers, Side>(state);
+      m["encoder_layout"] = std::any(layout);
+      return m;
+    };
   } else {
     b.encoder = std::make_unique<HarmoniesFeatureEncoder<NPlayers, Side>>();
   }
@@ -207,6 +203,32 @@ board_ai::GameBundle make_harmonies(const std::string& game_id, std::uint64_t se
           "greedy_mcts_train", pv_eval_ptr, b.value_model.get(),
           hc_train.simulations, hc_train.c_puct, hc_train.world_cap,
           hc_train.leaf_batch_size));
+  // greedy_mcts_teacher: the rule MCTS as guidance teacher of harmonies_a_tok, at its own
+  // simulation count.
+  const auto hc_teacher = board_ai::heuristic::load_mcts_pv_heuristic_config(
+      "harmonies", "greedy_mcts_teacher", /*require_model_path=*/false);
+  b.heuristics.register_named(
+      "greedy_mcts_teacher",
+      board_ai::heuristic::MctsPVHeuristic::make_from_evaluator(
+          "greedy_mcts_teacher", pv_eval_ptr, b.value_model.get(),
+          hc_teacher.simulations, hc_teacher.c_puct, hc_teacher.world_cap,
+          hc_teacher.leaf_batch_size));
+  // a_flat_mcts: the side A flat network (harmonies_a_2p.onnx) with MCTS, the guidance teacher and
+  // eval opponent of harmonies_a_tok. It reads its own (flat) encoding of the state. Needs the model file.
+  if constexpr (Side == kSideA && NPlayers == 2) {
+    if (encoder == EncoderKind::kTokens) {
+      const auto hc_flat = board_ai::heuristic::load_mcts_pv_heuristic_config(
+          "harmonies", "a_flat_mcts", /*require_model_path=*/true);
+      if (std::ifstream(hc_flat.model_path).good()) {
+        static const HarmoniesFeatureEncoder<2, kSideA> flat_encoder;
+        b.heuristics.register_named(
+            "a_flat_mcts",
+            board_ai::heuristic::MctsPVHeuristic::make_from_onnx(
+                "a_flat_mcts", hc_flat.model_path, &flat_encoder, b.value_model.get(),
+                hc_flat.simulations, hc_flat.c_puct, hc_flat.world_cap, hc_flat.leaf_batch_size));
+      }
+    }
+  }
   // tok_v2_mcts: the harmonies_tok_v2 network with MCTS (guidance teacher and eval opponent of
   // the token variant). Its first layer ignores the token features added after it was trained
   // (games/harmonies/tools/zero_new_features.py), so it plays as it did. Needs the model file.
@@ -277,9 +299,12 @@ board_ai::GameRegistrar reg_harmonies_a_3p("harmonies_a_3p", [](std::uint64_t se
 board_ai::GameRegistrar reg_harmonies_a_4p("harmonies_a_4p", [](std::uint64_t seed) {
   return make_harmonies<4, kSideA>("harmonies_a_4p", seed);
 });
-// Side B, 2 players, token encoder for the transformer network.
+// 2 players, token encoder for the transformer network: side B, side A.
 board_ai::GameRegistrar reg_harmonies_tok("harmonies_tok", [](std::uint64_t seed) {
   return make_harmonies<2, kSideB>("harmonies_tok", seed, EncoderKind::kTokens);
+});
+board_ai::GameRegistrar reg_harmonies_a_tok("harmonies_a_tok", [](std::uint64_t seed) {
+  return make_harmonies<2, kSideA>("harmonies_a_tok", seed, EncoderKind::kTokens);
 });
 
 }  // namespace

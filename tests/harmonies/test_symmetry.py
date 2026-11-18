@@ -66,7 +66,7 @@ def test_symmetry_group_matches_independent_computation(game_id, shape):
     n = sum(shape)
     expected = _lattice_symmetries(columns)
     assert len(expected) == 4
-    for gid in (game_id, game_id + "_3p", "harmonies_tok" if game_id == "harmonies" else game_id + "_4p"):
+    for gid in (game_id, game_id + "_3p", game_id + "_4p", game_id + "_tok"):
         got = [_hex_perm(s, n) for s in engine.encoder_symmetries(gid)]
         assert got[0] == tuple(range(n)), "symmetry 0 must be the identity"
         assert sorted(got) == sorted(expected), gid
@@ -116,7 +116,7 @@ def _tokens_as_set(x, token_dim):
     return sorted(map(tuple, rows.tolist()))
 
 
-@pytest.mark.parametrize("game_id", ["harmonies", "harmonies_a", "harmonies_tok"])
+@pytest.mark.parametrize("game_id", ["harmonies", "harmonies_a", "harmonies_tok", "harmonies_a_tok"])
 def test_encoding_of_transformed_state_is_transformed_encoding(game_id):
     """encode(g s) == transform_g(encode(s)) and legal_mask(g s) ==
     transform_g(legal_mask(s)), for both perspectives, using the encoder's

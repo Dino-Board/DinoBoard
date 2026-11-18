@@ -492,13 +492,18 @@ std::vector<int> missing_after(const CardFit<Side>& f, const std::array<std::int
   return out;
 }
 
-// Landscape facts of one board.
+// Landscape facts of one board. Water: islands on side B, the river on side A
+// (river length = blue hexes on the longest shortest path between two blue
+// hexes of one blue group, ends included, as the rules score it).
 template <int Side>
 struct BoardFacts {
   static constexpr int kH = Board<Side>::kHexes;
   std::array<int, kH> island{};       // island id of a non-blue hex, -1 for blue
   std::array<int, kH> island_size{};  // per island id
   int islands = 0;
+  int river = 0;                      // the scored river's length, 0 without blue
+  std::array<int, kH> river_reach{};  // blue hex: longest river ending at it; else 0
+  std::array<int, kH> river_join{};   // blue: an end of a longest river; else adjacent blue groups
   std::array<int, kH> field_group{};  // size of the yellow group, 0 if not yellow
   std::array<int, kH> points{};       // tree / mountain / building points of the hex
   std::array<int, kH> nb_colours{}, nb_empty{}, edge{}, island_split{};
@@ -533,6 +538,48 @@ BoardFacts<Side> board_facts(const std::array<std::int8_t, Board<Side>::kHexes>&
     return n;
   };
   b.islands = label([](int t) { return t != 1; }, b.island, b.island_size);
+  if constexpr (!Geo::kIslands) {
+    std::array<int, kH> blue_id{}, blue_size{};
+    label([](int t) { return t == 1; }, blue_id, blue_size);
+    for (int src = 0; src < kH; ++src) {
+      if (tt[static_cast<std::size_t>(src)] != 1) continue;
+      std::array<int, kH> dist;
+      dist.fill(-1);
+      dist[static_cast<std::size_t>(src)] = 0;
+      std::array<int, kH> queue{};
+      int head = 0, tail = 0, far = 0;
+      queue[tail++] = src;
+      while (head < tail) {
+        const int cur = queue[head++];
+        far = std::max(far, dist[static_cast<std::size_t>(cur)]);
+        for (int d = 0; d < 6; ++d) {
+          const int nb = Geo::neighbor(cur, d);
+          if (nb < 0 || dist[static_cast<std::size_t>(nb)] >= 0 || tt[static_cast<std::size_t>(nb)] != 1) continue;
+          dist[static_cast<std::size_t>(nb)] = dist[static_cast<std::size_t>(cur)] + 1;
+          queue[tail++] = nb;
+        }
+      }
+      b.river_reach[static_cast<std::size_t>(src)] = far + 1;
+      b.river = std::max(b.river, far + 1);
+    }
+    for (int h = 0; h < kH; ++h) {
+      const auto hi = static_cast<std::size_t>(h);
+      if (tt[hi] == 1) {
+        b.river_join[hi] = b.river_reach[hi] == b.river ? 1 : 0;
+        continue;
+      }
+      std::array<bool, kH> seen{};
+      for (int d = 0; d < 6; ++d) {
+        const int nb = Geo::neighbor(h, d);
+        if (nb < 0 || tt[static_cast<std::size_t>(nb)] != 1) continue;
+        const int g = blue_id[static_cast<std::size_t>(nb)];
+        if (!seen[static_cast<std::size_t>(g)]) {
+          seen[static_cast<std::size_t>(g)] = true;
+          ++b.river_join[hi];
+        }
+      }
+    }
+  }
   std::array<int, kH> field_id{}, field_size{};
   label([](int t) { return t == 5; }, field_id, field_size);
   auto is_mountain = [](int t) { return t == 2 || t == 10 || t == 12; };
@@ -618,12 +665,22 @@ HARMONIES_DESC_TABLE(kOppCellDesc, hof, HARMONIES_OPP_CELL_FEATURES)
 HARMONIES_DESC_TABLE(kCubeDesc, hqf, HARMONIES_CUBE_FEATURES)
 #undef HARMONIES_DESC_TABLE
 
+// Side A's names for the water columns (same offsets as side B's island columns).
+const char* water_name(const char* name, bool river) {
+  if (!river) return name;
+  const std::string n = name;
+  if (n == "islands") return "river";
+  if (n == "island") return "river_reach";
+  if (n == "island_split") return "river_join";
+  return name;
+}
+
 template <std::size_t N>
-void append_type(std::string& out, const char* name, const FeatureDesc (&table)[N]) {
+void append_type(std::string& out, const char* name, const FeatureDesc (&table)[N], bool river) {
   out += std::string("{\"name\":\"") + name + "\",\"features\":[";
   for (std::size_t i = 0; i < N; ++i) {
     if (i) out += ',';
-    out += std::string("[\"") + table[i].name + "\"," + std::to_string(table[i].offset) + "," +
+    out += std::string("[\"") + water_name(table[i].name, river) + "\"," + std::to_string(table[i].offset) + "," +
            std::to_string(table[i].width) + "]";
   }
   out += "]}";
@@ -700,19 +757,20 @@ std::string HarmoniesTokenEncoder<NPlayers, Side>::layout_json() {
   std::string out = "{\"token_dim\":" + std::to_string(kTokenDim) + ",\"header\":" + std::to_string(kHeader) +
                     ",\"header_fields\":[\"valid\",\"entity\",\"anchor\",\"type\",\"has_position\",\"q\",\"r\"]," +
                     "\"num_heads\":" + std::to_string(kNumHeads) + ",\"types\":[";
-  append_type(out, "global", kGlobalDesc);
+  constexpr bool river = !Geo::kIslands;
+  append_type(out, "global", kGlobalDesc, river);
   out += ',';
-  append_type(out, "player", kPlayerDesc);
+  append_type(out, "player", kPlayerDesc, river);
   out += ',';
-  append_type(out, "slot", kSlotDesc);
+  append_type(out, "slot", kSlotDesc, river);
   out += ',';
-  append_type(out, "card", kCardDesc);
+  append_type(out, "card", kCardDesc, river);
   out += ',';
-  append_type(out, "cell", kCellDesc);
+  append_type(out, "cell", kCellDesc, river);
   out += ',';
-  append_type(out, "opp_cell", kOppCellDesc);
+  append_type(out, "opp_cell", kOppCellDesc, river);
   out += ',';
-  append_type(out, "cube", kCubeDesc);
+  append_type(out, "cube", kCubeDesc, river);
   out += "],\"entities\":[";
   append_range(out, "card", 1, kAnimalCards, true);
   out += "],\"anchors\":[";
@@ -851,7 +909,7 @@ void HarmoniesTokenEncoder<NPlayers, Side>::encode_features(const IGameState& ma
     f[hpf::fields] = static_cast<float>(bd.fields) / 20.0f;
     f[hpf::buildings] = static_cast<float>(bd.buildings) / 20.0f;
     f[hpf::water] = static_cast<float>(bd.water) / 20.0f;
-    f[hpf::islands] = static_cast<float>(facts[pi].islands) / 8.0f;
+    f[hpf::islands] = static_cast<float>(Geo::kIslands ? facts[pi].islands : facts[pi].river) / 8.0f;
     f[hpf::spaces] = static_cast<float>(s.space_remaining[pi]) / static_cast<float>(kHexes);
     int cubes = 0, held = 0, open = 0;
     for (int h = 0; h < kHexes; ++h) cubes += s.has_animal[pi][static_cast<std::size_t>(h)];
@@ -981,10 +1039,15 @@ void HarmoniesTokenEncoder<NPlayers, Side>::encode_features(const IGameState& ma
     f[off_tower + 14] = ha[hi] ? 1.0f : 0.0f;                                         // animal
     f[off_tower + 15] = static_cast<float>(b.points[hi]) / 7.0f;                      // points
     f[off_tower + 16] = static_cast<float>(std::min(b.field_group[hi], 5)) / 5.0f;    // field_group
-    f[off_tower + 17] = b.island[hi] >= 0
-        ? static_cast<float>(b.island_size[static_cast<std::size_t>(b.island[hi])]) / static_cast<float>(kHexes)
-        : 0.0f;                                                                       // island
-    f[off_tower + 18] = static_cast<float>(b.island_split[hi]) / 3.0f;                // island_split
+    if constexpr (Geo::kIslands) {
+      f[off_tower + 17] = b.island[hi] >= 0
+          ? static_cast<float>(b.island_size[static_cast<std::size_t>(b.island[hi])]) / static_cast<float>(kHexes)
+          : 0.0f;                                                                     // island
+      f[off_tower + 18] = static_cast<float>(b.island_split[hi]) / 3.0f;              // island_split
+    } else {
+      f[off_tower + 17] = static_cast<float>(b.river_reach[hi]) / 8.0f;               // river_reach
+      f[off_tower + 18] = static_cast<float>(b.river_join[hi]) / 3.0f;                // river_join
+    }
     f[off_tower + 19] = static_cast<float>(b.nb_colours[hi]) / 6.0f;                  // nb_colours
     f[off_tower + 20] = static_cast<float>(b.nb_empty[hi]) / 6.0f;                    // nb_empty
     f[off_tower + 21] = static_cast<float>(b.edge[hi]) / 6.0f;                        // edge
@@ -1073,8 +1136,8 @@ void HarmoniesTokenEncoder<NPlayers, Side>::encode_features(const IGameState& ma
   }
 }
 
-template class HarmoniesTokenEncoder<2, kSideB>;
-template class HarmoniesTokenEncoder<3, kSideB>;
-template class HarmoniesTokenEncoder<4, kSideB>;
+#define HARMONIES_INST_HarmoniesTokenEncoder(N, S) template class HarmoniesTokenEncoder<N, S>;
+HARMONIES_FOR_EACH_VARIANT(HARMONIES_INST_HarmoniesTokenEncoder)
+#undef HARMONIES_INST_HarmoniesTokenEncoder
 
 }  // namespace board_ai::harmonies

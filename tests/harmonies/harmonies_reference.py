@@ -219,6 +219,32 @@ def landscape(geo, tt, side):
     return trees, mountains, fields, buildings, water
 
 
+def river_facts(geo, tt):
+    """Side A water: (river length, per blue hex the longest river ending at it, per hex `river_join`:
+    for blue whether it ends a longest river, else how many blue groups touch it)."""
+    reach = {}
+    for src in range(geo.n):
+        if tt[src] != 1:
+            continue
+        dist, todo = {src: 0}, [src]
+        while todo:
+            u = todo.pop(0)
+            for v in geo.nbrs[u]:
+                if v >= 0 and tt[v] == 1 and v not in dist:
+                    dist[v] = dist[u] + 1
+                    todo.append(v)
+        reach[src] = max(dist.values()) + 1
+    river = max(reach.values(), default=0)
+    label, _ = groups(geo, tt, lambda t: t == 1)
+    join = {}
+    for h in range(geo.n):
+        if tt[h] == 1:
+            join[h] = int(reach[h] == river)
+        else:
+            join[h] = len({label[v] for v in geo.nbrs[h] if v >= 0 and label[v] >= 0})
+    return river, reach, join
+
+
 # ---- pattern fits ----
 
 def card_fit(geo, tt, ha, cid):
@@ -368,13 +394,14 @@ def expected_tokens(d: dict, me: int) -> dict:
         others_potential = [players[o]["score"] + plans[o][0] for o in range(nplayers) if o != p]
         bd = landscape(geo, tts[p], side)
         assert sum(bd) == pl["landscape_score"], "landscape score disagrees with the reference scorer"
+        water_count = (dict(islands=len(groups(geo, tts[p], lambda t: t != 1)[1]) / 8) if side == "B"
+                       else dict(river=river_facts(geo, tts[p])[0] / 8))
         exp["player"].append(dict(
             seat=[1.0 if i == k else 0.0 for i in range(4)], to_move=d["current_player"] == p,
             first_player=d["first_player"] == p, animal_score=pl["animal_score"] / 50,
             landscape_score=pl["landscape_score"] / 50, total_score=pl["score"] / 100,
             margin=(pl["score"] - max(others)) / 50, trees=bd[0] / 20, mountains=bd[1] / 20, fields=bd[2] / 20,
-            buildings=bd[3] / 20, water=bd[4] / 20,
-            islands=len(groups(geo, tts[p], lambda t: t != 1)[1]) / 8, spaces=pl["space_remaining"] / n,
+            buildings=bd[3] / 20, water=bd[4] / 20, **water_count, spaces=pl["space_remaining"] / n,
             cubes_placed=sum(has[p]) / n, cards_held=sum(1 for c in pl["held_cards"] if c > 0) / 4,
             card_points_open=points_of(pl) / 40, ready_points=plans[p][0] / 20, ready_cubes=plans[p][1] / 8,
             potential_total=potential / 100, potential_margin=(potential - max(others_potential)) / 50))
@@ -435,11 +462,16 @@ def expected_tokens(d: dict, me: int) -> dict:
         label, sizes = groups(geo, tt, lambda t: t != 1)
         flabel, fsizes = groups(geo, tt, lambda t: t == 5)
         nb = [v for v in geo.nbrs[h] if v >= 0]
+        if side == "B":
+            water = dict(island=(sizes[label[h]] / n) if label[h] >= 0 else 0.0,
+                         island_split=(len({label[v] for v in nb if label[v] >= 0}) / 3) if tt[h] == 1 else 0.0)
+        else:
+            _, reach, join = river_facts(geo, tt)
+            water = dict(river_reach=reach.get(h, 0) / 8, river_join=join[h] / 3)
         return dict(tower=[1.0 if t == tt[h] else 0.0 for t in range(13)], height=HEIGHT[tt[h]] / 3,
                     animal=float(ha[h]), points=cell_points(geo, tt, h) / 7,
                     field_group=(min(fsizes[flabel[h]], 5) / 5) if flabel[h] >= 0 else 0.0,
-                    island=(sizes[label[h]] / n) if label[h] >= 0 else 0.0,
-                    island_split=(len({label[v] for v in nb if label[v] >= 0}) / 3) if tt[h] == 1 else 0.0,
+                    **water,
                     nb_colours=len({top_colour(tt[v]) for v in nb} - {0}) / 6,
                     nb_empty=sum(1 for v in nb if tt[v] == 0) / 6, edge=(6 - len(nb)) / 6)
 
