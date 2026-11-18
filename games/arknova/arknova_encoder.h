@@ -10,7 +10,9 @@
 //                 from the belief tracker's known_cards), and which final scoring cards are unseen
 //   decision      the pending decision: its frame kind, the typed data of that frame, the turn it
 //                 belongs to and the atoms already chosen (prefix)
-//   player  x2    tracks, resources, workers, icons, zoo summary (me, then the opponent)
+//   player  x2    tracks, resources, workers, icons, zoo summary (me, then the opponent), and the
+//                 points not yet on its tracks: what its end-of-game effects would score now, the
+//                 most one action could gain it now, how far its next track bonuses are
 //   action  x10   one per action card of each player: slot, strength as it would be used now,
 //                 side, Venom / Constriction / Multiplier tokens on that card
 //   card          one per animal / sponsor / final scoring card in my hand, in the opponent's hand
@@ -92,7 +94,10 @@ namespace board_ai::arknova {
   X(poisoned, 1) X(covered_cells, 1) X(buildings, 7) X(kiosk_income, 1) X(appeal_income, 1)       \
   X(display_range, 1) X(placeable, 11) X(next_partner_zoo, ARKNOVA_EFFECT_WIDTH)                    \
   X(next_university, ARKNOVA_EFFECT_WIDTH) X(last_worker, ARKNOVA_EFFECT_WIDTH) X(map_income, 1)    \
-  X(can_trade, 1) X(ignore_conditions, 1) X(sponsor_discount, 1) X(group_left, 1)
+  X(can_trade, 1) X(ignore_conditions, 1) X(sponsor_discount, 1) X(group_left, 1)                 \
+  X(endgame_final, 1) X(endgame_cards, 1) X(endgame_appeal, 1) X(projected_vp, 1)                 \
+  X(best_project, 1) X(best_animals, 1) X(best_turn_vp, 1) X(conservation_to_bonus, 1)            \
+  X(reputation_to_bonus, 1) X(reputation_capped, 1) X(break_income, 1)
 
 #define ARKNOVA_ACTION_CARD_FEATURES(X)                                                            \
   X(mine, 1) X(opponent, 1) X(action, 5) X(slot, 5) X(strength, 1) X(effective_strength, 1)        \

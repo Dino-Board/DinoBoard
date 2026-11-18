@@ -312,6 +312,11 @@ bool has_income(CardIdx c);
 void income_effect(State& s, CardIdx c, int p);
 bool has_endgame(CardIdx c);
 void endgame_effect(State& s, CardIdx c, int p);
+// What c's end-of-game effect would score for p right now: {appeal, conservation}. Runs the effect
+// on `scratch` (a copy of the state being asked about) and puts p's tracks back.
+std::pair<int, int> endgame_yield(State& scratch, CardIdx c, int p);
+// The money p's next break would pay now (appeal, kiosks, map tokens, income cards, the map rule).
+int break_income(const State& s, int p);
 void after_build_hooks(State& s, int p, int building, Chance& ch);  // AFTER_BUILD_HOOKS, applied in reverse
 void after_special_built(State& s, int p, int building);  // relocate.py hook
 

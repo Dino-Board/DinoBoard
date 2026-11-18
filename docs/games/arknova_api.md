@@ -323,6 +323,20 @@ a copy of the (masked) state and record what changed; `trigger_*` come from
 `icon_trigger_spec`, the same icon / gain mapping `icon_trigger` applies. The
 `effect` flags say which kinds of effect the card has.
 
+**Points not yet on the tracks.** The tracks show what a player has scored, not
+what it holds back: end-of-game effects (Final Scoring cards, brown sponsors) and
+a big turn kept ready for the end. The `player` token therefore sums them up:
+`endgame_final` / `endgame_cards` / `endgame_appeal` run each end-of-game effect
+on a copy of the masked state (`endgame_yield`, the effect code final scoring
+runs), `projected_vp` is the score with them, and `best_project` /
+`best_animals` / `best_turn_vp` are the most one Association or Animals action
+could add now. The opponent's Final Scoring cards are hidden, so its
+`endgame_final` is the expectation over the final cards I have not seen, under
+its zoo. Training can also predict the final split per seat
+(`final_score_breakdown_extractor`: appeal and conservation from play,
+conservation from the Final Scoring card, conservation and appeal from the other
+end-of-game cards; `training.score_breakdown_head`).
+
 **Card pools.** The network has no history, so the `global` token says what is
 gone and what can still turn up, as two summaries of the same shape: the
 discard pile (public; also what Scavenging draws from) and the *unseen* regular
@@ -467,6 +481,17 @@ in the pools (only their composition).
 | 123 | 1 | `ignore_conditions` | animal conditions this player may leave unmet thanks to the map (research institute) |
 | 124 | 1 | `sponsor_discount` | levels the map takes off this player's sponsors (Hollywood, all H spaces covered) |
 | 125 | 1 | `group_left` | spaces of the map's group rule still uncovered / 3 (ice cream parlours, Hollywood H) |
+| 126 | 1 | `endgame_final` | conservation the Final Scoring cards would score now / 4: mine, the worst of two left out while no one has discarded; the opponent's (hidden): the expectation over the final cards I have not seen, the best of two kept while no one has discarded |
+| 127 | 1 | `endgame_cards` | conservation the end-of-game effects of the zoo cards would score now / 4 |
+| 128 | 1 | `endgame_appeal` | appeal the end-of-game effects of the zoo cards would score now / 10 |
+| 129 | 1 | `projected_vp` | `victory_points` with the three above added / 30 |
+| 130 | 1 | `best_project` | the most conservation one Association action could bring now / 5: one supportable project level (in play, in the hand as far as I know it, on the display within range with Association II), a worker free for it, the strength reachable with X-tokens |
+| 131 | 1 | `best_animals` | the most appeal one Animals action could bring now / 15: as many animals as the strength with X-tokens plays, from the hand as far as I know it and the display within range with Animals II, each playable, with a place and paid for |
+| 132 | 1 | `best_turn_vp` | victory points the better of those two would add / 15 |
+| 133 | 1 | `conservation_to_bonus` | conservation still needed for the next Conservation track space with an effect (2, 5, 8, 10) / 5; 0 past 10 |
+| 134 | 1 | `reputation_to_bonus` | reputation still needed for the next Reputation track bonus within reach (9 at most before Cards II) / 5 |
+| 135 | 1 | `reputation_capped` | reputation stands at 9 without Cards II: more is lost |
+| 136 | 1 | `break_income` | money the next break would pay now (appeal, kiosks, map tokens, income cards, the map rule) / 40 |
 
 ### `action_card` token
 

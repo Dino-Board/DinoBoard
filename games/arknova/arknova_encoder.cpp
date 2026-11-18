@@ -2,9 +2,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "arknova_belief.h"
 #include "arknova_internal.h"
@@ -72,6 +75,10 @@ constexpr int kSponsorLevels = gf::discard_sponsor_level_last - gf::discard_spon
 constexpr int kFinalCardTypes = gf::unseen_final_last - gf::unseen_final + 1;
 
 bool valid_card(int v) { return v >= 0 && v < num_cards(); }
+
+// The Conservation track's spaces with an effect: 2 an upgrade or a worker, 5 and 8 a bonus tile,
+// 10 the Final Scoring card discard.
+constexpr int kConservationBonusSpaces[] = {2, 5, 8, 10};
 
 using PoolRow = std::array<float, kPoolWidth>;
 
@@ -420,6 +427,41 @@ class Writer {
     if (md.rule == MapRule::kIceCream || md.rule == MapRule::kHollywood) {
       f[pf::group_left] = popcount(md.rule_cells & ~pl.zoo.covered()) / 3.0f;
     }
+
+    // Points not yet on the tracks: end-of-game effects, and the most one action could gain now.
+    const Endgame eg = endgame_points(p);
+    f[pf::endgame_final] = static_cast<float>(eg.final_cp) / 4.0f;
+    f[pf::endgame_cards] = static_cast<float>(eg.card_cp) / 4.0f;
+    f[pf::endgame_appeal] = static_cast<float>(eg.card_appeal) / 10.0f;
+    const int end_appeal = pl.appeal + static_cast<int>(std::lround(eg.card_appeal));
+    const int end_conservation = pl.conservation + static_cast<int>(std::lround(eg.final_cp + eg.card_cp));
+    f[pf::projected_vp] = victory_points(end_appeal, end_conservation) / 30.0f;
+    const int project_cp = best_project_cp(p);
+    const auto [animal_appeal, animal_cp] = best_animals(p);
+    f[pf::best_project] = project_cp / 5.0f;
+    f[pf::best_animals] = animal_appeal / 15.0f;
+    const int gain = std::max(victory_points(pl.appeal, pl.conservation + project_cp),
+                              victory_points(pl.appeal + animal_appeal, pl.conservation + animal_cp)) -
+                     pl.victory_points();
+    f[pf::best_turn_vp] = std::max(gain, 0) / 15.0f;
+    // Track bonuses still ahead: conservation 2, 5, 8 and 10; reputation (9 at most before Cards II).
+    for (int t : kConservationBonusSpaces) {
+      if (pl.conservation < t) {
+        f[pf::conservation_to_bonus] = (t - pl.conservation) / 5.0f;
+        break;
+      }
+    }
+    const int reputation_top = pl.is_upgraded(kCards) ? kReputationMax : kReputationCapWithoutCardsII;
+    for (int r = pl.reputation + 1; r <= reputation_top; ++r) {
+      bool present = false;
+      reputation_bonus(r, &present);
+      if (present) {
+        f[pf::reputation_to_bonus] = (r - pl.reputation) / 5.0f;
+        break;
+      }
+    }
+    f[pf::reputation_capped] = !pl.is_upgraded(kCards) && pl.reputation >= kReputationCapWithoutCardsII ? 1.0f : 0.0f;
+    f[pf::break_income] = break_income(s_, p) / 40.0f;
   }
 
   void reward_tokens() {
@@ -627,6 +669,136 @@ class Writer {
   // Strength points the holder's action card lacks for it now, before X-tokens, / 5.
   float strength_short(int holder, int action, int needed) const {
     return std::clamp(needed - effective_strength(s_, holder, action), 0, 5) / 5.0f;
+  }
+
+  struct Endgame {
+    double final_cp = 0, card_cp = 0, card_appeal = 0;
+  };
+
+  // What p's end-of-game effects would score now: its zoo cards', and its Final Scoring cards'
+  // (scored by one card each; while no one has discarded, the worst is still to go). Mine I know;
+  // the opponent's are hidden, so the expectation over the final cards I have not seen.
+  Endgame endgame_points(int p) {
+    const Player& pl = s_.players[p];
+    Endgame e;
+    for (int i = 0; i < pl.n_zoo_cards; ++i) {
+      if (!has_endgame(pl.zoo_cards[i])) continue;
+      const auto [appeal, conservation] = endgame_yield(scratch(), pl.zoo_cards[i], p);
+      e.card_appeal += appeal;
+      e.card_cp += conservation;
+    }
+    const bool one_to_go = !s_.final_card_discarded;
+    std::vector<int> ys;
+    if (p == me_) {
+      for (int i = 0; i < pl.n_final; ++i) {
+        const int c = st_.final_cards[me_][i];
+        if (valid_card(c)) ys.push_back(endgame_yield(scratch(), static_cast<CardIdx>(c), p).second);
+      }
+      double sum = 0;
+      for (int y : ys) sum += y;
+      if (one_to_go && ys.size() >= 2) sum -= *std::min_element(ys.begin(), ys.end());
+      e.final_cp = sum;
+      return e;
+    }
+    const std::vector<std::uint8_t> known = known_cards(st_, me_, false);
+    for (int c = 0; c < num_cards(); ++c) {
+      if (final_columns()[static_cast<std::size_t>(c)] < 0 || known[static_cast<std::size_t>(c)]) continue;
+      ys.push_back(endgame_yield(scratch(), static_cast<CardIdx>(c), p).second);
+    }
+    const int held = pl.n_final;
+    if (held == 0 || ys.empty()) return e;
+    double mean = 0;
+    for (int y : ys) mean += y;
+    mean /= static_cast<double>(ys.size());
+    if (one_to_go && held >= 2 && ys.size() >= 2) {
+      double best_of_two = 0;
+      int pairs = 0;
+      for (std::size_t i = 0; i < ys.size(); ++i) {
+        for (std::size_t j = i + 1; j < ys.size(); ++j, ++pairs) best_of_two += std::max(ys[i], ys[j]);
+      }
+      e.final_cp = best_of_two / pairs + (held - 2) * mean;
+    } else {
+      e.final_cp = held * mean;
+    }
+    return e;
+  }
+
+  // The most conservation one Association action could bring p now: one project level it could
+  // support (in play, in its hand as far as I know it, on the display within range with
+  // Association II), with a worker free for it and the strength, X-tokens included.
+  int best_project_cp(int p) {
+    const Player& pl = s_.players[p];
+    const int workers = workers_needed(pl, kTaskProject);
+    if (workers < 0 || workers > pl.active_workers()) return 0;
+    if (effective_strength(s_, p, kAssociation) + pl.xtokens < project_strength_needed(pl)) return 0;
+    std::vector<CardIdx> projects(s_.base_projects, s_.base_projects + s_.n_base_projects);
+    projects.insert(projects.end(), s_.projects, s_.projects + s_.n_projects);
+    for (int c = 0; c < num_cards(); ++c) {
+      if (st_.hand[p][c] == 1 && card(static_cast<CardIdx>(c)).type == CardType::kProject) {
+        projects.push_back(static_cast<CardIdx>(c));
+      }
+    }
+    if (pl.is_upgraded(kAssociation)) {
+      for (int i : cards_in_range(s_, p)) {
+        const CardIdx c = s_.display[i];
+        if (c != kNoCard && card(c).type == CardType::kProject && pl.money >= i + 1) projects.push_back(c);
+      }
+    }
+    int best = 0;
+    for (CardIdx c : projects) {
+      const std::array<bool, 3> levels = supportable_levels(s_, p, c);
+      const CardDef& d = card(c);
+      for (int k = 0; k < d.n_slots; ++k) {
+        if (!levels[k]) continue;
+        int cp = 0;
+        for (int i = 0; i < d.slots[k].n_rewards; ++i) {
+          if (d.slots[k].rewards[i].reward == Reward::kRewardConservation) cp += d.slots[k].rewards[i].amount;
+        }
+        best = std::max(best, cp);
+      }
+    }
+    return best;
+  }
+
+  // The most appeal one Animals action could bring p now ({appeal, conservation printed with it}):
+  // as many animals as its strength (X-tokens included) plays, from its hand as far as I know it
+  // and from the display within range with Animals II, each playable, housed and paid for.
+  std::pair<int, int> best_animals(int p) {
+    const Player& pl = s_.players[p];
+    const int strength = std::clamp(effective_strength(s_, p, kAnimals) + pl.xtokens, 1, 5);
+    const int n = animal_count(s_, p, strength);
+    if (n <= 0) return {0, 0};
+    struct Candidate {
+      int appeal, conservation, cost;
+    };
+    std::vector<Candidate> cands;
+    auto consider = [&](CardIdx c, int extra) {
+      const CardDef& d = card(c);
+      if (d.type != CardType::kAnimal) return;
+      if (!sr::requirements_ok(s_, p, c) || !sr::animal_allowed(pl, c) || housings(pl, c).empty()) return;
+      const int cost = animal_cost(pl, c) + extra;
+      if (cost <= pl.money) cands.push_back({d.appeal, d.conservation, cost});
+    };
+    for (int c = 0; c < num_cards(); ++c) {
+      if (st_.hand[p][c] == 1) consider(static_cast<CardIdx>(c), 0);
+    }
+    if (pl.is_upgraded(kAnimals)) {
+      for (int i : cards_in_range(s_, p)) {
+        if (s_.display[i] != kNoCard) consider(s_.display[i], i + 1);
+      }
+    }
+    std::pair<int, int> best{0, 0};
+    auto search = [&](auto&& self, std::size_t from, int left, int money, int appeal, int conservation) -> void {
+      if (std::make_pair(appeal, conservation) > best) best = {appeal, conservation};
+      if (left == 0) return;
+      for (std::size_t i = from; i < cands.size(); ++i) {
+        if (cands[i].cost > money) continue;
+        self(self, i + 1, left - 1, money - cands[i].cost, appeal + cands[i].appeal,
+             conservation + cands[i].conservation);
+      }
+    };
+    search(search, 0, n, pl.money, 0, 0);
+    return best;
   }
 
   // Printed facts of an animal, sponsor or final scoring card, and what they mean now for its holder.

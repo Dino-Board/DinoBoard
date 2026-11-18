@@ -9,6 +9,7 @@
 #include "arknova_actions.h"
 #include "arknova_belief.h"
 #include "arknova_encoder.h"
+#include "arknova_internal.h"
 #include "arknova_json.h"
 #include "arknova_rules.h"
 #include "arknova_state.h"
@@ -153,6 +154,32 @@ board_ai::GameBundle make_arknova(const std::string& game_id, std::uint64_t seed
   b.final_score_extractor = [](const IGameState& state) -> std::vector<float> {
     const State& core = board_ai::checked_cast<ArknovaState>(state).synced_core();
     return {static_cast<float>(core.scores[0]), static_cast<float>(core.scores[1])};
+  };
+  // Per seat, in track points: appeal and conservation from play, conservation from the Final
+  // Scoring card, conservation and appeal from the other end-of-game cards. The end-of-game part
+  // is what those effects give on the final position (final scoring has already added it).
+  b.score_breakdown_categories = 5;
+  b.final_score_breakdown_extractor = [](const IGameState& state) -> std::vector<float> {
+    const State& core = board_ai::checked_cast<ArknovaState>(state).synced_core();
+    State scratch = core;
+    std::vector<float> out;
+    for (int p = 0; p < kPlayers; ++p) {
+      const Player& pl = core.players[p];
+      int final_cp = 0, card_cp = 0, card_appeal = 0;
+      for (int i = 0; i < pl.n_final; ++i) {
+        if (has_endgame(pl.final_cards[i])) final_cp += endgame_yield(scratch, pl.final_cards[i], p).second;
+      }
+      for (int i = 0; i < pl.n_zoo_cards; ++i) {
+        if (!has_endgame(pl.zoo_cards[i])) continue;
+        const auto [appeal, conservation] = endgame_yield(scratch, pl.zoo_cards[i], p);
+        card_appeal += appeal;
+        card_cp += conservation;
+      }
+      for (int v : {pl.appeal - card_appeal, pl.conservation - final_cp - card_cp, final_cp, card_cp, card_appeal}) {
+        out.push_back(static_cast<float>(v));
+      }
+    }
+    return out;
   };
   b.install_event_protocol(board_ai::viz::no_events_extractor,
                            []() -> const board_ai::viz::VisibilitySchema& { return ArknovaState::schema(); });

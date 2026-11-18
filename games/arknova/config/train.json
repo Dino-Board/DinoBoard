@@ -34,6 +34,10 @@
       "loss_weight": 0.5,
       "scale": 30.0
     },
+    "score_breakdown_head": {
+      "loss_weight": 0.25,
+      "scale": 30.0
+    },
     "ema": {
       "decay": 0.99
     },

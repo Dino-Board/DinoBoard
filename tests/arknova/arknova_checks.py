@@ -7,7 +7,9 @@ ground truth session), the card table / map parsed from the sources (arknova_ref
 from __future__ import annotations
 
 import collections
+import itertools
 import json
+import math
 
 import numpy as np
 
@@ -336,6 +338,55 @@ def check_state(ck: Checker, toks, me, core, own, state_dict, tracker, legal):
         ck.eq(tok, "ignore_conditions", rs["ignore_conditions"])
         ck.eq(tok, "sponsor_discount", rs["sponsor_discount"])
         ck.eq(tok, "group_left", rs["group_left"] / 3)
+        # Points not yet on the tracks, from the printed card texts.
+        sponsors = [table[idx[cid]] for cid in pl["zoo_cards"] if table[idx[cid]]["type"] == "sponsor"]
+        ends = [sponsor_endgame(pl, c, core["map"]) for c in sponsors]
+        card_cp, card_appeal = sum(cp for cp, _ in ends), sum(a for _, a in ends)
+        one_to_go = not core["final_card_discarded"]
+        if p == me:
+            ys = [final_card_points(core, p, table[c]["id"]) for c in own[p]["final"]]
+            final_cp = sum(ys) - (min(ys) if one_to_go and len(ys) >= 2 else 0)
+        else:
+            ys = [final_card_points(core, p, table[c]["id"]) for c in final_scoring_cards() if c not in known]
+            held = len(own[p]["final"])
+            if not held or not ys:
+                final_cp = 0
+            elif one_to_go and held >= 2 and len(ys) >= 2:
+                pairs = list(itertools.combinations(ys, 2))
+                final_cp = sum(max(a, b) for a, b in pairs) / len(pairs) + (held - 2) * sum(ys) / len(ys)
+            else:
+                final_cp = held * sum(ys) / len(ys)
+        ck.eq(tok, "endgame_final", final_cp / 4)
+        ck.eq(tok, "endgame_cards", card_cp / 4)
+        ck.eq(tok, "endgame_appeal", card_appeal / 10)
+        end_appeal = pl["appeal"] + math.floor(card_appeal + 0.5)
+        end_conservation = pl["conservation"] + math.floor(final_cp + card_cp + 0.5)
+        vp = pl["appeal"] - target_appeal(pl["conservation"])
+        ck.eq(tok, "projected_vp", (end_appeal - target_appeal(end_conservation)) / 30)
+        # best_project / best_animals search one action; here what they must satisfy: a project level
+        # gives 1-5 conservation, nothing without a free worker, and best_turn_vp is at least what
+        # either would add (the animals' own conservation only adds to it).
+        project, animals = round(tok["best_project"] * 5), round(tok["best_animals"] * 15)
+        assert 0 <= project <= 5 and animals >= 0, f"player {p}: best_project {project}, best_animals {animals}"
+        if pl["workers"] - sum(out) == 0:
+            assert project == 0, f"player {p}: a project with no worker free"
+        gain = max(pl["appeal"] - target_appeal(pl["conservation"] + project),
+                   pl["appeal"] + animals - target_appeal(pl["conservation"])) - vp
+        assert tok["best_turn_vp"] * 15 >= gain - 1e-4, f"player {p}: best_turn_vp below {gain}"
+        for name in ("best_project", "best_animals", "best_turn_vp"):
+            ck.mark("player", name, tok[name])
+        ck.eq(tok, "conservation_to_bonus",
+              next((t - pl["conservation"] for t in (2, 5, 8, 10) if pl["conservation"] < t), 0) / 5)
+        reputation_top = 15 if "cards" in pl["upgraded"] else 9
+        ck.eq(tok, "reputation_to_bonus",
+              next((r - pl["reputation"] for r in (5, 8, 10, 11, 12, 13, 14, 15)
+                    if pl["reputation"] < r <= reputation_top), 0) / 5)
+        ck.eq(tok, "reputation_capped", "cards" not in pl["upgraded"] and pl["reputation"] >= 9)
+        tokens = sum(effect[1] for i, (effect, repeats) in enumerate(zm["tokens"])
+                     if repeats and not pl["tokens"][i] and effect and effect[0] == "money")
+        income = appeal_income(pl["appeal"]) + sum(kiosk_income_of(pl["buildings"], k) for k in kiosks) + tokens + \
+            sum(sponsor_income(pl, c, True)["money"] for c in sponsors) + rs["map_income"]
+        ck.eq(tok, "break_income", income / 40)
 
     # ---- action cards ----
     for i, tok in enumerate(by_type["action_card"]):
@@ -879,8 +930,11 @@ def check_perspectives(ck, episode, sample, me, core, own, state, legal):
             if name not in skip:
                 assert np.array_equal(a[name], b[name]), f"{a.type}.{name} differs between the two views"
 
+    # What a player holds back depends on who looks: its own Final Scoring cards and hand are known
+    # to it, the opponent sees an expectation and the hand cards it has seen.
+    held_back = {"endgame_final", "projected_vp", "best_project", "best_animals", "best_turn_vp"}
     for a, b in zip(group(mine, "player"), reversed(group(other, "player"))):
-        same(a, b, {"me", "opponent"})
+        same(a, b, {"me", "opponent"} | held_back)
     # An opponent hand card I saw says what it would do for the opponent: the same as that card in
     # the opponent's own view of its hand.
     held_there = {t.card(): t for t in other if t.type in ("card", "project") and t["my_hand"] == 1.0}

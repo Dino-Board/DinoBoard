@@ -685,6 +685,29 @@ void endgame_effect(State& s, CardIdx c, int p) {
   }
 }
 
+std::pair<int, int> endgame_yield(State& scratch, CardIdx c, int p) {
+  Player& pl = scratch.players[p];
+  const auto appeal = pl.appeal, conservation = pl.conservation;
+  endgame_effect(scratch, c, p);
+  const std::pair<int, int> out{pl.appeal - appeal, pl.conservation - conservation};
+  pl.appeal = appeal;
+  pl.conservation = conservation;
+  return out;
+}
+
+int break_income(const State& s, int p) {
+  State x = s;
+  Player& pl = x.players[p];
+  const int before = pl.money;
+  pl.money += appeal_income(pl.appeal) + pl.zoo.kiosk_income();
+  token_income(x, p);
+  for (int i = pl.n_zoo_cards - 1; i >= 0; --i) {
+    if (has_income(pl.zoo_cards[i])) income_effect(x, pl.zoo_cards[i], p);
+  }
+  map_break_income(x, p);
+  return pl.money - before;
+}
+
 // ---- frames: Waza Special Assignment, Okapi Stable ------------------------------------------------
 
 namespace {
