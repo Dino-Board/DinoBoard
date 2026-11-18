@@ -21,6 +21,11 @@
       "num_players": 2,
       "feature_dim": 0,
       "action_space": 1614
+    },
+    "carcassonne_rtok": {
+      "num_players": 2,
+      "feature_dim": 0,
+      "action_space": 1614
     }
   }
 }

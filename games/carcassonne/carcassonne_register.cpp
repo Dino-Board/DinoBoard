@@ -215,10 +215,11 @@ AnyMap describe_carcassonne(ActionId action) {
   return m;
 }
 
-enum class EncoderKind { kFlat, kTokens };
+enum class EncoderKind { kFlat, kTokens, kRegionTokens };
 
 // kTokens selects CarcassonneTokenEncoder (transformer) over the flat history
-// encoder (MLP). No heuristic here reads an encoder.
+// encoder (MLP); kRegionTokens the same with tokens for the scoring regions.
+// No heuristic here reads an encoder.
 board_ai::GameBundle make_carcassonne(const std::string& game_id, std::uint64_t seed,
                                       EncoderKind encoder) {
   board_ai::GameBundle b;
@@ -228,8 +229,8 @@ board_ai::GameBundle make_carcassonne(const std::string& game_id, std::uint64_t 
   b.state = std::move(s);
   b.rules = std::make_unique<CarcassonneRules>();
   b.value_model = std::make_unique<board_ai::DefaultStateValueModel>();
-  if (encoder == EncoderKind::kTokens) {
-    b.encoder = std::make_unique<CarcassonneTokenEncoder>();
+  if (encoder == EncoderKind::kTokens || encoder == EncoderKind::kRegionTokens) {
+    b.encoder = std::make_unique<CarcassonneTokenEncoder>(encoder == EncoderKind::kRegionTokens);
   } else {
     b.encoder = std::make_unique<CarcassonneFeatureEncoder>();
   }
@@ -309,6 +310,9 @@ board_ai::GameRegistrar reg("carcassonne", [](std::uint64_t seed) {
 });
 board_ai::GameRegistrar reg_tok("carcassonne_tok", [](std::uint64_t seed) {
   return make_carcassonne("carcassonne_tok", seed, EncoderKind::kTokens);
+});
+board_ai::GameRegistrar reg_rtok("carcassonne_rtok", [](std::uint64_t seed) {
+  return make_carcassonne("carcassonne_rtok", seed, EncoderKind::kRegionTokens);
 });
 
 }  // namespace

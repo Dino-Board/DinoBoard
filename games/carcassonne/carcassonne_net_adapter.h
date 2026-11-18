@@ -36,9 +36,15 @@ class CarcassonneFeatureEncoder final : public IFeatureEncoder {
 // current-tile token score the 13 meeple positions; "no meeple" is global.
 // Tokens are first written into fixed slots (kNumTokens x kTokenDim, absent
 // ones all-zero), then the valid ones are compacted into the output.
+//
+// With `regions` (`carcassonne_rtok`) the scoring units get tokens of their
+// own: one per city or road not yet complete, per farm and per cloister with
+// an empty neighbour, without position, anchor or entity, after the others.
+// The global and frontier tokens then carry kGlobalExtra / kFrontierExtra
+// more features after their own (the tables in the .cpp).
 class CarcassonneTokenEncoder final : public IFeatureEncoder {
  public:
-  enum TokenType { kGlobalToken = 0, kCurrentToken, kTileToken, kFrontierToken, kTokenTypeCount };
+  enum TokenType { kGlobalToken = 0, kCurrentToken, kTileToken, kFrontierToken, kRegionToken };
   // Heads [0, 4): place at rotation r. Heads [4, 17): meeple position p.
   static constexpr int kMeepleHeadBase = 4;
   static constexpr int kPointerHeadCount = kMeepleHeadBase + kMeeplePositions;
@@ -64,7 +70,12 @@ class CarcassonneTokenEncoder final : public IFeatureEncoder {
   static constexpr int kVarTokenDim = kVarHeader + kTokenFeatures;
   static constexpr int kCurrentAnchor = kBoardCells + 1;
 
-  CarcassonneTokenEncoder();
+  static constexpr int kGlobalExtra = 12;
+  static constexpr int kFrontierExtra = 17;
+  static constexpr int kRegionFeatures = 30;
+  static constexpr int kRegionTokenFeatures = kFrontierFeatures + kFrontierExtra;
+
+  explicit CarcassonneTokenEncoder(bool regions = false);
 
   int action_space() const override { return kActionSpace; }
   int feature_dim() const override { return 0; }
@@ -89,6 +100,8 @@ class CarcassonneTokenEncoder final : public IFeatureEncoder {
   void encode_slots(const IGameState& masked_state, int perspective_player, std::vector<float>* out) const;
   void compact(const IGameState& masked_state, const float* slots, std::vector<float>* out) const;
 
+  bool regions_;
+  int var_dim_;  // kVarHeader + the widest token's features
   TokenLayout layout_;
 };
 

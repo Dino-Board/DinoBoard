@@ -163,21 +163,32 @@ int lowest_bit(unsigned mask) {
   throw std::runtime_error("carcassonne token encoder: empty group mask");
 }
 
-// A connected city or road.
+// A connected city or road. open_cells: the empty cells its open edges face
+// (sorted, without repeats).
 struct Feature {
   int tiles = 0;
   int open = 0;
   int shields = 0;
   bool off_board = false;
   std::array<int, kPlayers> meeples{};
+  std::vector<int> open_cells;
   bool complete() const { return open == 0 && !off_board; }
 };
 
+// A connected farm. cities: the ids of the cities it touches; open_cells: the
+// empty cells across its half-edges (both sorted, without repeats).
 struct Farm {
   std::array<int, kPlayers> meeples{};
   int complete_cities = 0;
   int open_cities = 0;
+  std::vector<int> cities;
+  std::vector<int> open_cells;
 };
+
+void sort_unique(std::vector<int>* v) {
+  std::sort(v->begin(), v->end());
+  v->erase(std::unique(v->begin(), v->end()), v->end());
+}
 
 // Connected components of every city / road / farm on the board, keyed by
 // node = cell * 4 + group index on that cell's tile.
@@ -234,6 +245,7 @@ void label_features(const CarcassonneState& s, const std::vector<int>& cells, bo
           const int ncell = s.index(nr, nc);
           if (s.board_tile[static_cast<size_t>(ncell)] == kNoTile) {
             f.open += 1;
+            f.open_cells.push_back(ncell);
             continue;
           }
           const RotTile& nrt = rot_at(s, ncell);
@@ -254,7 +266,7 @@ void label_features(const CarcassonneState& s, const std::vector<int>& cells, bo
 void label_farms(const CarcassonneState& s, BoardAnalysis* b) {
   b->farm.fill(-1);
   std::vector<int> stack;
-  std::vector<int> adjacent_cities;
+  std::vector<int> adjacent_cities, open_cells;
   for (int cell : b->cells) {
     const RotTile& rt = rot_at(s, cell);
     for (int g = 0; g < rt.farm_groups; ++g) {
@@ -262,6 +274,7 @@ void label_farms(const CarcassonneState& s, BoardAnalysis* b) {
       const auto id = static_cast<std::int16_t>(b->farms.size());
       b->farms.emplace_back();
       adjacent_cities.clear();
+      open_cells.clear();
       b->farm[static_cast<size_t>(cell * 4 + g)] = id;
       stack.push_back(cell * 4 + g);
       while (!stack.empty()) {
@@ -282,7 +295,10 @@ void label_farms(const CarcassonneState& s, BoardAnalysis* b) {
           const int nc = c % kBoardCols + kDc[static_cast<size_t>(edge)];
           if (!s.in_bounds(nr, nc)) continue;
           const int ncell = s.index(nr, nc);
-          if (s.board_tile[static_cast<size_t>(ncell)] == kNoTile) continue;
+          if (s.board_tile[static_cast<size_t>(ncell)] == kNoTile) {
+            open_cells.push_back(ncell);
+            continue;
+          }
           const int ng = rot_at(s, ncell).farm_of_half[static_cast<size_t>(opposite_farmer_side(h))];
           if (ng < 0) continue;
           auto& nl = b->farm[static_cast<size_t>(ncell * 4 + ng)];
@@ -292,8 +308,8 @@ void label_farms(const CarcassonneState& s, BoardAnalysis* b) {
           }
         }
       }
-      std::sort(adjacent_cities.begin(), adjacent_cities.end());
-      adjacent_cities.erase(std::unique(adjacent_cities.begin(), adjacent_cities.end()), adjacent_cities.end());
+      sort_unique(&adjacent_cities);
+      sort_unique(&open_cells);
       Farm& farm = b->farms[static_cast<size_t>(id)];
       for (int cid : adjacent_cities) {
         if (b->cities[static_cast<size_t>(cid)].complete()) {
@@ -302,6 +318,8 @@ void label_farms(const CarcassonneState& s, BoardAnalysis* b) {
           farm.open_cities += 1;
         }
       }
+      farm.cities = adjacent_cities;
+      farm.open_cells = open_cells;
     }
   }
 }
@@ -323,6 +341,8 @@ BoardAnalysis analyze(const CarcassonneState& s) {
   }
   label_features(s, b.cells, /*city=*/true, &b.city, &b.cities);
   label_features(s, b.cells, /*city=*/false, &b.road, &b.roads);
+  for (Feature& f : b.cities) sort_unique(&f.open_cells);
+  for (Feature& f : b.roads) sort_unique(&f.open_cells);
   label_farms(s, &b);
 
   for (int cell : b.cells) {
@@ -491,16 +511,291 @@ const PositionSlots& lone_tile_slots(int tile) {
   return table[static_cast<size_t>(tile)];
 }
 
+// ---- carcassonne_rtok: scoring regions ----
+//
+// Region token (kRegionFeatures, after the header):
+constexpr int kRgKind = 0;         // 4: city, road, farm, cloister
+constexpr int kRgTiles = 4;        // tiles / 10
+constexpr int kRgOpen = 5;         // open edges / 10 (city, road)
+constexpr int kRgShields = 6;      // shields / 5
+constexpr int kRgMeeples = 7;      // 2: my / the opponent's meeples / 3
+constexpr int kRgLead = 9;         // 3: I lead, they lead, tied with meeples
+constexpr int kRgNow = 12;         // points if the game ended now / 20
+constexpr int kRgDone = 13;        // points once complete / 20 (farm: every adjacent city complete)
+constexpr int kRgCells = 14;       // empty cells it can grow into / 6
+constexpr int kRgDead = 15;        // of those, cells no tile left in the bag fits / 3
+constexpr int kRgFitMin = 16;      // min / mean over those cells of the share of the bag that fits
+constexpr int kRgFitMean = 17;
+constexpr int kRgContacts = 18;    // 3: other regions of its kind at those cells, by leader
+                                   //    (me, them, nobody; a tie counts for both) / 3
+constexpr int kRgFarmCities = 21;  // 2 (farm): complete / incomplete adjacent cities / 5
+constexpr int kRgFarmLead = 23;    // 2 (farm): incomplete adjacent cities led by me / them / 4
+constexpr int kRgCityFarms = 25;   // 3 (city): adjacent farms by leader / 3
+constexpr int kRgFilled = 28;      // (cloister) occupied neighbours / 8
+constexpr int kRgLastCell = 29;    // (city, road) one empty cell left
+static_assert(kRgLastCell + 1 == Enc::kRegionFeatures);
+// Frontier token, after its own features:
+constexpr int kFxRegions = 0;      // 9: city / road / farm regions open here, by leader / 4
+constexpr int kFxCloses = 9;       // 2: cities and roads this is the last empty cell of, led by me / them / 2
+constexpr int kFxCloisters = 11;   // 2: cloisters around with my / their monk / 2
+constexpr int kFxFitTypes = 13;    // tile types left in the bag that fit / 24
+constexpr int kFxScarce = 14;      // one or two bag tiles fit
+constexpr int kFxBigCity = 15;     // largest city open here, tiles / 10
+constexpr int kFxContested = 16;   // a kind with regions led by each player here
+static_assert(kFxContested + 1 == Enc::kFrontierExtra);
+// Global token, after its own features:
+constexpr int kGxMeeples = 0;      // 8: my then their meeples on cities / roads / farms / cloisters / 4
+constexpr int kGxFrontier = 8;     // frontier cells / 40
+constexpr int kGxDead = 9;         // frontier cells no bag tile fits / 10
+constexpr int kGxScarce = 10;      // frontier cells one or two bag tiles fit / 10
+constexpr int kGxPlaced = 11;      // tiles on the board / 72
+static_assert(kGxPlaced + 1 == Enc::kGlobalExtra);
+
+// Who leads a region: bit 0 me, bit 1 them (both on a tie), bit 2 nobody.
+unsigned leaders(const std::array<int, kPlayers>& m, int me) {
+  const int mine = m[static_cast<size_t>(me)], theirs = m[static_cast<size_t>(1 - me)];
+  if (mine == 0 && theirs == 0) return 4u;
+  return (mine >= theirs ? 1u : 0u) | (theirs >= mine ? 2u : 0u);
+}
+
+struct Region {
+  int kind = 0;  // 0 city, 1 road, 2 farm, 3 cloister
+  int id = 0;    // into b.cities / b.roads / b.farms; the cell for a cloister
+  std::array<int, kPlayers> meeples{};
+  std::vector<int> cells;  // frontier cells it can grow into
+};
+
+// Adds the region tokens to the tokens out[first..] and the extra features of
+// the global and frontier tokens among them.
+void add_regions(const CarcassonneState& s, int me, std::size_t first, int dim, std::vector<float>* out) {
+  const BoardAnalysis b = analyze(s);
+  int bag_total = 0;
+  for (int c : s.bag_counts) bag_total += c;
+
+  // Frontier cells: how much of the bag fits each.
+  std::array<int, kBoardCells> fit_count{}, fit_types{};
+  std::array<bool, kBoardCells> frontier{};
+  int n_frontier = 0, n_dead = 0, n_scarce = 0;
+  for (int cell = 0; cell < kBoardCells; ++cell) {
+    if (s.board_tile[static_cast<size_t>(cell)] != kNoTile) continue;
+    const auto need = edge_needs(s, cell);
+    if (std::all_of(need.begin(), need.end(), [](int n) { return n < 0; })) continue;
+    frontier[static_cast<size_t>(cell)] = true;
+    for (int type = 0; type < kTileTypes; ++type) {
+      const int count = s.bag_counts[static_cast<size_t>(type)];
+      if (count == 0) continue;
+      for (int rot = 0; rot < 4; ++rot) {
+        if (!fits(need, type, rot)) continue;
+        fit_count[static_cast<size_t>(cell)] += count;
+        fit_types[static_cast<size_t>(cell)] += 1;
+        break;
+      }
+    }
+    const int k = fit_count[static_cast<size_t>(cell)];
+    ++n_frontier;
+    n_dead += k == 0;
+    n_scarce += k > 0 && k <= 2;
+  }
+  auto share = [&](int cell) {
+    return bag_total > 0 ? static_cast<float>(fit_count[static_cast<size_t>(cell)]) / static_cast<float>(bag_total)
+                         : 0.0f;
+  };
+
+  std::vector<Region> regions;
+  for (std::size_t i = 0; i < b.cities.size(); ++i) {
+    if (b.cities[i].complete()) continue;
+    regions.push_back({0, static_cast<int>(i), b.cities[i].meeples, b.cities[i].open_cells});
+  }
+  for (std::size_t i = 0; i < b.roads.size(); ++i) {
+    if (b.roads[i].complete()) continue;
+    regions.push_back({1, static_cast<int>(i), b.roads[i].meeples, b.roads[i].open_cells});
+  }
+  for (std::size_t i = 0; i < b.farms.size(); ++i) {
+    regions.push_back({2, static_cast<int>(i), b.farms[i].meeples, b.farms[i].open_cells});
+  }
+  std::array<int, kBoardCells> filled{};
+  for (int cell : b.cells) {
+    if (!tile_def(s.board_tile[static_cast<size_t>(cell)]).chapel) continue;
+    Region r{3, cell, {}, {}};
+    int empty = 0;
+    for (int dr = -1; dr <= 1; ++dr) {
+      for (int dc = -1; dc <= 1; ++dc) {
+        const int rr = cell / kBoardCols + dr, cc = cell % kBoardCols + dc;
+        if ((dr == 0 && dc == 0) || !s.in_bounds(rr, cc)) continue;
+        const int n = s.index(rr, cc);
+        if (s.board_tile[static_cast<size_t>(n)] != kNoTile) {
+          filled[static_cast<size_t>(cell)] += 1;
+          continue;
+        }
+        ++empty;
+        if (frontier[static_cast<size_t>(n)]) r.cells.push_back(n);
+      }
+    }
+    if (empty == 0) continue;
+    const int owner = s.board_meeple_owner[static_cast<size_t>(cell)];
+    if (owner >= 0 && s.board_meeple_pos[static_cast<size_t>(cell)] == kMeepleCenterPos) {
+      r.meeples[static_cast<size_t>(owner)] = 1;
+    }
+    regions.push_back(std::move(r));
+  }
+  std::vector<std::vector<int>> at_cell(kBoardCells);  // region indices open at each cell
+  for (std::size_t i = 0; i < regions.size(); ++i) {
+    for (int c : regions[i].cells) at_cell[static_cast<size_t>(c)].push_back(static_cast<int>(i));
+  }
+
+  auto token = [&](std::size_t i) { return out->data() + first + i * static_cast<std::size_t>(dim); };
+  const std::size_t n_tokens = (out->size() - first) / static_cast<std::size_t>(dim);
+  for (std::size_t i = 0; i < n_tokens; ++i) {
+    float* v = token(i);
+    float* f = v + Enc::kVarHeader;
+    const int type = static_cast<int>(v[3]);
+    if (type == Enc::kGlobalToken) {
+      float* g = f + Enc::kGlobalFeatures;
+      for (int cell : b.cells) {
+        const int owner = s.board_meeple_owner[static_cast<size_t>(cell)];
+        if (owner < 0) continue;
+        const int pos = s.board_meeple_pos[static_cast<size_t>(cell)];
+        int kind = 3;
+        if (pos >= kSides && pos < kSides + kFarmSides) kind = 2;
+        else if (pos >= 0 && pos < kSides) kind = rot_at(s, cell).edge[static_cast<size_t>(pos)] == kCity ? 0 : 1;
+        g[kGxMeeples + (owner == me ? 0 : 4) + kind] += 0.25f;
+      }
+      g[kGxFrontier] = static_cast<float>(n_frontier) / 40.0f;
+      g[kGxDead] = static_cast<float>(n_dead) / 10.0f;
+      g[kGxScarce] = static_cast<float>(n_scarce) / 10.0f;
+      g[kGxPlaced] = static_cast<float>(b.cells.size()) / 72.0f;
+    } else if (type == Enc::kFrontierToken) {
+      const int cell = static_cast<int>(v[2]) - 1;
+      float* x = f + Enc::kFrontierFeatures;
+      std::array<unsigned, 3> seen{};
+      int big = 0;
+      for (int ri : at_cell[static_cast<size_t>(cell)]) {
+        const Region& r = regions[static_cast<size_t>(ri)];
+        const unsigned who = leaders(r.meeples, me);
+        if (r.kind < 3) {
+          for (int k = 0; k < 3; ++k) {
+            if (who >> k & 1u) x[kFxRegions + 3 * r.kind + k] += 0.25f;
+          }
+          seen[static_cast<size_t>(r.kind)] |= who;
+        }
+        if (r.kind == 0) big = std::max(big, b.cities[static_cast<size_t>(r.id)].tiles);
+        if (r.kind <= 1 && r.cells.size() == 1) {
+          if (who & 1u) x[kFxCloses] += 0.5f;
+          if (who & 2u) x[kFxCloses + 1] += 0.5f;
+        }
+        if (r.kind == 3) {
+          if (who & 1u) x[kFxCloisters] += 0.5f;
+          if (who & 2u) x[kFxCloisters + 1] += 0.5f;
+        }
+      }
+      const int k = fit_count[static_cast<size_t>(cell)];
+      x[kFxFitTypes] = static_cast<float>(fit_types[static_cast<size_t>(cell)]) / 24.0f;
+      x[kFxScarce] = k > 0 && k <= 2 ? 1.0f : 0.0f;
+      x[kFxBigCity] = static_cast<float>(big) / 10.0f;
+      x[kFxContested] = std::any_of(seen.begin(), seen.end(), [](unsigned w) { return (w & 3u) == 3u; }) ? 1.0f : 0.0f;
+    }
+  }
+
+  for (std::size_t i = 0; i < regions.size(); ++i) {
+    const Region& r = regions[i];
+    const std::size_t base = out->size();
+    out->resize(base + static_cast<std::size_t>(dim), 0.0f);
+    float* v = out->data() + base;
+    float* f = v + Enc::kVarHeader;
+    v[0] = 1.0f;
+    v[3] = Enc::kRegionToken;
+    f[kRgKind + r.kind] = 1.0f;
+    const int mine = r.meeples[static_cast<size_t>(me)], theirs = r.meeples[static_cast<size_t>(1 - me)];
+    f[kRgMeeples] = static_cast<float>(mine) / 3.0f;
+    f[kRgMeeples + 1] = static_cast<float>(theirs) / 3.0f;
+    f[kRgLead] = mine > theirs ? 1.0f : 0.0f;
+    f[kRgLead + 1] = theirs > mine ? 1.0f : 0.0f;
+    f[kRgLead + 2] = mine == theirs && mine > 0 ? 1.0f : 0.0f;
+    int now = 0, done = 0;
+    if (r.kind <= 1) {
+      const Feature& ft = r.kind == 0 ? b.cities[static_cast<size_t>(r.id)] : b.roads[static_cast<size_t>(r.id)];
+      f[kRgTiles] = static_cast<float>(ft.tiles) / 10.0f;
+      f[kRgOpen] = static_cast<float>(ft.open) / 10.0f;
+      f[kRgShields] = static_cast<float>(ft.shields) / 5.0f;
+      now = ft.tiles + ft.shields;
+      done = r.kind == 0 ? 2 * (ft.tiles + ft.shields) : ft.tiles;
+      f[kRgLastCell] = r.cells.size() == 1 ? 1.0f : 0.0f;
+    } else if (r.kind == 2) {
+      const Farm& fm = b.farms[static_cast<size_t>(r.id)];
+      now = 3 * fm.complete_cities;
+      done = 3 * (fm.complete_cities + fm.open_cities);
+      f[kRgFarmCities] = static_cast<float>(fm.complete_cities) / 5.0f;
+      f[kRgFarmCities + 1] = static_cast<float>(fm.open_cities) / 5.0f;
+      for (int cid : fm.cities) {
+        const Feature& city = b.cities[static_cast<size_t>(cid)];
+        if (city.complete()) continue;
+        const unsigned who = leaders(city.meeples, me);
+        if (who & 1u) f[kRgFarmLead] += 0.25f;
+        if (who & 2u) f[kRgFarmLead + 1] += 0.25f;
+      }
+    } else {
+      const int occ = filled[static_cast<size_t>(r.id)];
+      f[kRgTiles] = 0.1f;
+      f[kRgFilled] = static_cast<float>(occ) / 8.0f;
+      now = 1 + occ;
+      done = 9;
+    }
+    if (r.kind == 0) {
+      for (const Farm& fm : b.farms) {
+        if (!std::binary_search(fm.cities.begin(), fm.cities.end(), r.id)) continue;
+        const unsigned who = leaders(fm.meeples, me);
+        for (int k = 0; k < 3; ++k) {
+          if (who >> k & 1u) f[kRgCityFarms + k] += 1.0f / 3.0f;
+        }
+      }
+    }
+    f[kRgNow] = static_cast<float>(now) / 20.0f;
+    f[kRgDone] = static_cast<float>(done) / 20.0f;
+    f[kRgCells] = static_cast<float>(r.cells.size()) / 6.0f;
+    if (!r.cells.empty()) {
+      float lo = 1.0f;
+      double sum = 0.0;  // in double: the same in any cell order (board turns)
+      int dead = 0;
+      for (int c : r.cells) {
+        lo = std::min(lo, share(c));
+        sum += share(c);
+        dead += fit_count[static_cast<size_t>(c)] == 0;
+      }
+      f[kRgDead] = static_cast<float>(dead) / 3.0f;
+      f[kRgFitMin] = lo;
+      f[kRgFitMean] = static_cast<float>(sum / static_cast<double>(r.cells.size()));
+    }
+    if (r.kind < 3) {
+      std::vector<int> others;
+      for (int c : r.cells) {
+        for (int oi : at_cell[static_cast<size_t>(c)]) {
+          if (oi != static_cast<int>(i) && regions[static_cast<size_t>(oi)].kind == r.kind) others.push_back(oi);
+        }
+      }
+      sort_unique(&others);
+      for (int oi : others) {
+        const unsigned who = leaders(regions[static_cast<size_t>(oi)].meeples, me);
+        for (int k = 0; k < 3; ++k) {
+          if (who >> k & 1u) f[kRgContacts + k] += 1.0f / 3.0f;
+        }
+      }
+    }
+  }
+}
+
 }  // namespace
 
-CarcassonneTokenEncoder::CarcassonneTokenEncoder() {
+CarcassonneTokenEncoder::CarcassonneTokenEncoder(bool regions)
+    : regions_(regions), var_dim_(regions ? kVarHeader + kRegionTokenFeatures : kVarTokenDim) {
+  static_assert(kTokenFeatures <= kRegionTokenFeatures && kGlobalFeatures + kGlobalExtra <= kRegionTokenFeatures &&
+                kRegionFeatures <= kRegionTokenFeatures);
   static_assert(kGlobalFeatures <= kTokenFeatures && kTileFeatures <= kTokenFeatures &&
                 kFrontierFeatures <= kTokenFeatures);
   static_assert(kMeepleCenterAction - kMeepleSideActionBase + 1 == kMeeplePositions);
   layout_.variable_tokens = true;
   layout_.token_positions = true;
-  layout_.token_dim = kVarTokenDim;
-  layout_.num_token_types = kTokenTypeCount;
+  layout_.token_dim = var_dim_;
+  layout_.num_token_types = regions ? kRegionToken + 1 : kRegionToken;
   layout_.num_entity_ids = 1 + kTileTypes;
   layout_.num_pointer_heads = kPointerHeadCount;
   layout_.action_token.assign(kActionSpace, -1);
@@ -561,7 +856,11 @@ void CarcassonneTokenEncoder::encode_features(const IGameState& masked_state, in
   thread_local std::vector<float> slots;
   slots.clear();
   encode_slots(masked_state, perspective_player, &slots);
+  const std::size_t first = out->size();
   compact(masked_state, slots.data(), out);
+  if (regions_) {
+    add_regions(checked_cast<CarcassonneState>(masked_state), perspective_player, first, var_dim_, out);
+  }
 }
 
 void CarcassonneTokenEncoder::compact(const IGameState& masked_state, const float* slots,
@@ -572,7 +871,7 @@ void CarcassonneTokenEncoder::compact(const IGameState& masked_state, const floa
     const float* t = slots + static_cast<std::size_t>(i) * kTokenDim;
     if (t[0] == 0.0f) continue;
     const std::size_t base = out->size();
-    out->resize(base + static_cast<std::size_t>(kVarTokenDim), 0.0f);
+    out->resize(base + static_cast<std::size_t>(var_dim_), 0.0f);
     float* v = out->data() + base;
     std::copy(t + 3, t + 3 + kTokenFeatures, v + kVarHeader);
     float* f = v + kVarHeader;
@@ -883,12 +1182,13 @@ void turn_token_cell(float* token, int cell, int g, bool anchored) {
 void CarcassonneTokenEncoder::apply_sample_symmetry(int g, float* features, std::size_t feature_len,
                                                     float* const* action_rows, int num_action_rows) const {
   if (g < 0 || g >= kBoardSymmetries) throw std::invalid_argument("CarcassonneTokenEncoder: symmetry out of range");
-  if (features == nullptr || feature_len == 0 || feature_len % kVarTokenDim != 0) {
+  const auto dim = static_cast<std::size_t>(var_dim_);
+  if (features == nullptr || feature_len == 0 || feature_len % dim != 0) {
     throw std::invalid_argument("CarcassonneTokenEncoder: features are not a whole token encoding");
   }
   if (g == 0) return;
-  const int n = static_cast<int>(feature_len / kVarTokenDim);
-  auto token = [&](int i) { return features + static_cast<std::size_t>(i) * kVarTokenDim; };
+  const int n = static_cast<int>(feature_len / dim);
+  auto token = [&](int i) { return features + static_cast<std::size_t>(i) * dim; };
 
   int current = -1;
   for (int i = 0; i < n; ++i) {
