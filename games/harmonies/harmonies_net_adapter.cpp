@@ -372,6 +372,82 @@ CardFit<Side> fit_card(const std::array<std::int8_t, Board<Side>::kHexes>& tt,
   return f;
 }
 
+// The most animal points a player's held cards can score right now, and how many cubes of each
+// hand slot that takes. Every cube needs its own unoccupied landing hex; the rest of a habitat
+// may be shared and a cube changes no token, so k_i cubes per card can all be placed iff every
+// set of cards has at least as many landing hexes between them as cubes (Hall's theorem).
+struct ReadyPlan {
+  int points = 0;
+  int cubes = 0;
+  std::array<int, kHandSize> per_slot{};
+};
+
+template <int Side>
+ReadyPlan ready_plan(const std::array<std::int8_t, Board<Side>::kHexes>& tt,
+                     const std::array<std::int8_t, Board<Side>::kHexes>& ha,
+                     const std::array<std::int8_t, kHandSize>& held,
+                     const std::array<std::int8_t, kHandSize>& initial,
+                     const std::array<std::int8_t, kHandSize>& remaining) {
+  static_assert(Board<Side>::kHexes <= 32, "landing hexes are a 32-bit mask");
+  std::array<std::uint32_t, kHandSize> spots{};
+  std::array<int, kHandSize> cap{}, placed{}, cid{};
+  for (int i = 0; i < kHandSize; ++i) {
+    cid[static_cast<std::size_t>(i)] = held[static_cast<std::size_t>(i)];
+    if (cid[static_cast<std::size_t>(i)] <= 0) continue;
+    const CardFit<Side> fit = fit_card<Side>(tt, ha, cid[static_cast<std::size_t>(i)]);
+    for (int h = 0; h < Board<Side>::kHexes; ++h) {
+      if (fit.ready_at[static_cast<std::size_t>(h)]) spots[static_cast<std::size_t>(i)] |= 1u << h;
+    }
+    placed[static_cast<std::size_t>(i)] = initial[static_cast<std::size_t>(i)] - remaining[static_cast<std::size_t>(i)];
+    cap[static_cast<std::size_t>(i)] = std::min<int>(remaining[static_cast<std::size_t>(i)],
+                                                     __builtin_popcount(spots[static_cast<std::size_t>(i)]));
+  }
+  auto gain = [&](int i, int k) {
+    if (k == 0) return 0;
+    const auto& card = kCards[cid[static_cast<std::size_t>(i)] - 1];
+    const int p = placed[static_cast<std::size_t>(i)];
+    return card.scores[p + k - 1] - (p > 0 ? card.scores[p - 1] : 0);
+  };
+  ReadyPlan best;
+  std::array<int, kHandSize> k{};
+  auto feasible = [&]() {
+    for (int sub = 1; sub < (1 << kHandSize); ++sub) {
+      std::uint32_t hexes = 0;
+      int need = 0;
+      for (int i = 0; i < kHandSize; ++i) {
+        if (!(sub >> i & 1)) continue;
+        hexes |= spots[static_cast<std::size_t>(i)];
+        need += k[static_cast<std::size_t>(i)];
+      }
+      if (need > __builtin_popcount(hexes)) return false;
+    }
+    return true;
+  };
+  auto search = [&](auto&& self, int i) -> void {
+    if (i == kHandSize) {
+      if (!feasible()) return;
+      int points = 0, cubes = 0;
+      for (int j = 0; j < kHandSize; ++j) {
+        points += gain(j, k[static_cast<std::size_t>(j)]);
+        cubes += k[static_cast<std::size_t>(j)];
+      }
+      if (points > best.points || (points == best.points && cubes > best.cubes)) {
+        best.points = points;
+        best.cubes = cubes;
+        best.per_slot = k;
+      }
+      return;
+    }
+    for (int n = 0; n <= cap[static_cast<std::size_t>(i)]; ++n) {
+      k[static_cast<std::size_t>(i)] = n;
+      self(self, i + 1);
+    }
+    k[static_cast<std::size_t>(i)] = 0;
+  };
+  search(search, 0);
+  return best;
+}
+
 // The card's fewest missing tokens after placing colour c (0-based) on hex x,
 // for every (x, c) with a legal stack and no animal on x; -1 elsewhere.
 // Placing tokens never revives a placement that is off, so only placements
@@ -747,6 +823,12 @@ void HarmoniesTokenEncoder<NPlayers, Side>::encode_features(const IGameState& ma
   }
 
   // ---- players ----
+  std::array<ReadyPlan, NPlayers> ready{};
+  for (int p = 0; p < NPlayers; ++p) {
+    const auto pi = static_cast<std::size_t>(p);
+    ready[pi] = ready_plan<Side>(s.tower_type[pi], s.has_animal[pi], s.held_cards[pi], s.cube_initial[pi],
+                                 s.cube_remaining[pi]);
+  }
   for (int k = 0; k < NPlayers; ++k) {
     const int p = (me + k) % NPlayers;
     const auto pi = static_cast<std::size_t>(p);
@@ -784,6 +866,18 @@ void HarmoniesTokenEncoder<NPlayers, Side>::encode_features(const IGameState& ma
     f[hpf::cubes_placed] = static_cast<float>(cubes) / static_cast<float>(kHexes);
     f[hpf::cards_held] = static_cast<float>(held) / 4.0f;
     f[hpf::card_points_open] = static_cast<float>(open) / 40.0f;
+    int best_other_potential = -kInf;
+    for (int o = 0; o < NPlayers; ++o) {
+      if (o == p) continue;
+      const auto oi = static_cast<std::size_t>(o);
+      best_other_potential = std::max(best_other_potential,
+                                      s.animal_scores[oi] + s.landscape_scores[oi] + ready[oi].points);
+    }
+    const int potential = total + ready[pi].points;
+    f[hpf::ready_points] = static_cast<float>(ready[pi].points) / 20.0f;
+    f[hpf::ready_cubes] = static_cast<float>(ready[pi].cubes) / 8.0f;
+    f[hpf::potential_total] = static_cast<float>(potential) / 100.0f;
+    f[hpf::potential_margin] = static_cast<float>(potential - best_other_potential) / 50.0f;
   }
 
   // ---- central-board slots ----
@@ -865,6 +959,7 @@ void HarmoniesTokenEncoder<NPlayers, Side>::encode_features(const IGameState& ma
       write_card(f, cid);
       const int remaining = s.cube_remaining[pi][static_cast<std::size_t>(i)];
       write_progress(f, cid, s.cube_initial[pi][static_cast<std::size_t>(i)] - remaining, remaining);
+      f[hkf::placeable] = static_cast<float>(ready[pi].per_slot[static_cast<std::size_t>(i)]) / 5.0f;
       if (k == 0) {
         const auto rank = static_cast<std::size_t>(std::find(my_slots.begin(), my_slots.end(), i) - my_slots.begin());
         f[hkf::rank + static_cast<int>(rank)] = 1.0f;

@@ -9,6 +9,7 @@ board instead of updating incrementally like the encoder).
 """
 from __future__ import annotations
 
+import itertools
 import json
 import math
 from functools import lru_cache
@@ -258,6 +259,39 @@ def clip_missing(m):
     return 1.0 if m == INF else min(m, 6) / 6
 
 
+def ready_plan(geo, tt, ha, pl):
+    """(points, cubes, cubes per hand slot): the most animal points the held cards can score now.
+    Cube counts in lexicographic order, the first best kept; a count is feasible if every cube
+    gets its own landing hex, tried by brute force."""
+    spots, caps, placed, cids = [], [], [], []
+    for cid, ci, cr in zip(pl["held_cards"], pl["cube_initial"], pl["cube_remaining"]):
+        if cid <= 0:
+            spots.append(set()), caps.append(0), placed.append(0), cids.append(0)
+            continue
+        s = {h for h, r in enumerate(fit_summary(geo, tt, ha, cid)["ready_at"]) if r}
+        spots.append(s), caps.append(min(cr, len(s))), placed.append(ci - cr), cids.append(cid)
+
+    def feasible(ks):
+        def go(i, used):
+            if i == len(ks):
+                return True
+            return any(go(i + 1, used | set(c)) for c in itertools.combinations(sorted(spots[i] - used), ks[i]))
+        return go(0, set())
+
+    def gain(i, k):
+        if k == 0:
+            return 0
+        sc, p = cards()[cids[i]]["scores"], placed[i]
+        return sc[p + k - 1] - (sc[p - 1] if p else 0)
+
+    best = (0, 0, [0] * len(caps))
+    for ks in itertools.product(*[range(c + 1) for c in caps]):
+        cand = (sum(gain(i, k) for i, k in enumerate(ks)), sum(ks))
+        if cand > best[:2] and feasible(ks):
+            best = (*cand, list(ks))
+    return best
+
+
 # ---- expected tokens ----
 
 def expected_tokens(d: dict, me: int) -> dict:
@@ -325,10 +359,13 @@ def expected_tokens(d: dict, me: int) -> dict:
                 out += sc[-1] - (sc[placed - 1] if placed else 0)
         return out
 
+    plans = {p: ready_plan(geo, tts[p], has[p], players[p]) for p in range(nplayers)}
     exp["player"] = []
     for k, p in enumerate(seats):
         pl = players[p]
         others = [players[o]["score"] for o in range(nplayers) if o != p]
+        potential = pl["score"] + plans[p][0]
+        others_potential = [players[o]["score"] + plans[o][0] for o in range(nplayers) if o != p]
         bd = landscape(geo, tts[p], side)
         assert sum(bd) == pl["landscape_score"], "landscape score disagrees with the reference scorer"
         exp["player"].append(dict(
@@ -339,7 +376,8 @@ def expected_tokens(d: dict, me: int) -> dict:
             buildings=bd[3] / 20, water=bd[4] / 20,
             islands=len(groups(geo, tts[p], lambda t: t != 1)[1]) / 8, spaces=pl["space_remaining"] / n,
             cubes_placed=sum(has[p]) / n, cards_held=sum(1 for c in pl["held_cards"] if c > 0) / 4,
-            card_points_open=points_of(pl) / 40))
+            card_points_open=points_of(pl) / 40, ready_points=plans[p][0] / 20, ready_cubes=plans[p][1] / 8,
+            potential_total=potential / 100, potential_margin=(potential - max(others_potential)) / 50))
 
     exp["slot"] = {}
     for s, counts in enumerate(d["central_board_counts"]):
@@ -382,12 +420,12 @@ def expected_tokens(d: dict, me: int) -> dict:
     exp["held"] = {}
     for k, p in enumerate(seats):
         pl = players[p]
-        for cid, ci, cr in zip(pl["held_cards"], pl["cube_initial"], pl["cube_remaining"]):
+        for slot, (cid, ci, cr) in enumerate(zip(pl["held_cards"], pl["cube_initial"], pl["cube_remaining"])):
             if cid <= 0:
                 continue
             f = dict(**card_static(cid), **progress(cid, ci - cr, cr),
                      **fit_feats(fit_summary(geo, tts[p], has[p], cid)),
-                     holder_seat=[1.0 if i == k else 0.0 for i in range(4)])
+                     holder_seat=[1.0 if i == k else 0.0 for i in range(4)], placeable=plans[p][2][slot] / 5)
             f["my_hand" if k == 0 else "opp_hand"] = 1.0
             if k == 0:
                 f["rank"] = [1.0 if i < len(held) and held[i][0] == cid else 0.0 for i in range(4)]

@@ -44,6 +44,10 @@
       "loss_weight": 0.5,
       "scale": 15.0
     },
+    "score_breakdown_head": {
+      "loss_weight": 0.25,
+      "scale": 20.0
+    },
     "opponent_policy_head": {
       "loss_weight": 0.15
     },

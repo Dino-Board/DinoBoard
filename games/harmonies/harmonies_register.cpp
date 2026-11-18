@@ -1,4 +1,5 @@
 #include <any>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <string>
@@ -206,6 +207,22 @@ board_ai::GameBundle make_harmonies(const std::string& game_id, std::uint64_t se
           "greedy_mcts_train", pv_eval_ptr, b.value_model.get(),
           hc_train.simulations, hc_train.c_puct, hc_train.world_cap,
           hc_train.leaf_batch_size));
+  // tok_v2_mcts: the harmonies_tok_v2 network with MCTS (guidance teacher and eval opponent of
+  // the token variant). Its first layer ignores the token features added after it was trained
+  // (games/harmonies/tools/zero_new_features.py), so it plays as it did. Needs the model file.
+  if constexpr (Side == kSideB && NPlayers == 2) {
+    if (encoder == EncoderKind::kTokens) {
+      const auto hc_net = board_ai::heuristic::load_mcts_pv_heuristic_config(
+          "harmonies", "tok_v2_mcts", /*require_model_path=*/true);
+      if (std::ifstream(hc_net.model_path).good()) {
+        b.heuristics.register_named(
+            "tok_v2_mcts",
+            board_ai::heuristic::MctsPVHeuristic::make_from_onnx(
+                "tok_v2_mcts", hc_net.model_path, b.encoder.get(), b.value_model.get(),
+                hc_net.simulations, hc_net.c_puct, hc_net.world_cap, hc_net.leaf_batch_size));
+      }
+    }
+  }
   b.final_score_extractor = [](const IGameState& state) -> std::vector<float> {
     const auto& s = board_ai::checked_cast<HarmoniesState<NPlayers, Side>>(state);
     std::vector<float> points(NPlayers);
@@ -213,6 +230,20 @@ board_ai::GameBundle make_harmonies(const std::string& game_id, std::uint64_t se
       points[static_cast<size_t>(p)] = static_cast<float>(s.animal_scores[p] + s.landscape_scores[p]);
     }
     return points;
+  };
+  // Per seat: trees, mountains, fields, buildings, water (river / islands), animals.
+  b.score_breakdown_categories = 6;
+  b.final_score_breakdown_extractor = [](const IGameState& state) -> std::vector<float> {
+    const auto& s = board_ai::checked_cast<HarmoniesState<NPlayers, Side>>(state);
+    std::vector<float> out;
+    out.reserve(static_cast<size_t>(NPlayers * 6));
+    for (int p = 0; p < NPlayers; ++p) {
+      const auto bd = HarmoniesRules<NPlayers, Side>::landscape_breakdown(s.tower_type[p]);
+      for (int v : {bd.trees, bd.mountains, bd.fields, bd.buildings, bd.water, s.animal_scores[p]}) {
+        out.push_back(static_cast<float>(v));
+      }
+    }
+    return out;
   };
   return b;
 }

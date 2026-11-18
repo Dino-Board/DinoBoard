@@ -85,7 +85,9 @@ HARMONIES_FOR_EACH_VARIANT(HARMONIES_EXTERN_HarmoniesBeliefTracker)
 // "Me" = the perspective (the player to move when the policy is queried).
 //   global     turn phase, my token pool, pouch, deck, end-of-game proximity
 //   player     one per player (me first, then the others in seat order):
-//              scores and their landscape breakdown, islands, spaces left
+//              scores and their landscape breakdown, islands, spaces left,
+//              and the animal points their held cards could score right now
+//              (cubes players keep back until they place them all at once)
 //   slot  x5   one per central-board space: its tokens and what they could do
 //              on my board (best landscape gain, tokens advancing / completing
 //              a held card)
@@ -119,7 +121,8 @@ HARMONIES_FOR_EACH_VARIANT(HARMONIES_EXTERN_HarmoniesBeliefTracker)
   X(seat, 4) X(to_move, 1) X(first_player, 1) X(animal_score, 1) X(landscape_score, 1)    \
   X(total_score, 1) X(margin, 1) X(trees, 1) X(mountains, 1) X(fields, 1) X(buildings, 1) \
   X(water, 1) X(islands, 1) X(spaces, 1) X(cubes_placed, 1) X(cards_held, 1)              \
-  X(card_points_open, 1)
+  X(card_points_open, 1) X(ready_points, 1) X(ready_cubes, 1) X(potential_total, 1)        \
+  X(potential_margin, 1)
 
 #define HARMONIES_SLOT_FEATURES(X)                                                        \
   X(tokens, 6) X(total, 1) X(best_landscape, 1) X(advancing, 1) X(completing, 1)
@@ -128,7 +131,7 @@ HARMONIES_FOR_EACH_VARIANT(HARMONIES_EXTERN_HarmoniesBeliefTracker)
   X(market, 1) X(my_hand, 1) X(opp_hand, 1) X(holder_seat, 4) X(rank, 4)                  \
   X(pattern_size, 1) X(need, 6) X(habitat, 6) X(cubes_total, 1) X(cubes_left, 1)          \
   X(points_now, 1) X(next_points, 1) X(full_points, 1) X(missing, 1) X(no_fit, 1)         \
-  X(ready, 1) X(opp_missing, 1)
+  X(ready, 1) X(opp_missing, 1) X(placeable, 1)
 
 #define HARMONIES_CELL_FEATURES(X)                                                        \
   X(tower, 13) X(height, 1) X(animal, 1) X(points, 1) X(field_group, 1) X(island, 1)      \

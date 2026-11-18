@@ -125,6 +125,10 @@
 | 17 | 1 | `cubes_placed` | 已放方块 ÷25 |
 | 18 | 1 | `cards_held` | 手牌数 ÷4 |
 | 19 | 1 | `card_points_open` | 手牌上还能拿到的分 ÷40 |
+| 20 | 1 | `ready_points` | 手牌现在就能放下的方块最多能拿的分 ÷20（每块方块要一个空着的落点格，栖息地其余部分可共用） |
+| 21 | 1 | `ready_cubes` | 取得 `ready_points` 要放的方块数 ÷8 |
+| 22 | 1 | `potential_total` | 总分 + `ready_points`，÷100 |
+| 23 | 1 | `potential_margin` | `potential_total` 减去其他玩家里最高的同一值，÷50 |
 
 #### `slot`
 
@@ -161,6 +165,7 @@
 | 30 | 1 | `no_fit` | 没有可行放法 |
 | 31 | 1 | `ready` | 现在能放方块的格数 ÷25 |
 | 32 | 1 | `opp_missing` | 仅市场牌：对手里最少的 `missing` |
+| 33 | 1 | `placeable` | 仅手牌：取得持有者 `ready_points` 的方案里这张牌放几块 ÷5 |
 
 #### `cell`
 

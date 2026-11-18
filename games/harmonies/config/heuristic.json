@@ -15,6 +15,14 @@
       "type": "mcts_pv",
       "simulations": 1000,
       "c_puct": 1.4
+    },
+    "tok_v2_mcts": {
+      "type": "mcts_pv",
+      "model_path": "games/harmonies/model/harmonies_tok_v2_teacher.onnx",
+      "simulations": 800,
+      "c_puct": 1.4,
+      "world_cap": 150,
+      "leaf_batch_size": 32
     }
   },
   "selectors": {
