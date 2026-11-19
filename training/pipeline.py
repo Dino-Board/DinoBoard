@@ -3019,6 +3019,11 @@ def run_training_loop(
                     with atomic_write(models_dir / f"belief_step_{step:05d}.onnx") as tmp:
                         export_belief_onnx(belief_net, tmp, belief_in)
 
+            if device.type == "cuda":
+                # The search's ONNX sessions share this GPU and their arenas only grow: hand back
+                # what training cached before the next selfplay asks for more.
+                torch.cuda.empty_cache()
+
             elapsed = time.perf_counter() - t0
             train_elapsed = time.perf_counter() - t_train_start
             log_parts = [
