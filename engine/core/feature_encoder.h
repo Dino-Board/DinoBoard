@@ -60,6 +60,16 @@ struct TokenLayout {
   std::vector<int> anchor_action;
   bool variable_tokens = false;
   bool token_positions = false;
+  // Relations between tokens (variable_tokens only; relation_key_column < 0 = none). Token columns
+  // hold integer ids in [0, relation_max_id], 0 = none: column relation_key_column names the
+  // token itself, the relation_link_count columns from relation_link_column the tokens it is
+  // linked to. Tokens i and j are related when a link of either names the other's key; attention
+  // then adds a learned bias per (type of i, type of j, head), scaled by the number of such links.
+  // These columns feed only the relations, not the token's features.
+  int relation_key_column = -1;
+  int relation_link_column = -1;
+  int relation_link_count = 0;
+  int relation_max_id = 0;
 };
 
 // A board symmetry for data augmentation (train.json

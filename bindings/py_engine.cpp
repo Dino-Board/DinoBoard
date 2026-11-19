@@ -4474,7 +4474,11 @@ PYBIND11_MODULE(dinoboard_engine, m) {
       layout["num_anchor_ids"] = tl->num_anchor_ids;
       layout["anchor_action"] = tl->anchor_action;
       layout["variable_tokens"] = tl->variable_tokens;
-  layout["token_positions"] = tl->token_positions;
+      layout["token_positions"] = tl->token_positions;
+      layout["relation_key_column"] = tl->relation_key_column;
+      layout["relation_link_column"] = tl->relation_link_column;
+      layout["relation_link_count"] = tl->relation_link_count;
+      layout["relation_max_id"] = tl->relation_max_id;
       out["token_layout"] = layout;
     } else {
       out["token_layout"] = py::none();

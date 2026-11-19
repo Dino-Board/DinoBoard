@@ -316,6 +316,11 @@ class TokenTransformerPVNet(nn.Module):
     dominant memory traffic by num_layers. `anchor_embedding=False` drops the
     absolute anchor embedding, so outputs depend on positions only through
     offsets.
+
+    With relations (`relation_key_column` >= 0), attention also adds a learned
+    per-head bias for each pair of related tokens (a link column of one names
+    the other's key id), one per (query type, key type), times the number of
+    such links; it starts at zero. The id columns feed only this bias.
     """
 
     def __init__(self, token_layout: dict, policy_dim: int, num_players: int, *,
@@ -385,6 +390,9 @@ class TokenTransformerPVNet(nn.Module):
             for pos, s in enumerate(grouped):
                 slot_order[s] = pos
             self.register_buffer("slot_order", torch.tensor(slot_order, dtype=torch.long), persistent=False)
+        self.relation_key = int(token_layout.get("relation_key_column", -1))
+        if self.relation_key >= 0:
+            self._init_relations(token_layout, num_types, num_heads, feat_dim)
         self.type_weight = nn.Parameter(torch.randn(num_types, feat_dim, d_model) * feat_dim ** -0.5)
         self.type_bias = nn.Parameter(torch.zeros(num_types, d_model))
         self.entity_embed = nn.Embedding(num_entities, d_model, padding_idx=0)
@@ -450,6 +458,8 @@ class TokenTransformerPVNet(nn.Module):
         valid = tok[:, :, 0]
         entity = tok[:, :, 1].long()
         feats = tok[:, :, self.feat_offset:]
+        if self.relation_key >= 0:
+            feats = feats * self.relation_feature_mask.to(tok.dtype)
         if self.variable_tokens:
             kinds = self.type_onehot.to(tok.dtype)[tok[:, :, 3].long()]
             h = ((feats.unsqueeze(2) * kinds.unsqueeze(3)).flatten(2) @ self.type_weight.flatten(0, 1)
@@ -474,6 +484,8 @@ class TokenTransformerPVNet(nn.Module):
             gather = F.embedding if torch.onnx.is_in_onnx_export() else _BucketGather.apply
             attn_bias = (gather(self._relative_index(tok), self.rel_bias).permute(0, 3, 1, 2)
                          + attn_bias).contiguous()
+        if self.relation_key >= 0:
+            attn_bias = (attn_bias + self._relation_bias(tok, kinds)).contiguous()
         for blk in self.blocks:
             h = blk(h, attn_bias)
         h = self.final_norm(h)
@@ -489,6 +501,43 @@ class TokenTransformerPVNet(nn.Module):
                 1, anchor.unsqueeze(-1).expand(-1, -1, heads), ptr[:, 1:1 + n])[:, 1:].flatten(1)
             policy = torch.where(self.anchor_mask, anchor_logits.index_select(1, self.anchor_index), policy)
         return policy, self.value_head(g), g
+
+    def _init_relations(self, token_layout: dict, num_types: int, num_heads: int, feat_dim: int) -> None:
+        if not self.variable_tokens:
+            raise ValueError("token relations need a variable_tokens layout")
+        key = self.relation_key
+        first = int(token_layout["relation_link_column"])
+        count = int(token_layout["relation_link_count"])
+        max_id = int(token_layout["relation_max_id"])
+        cols = [key, *range(first, first + count)]
+        if count < 1 or max_id < 1 or len(set(cols)) != len(cols) or \
+                not all(self.feat_offset <= c < self.token_dim for c in cols):
+            raise ValueError(f"bad relation columns: key {key}, links {first}..{first + count - 1}, "
+                             f"max id {max_id}, features [{self.feat_offset}, {self.token_dim})")
+        self.relation_links = list(range(first, first + count))
+        self.num_heads = num_heads
+        mask = torch.ones(feat_dim)
+        mask[[c - self.feat_offset for c in cols]] = 0.0
+        self.register_buffer("relation_feature_mask", mask, persistent=False)
+        onehot = torch.eye(max_id + 1)
+        onehot[0, 0] = 0.0  # id 0 = none
+        self.register_buffer("relation_onehot", onehot, persistent=False)
+        self.relation_bias = nn.Parameter(torch.zeros(num_types, num_types * num_heads))
+
+    def _relation_bias(self, tok: torch.Tensor, kinds: torch.Tensor) -> torch.Tensor:
+        """[B, H, S+1, S+1] bias over CLS + tokens (CLS row and column zero):
+        relation_bias[type_i, type_j, h] times the links between i and j."""
+        table = self.relation_onehot.to(tok.dtype)
+        key = table[tok[:, :, self.relation_key].long()]
+        links = table[tok[:, :, self.relation_links[0]].long()]
+        for c in self.relation_links[1:]:
+            links = links + table[tok[:, :, c].long()]
+        count = torch.matmul(links, key.transpose(1, 2))
+        count = count + count.transpose(1, 2)
+        b, s, t = kinds.shape
+        weight = torch.matmul(kinds, self.relation_bias.to(tok.dtype)).reshape(b, s, t, self.num_heads)
+        pair = torch.matmul(weight.permute(0, 3, 1, 2), kinds.transpose(1, 2).unsqueeze(1))
+        return F.pad(pair * count.unsqueeze(1), (1, 0, 1, 0))
 
     def _relative_index(self, tok: torch.Tensor) -> torch.Tensor:
         """[B, S, S] bucket per (query, key) pair over CLS + tokens: 0 when
