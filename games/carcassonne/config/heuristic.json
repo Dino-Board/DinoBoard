@@ -69,6 +69,14 @@
       "simulations": 2000,
       "c_puct": 1.4,
       "world_cap": 200
+    },
+    "tok_v2_mcts": {
+      "type": "mcts_pv",
+      "model_path": "games/carcassonne/model/carcassonne_tok_2p.onnx",
+      "simulations": 1000,
+      "c_puct": 1.6,
+      "world_cap": 200,
+      "leaf_batch_size": 32
     }
   },
   "selectors": {

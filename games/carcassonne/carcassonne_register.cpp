@@ -1,6 +1,7 @@
 #include <any>
 #include <algorithm>
 #include <array>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -219,7 +220,7 @@ enum class EncoderKind { kFlat, kTokens, kRegionTokens };
 
 // kTokens selects CarcassonneTokenEncoder (transformer) over the flat history
 // encoder (MLP); kRegionTokens the same with tokens for the scoring regions.
-// No heuristic here reads an encoder.
+// Only tok_v2_mcts reads an encoder (its own).
 board_ai::GameBundle make_carcassonne(const std::string& game_id, std::uint64_t seed,
                                       EncoderKind encoder) {
   board_ai::GameBundle b;
@@ -287,6 +288,21 @@ board_ai::GameBundle make_carcassonne(const std::string& game_id, std::uint64_t 
                      CarcassonneHeuristicProfile::kSharpCloisterComplete);
   register_rule_mcts("rule_mcts_sharp_farmpotential",
                      CarcassonneHeuristicProfile::kSharpFarmPotential);
+  // tok_v2_mcts: the carcassonne_tok network (carc_tok_v2) with MCTS, the guidance teacher and
+  // eval opponent of the token variants. It reads its own (carcassonne_tok) encoding of the
+  // state. Needs the model file.
+  if (encoder == EncoderKind::kTokens || encoder == EncoderKind::kRegionTokens) {
+    const auto hc_net = board_ai::heuristic::load_mcts_pv_heuristic_config(
+        "carcassonne", "tok_v2_mcts", /*require_model_path=*/true);
+    if (std::ifstream(hc_net.model_path).good()) {
+      static const CarcassonneTokenEncoder tok_encoder(/*regions=*/false);
+      b.heuristics.register_named(
+          "tok_v2_mcts",
+          board_ai::heuristic::MctsPVHeuristic::make_from_onnx(
+              "tok_v2_mcts", hc_net.model_path, &tok_encoder, b.value_model.get(),
+              hc_net.simulations, hc_net.c_puct, hc_net.world_cap, hc_net.leaf_batch_size));
+    }
+  }
   b.install_event_protocol(
       board_ai::viz::no_events_extractor,
       []() -> const board_ai::viz::VisibilitySchema& {

@@ -329,3 +329,37 @@ differs from the Splendor one in these points:
 | `opponent_policy_head` | absent | the opponent's next move depends on a tile nobody has drawn yet; its loss stayed flat for a thousand steps |
 
 Whether these are sufficient has not been measured yet.
+
+### `carcassonne_rtok` — tokens for the scoring regions
+
+The `carcassonne_tok` tokens and actions, plus one token per scoring region
+(a city or road not yet complete, a farm, a cloister with an empty
+neighbour), after the others, without position, anchor or entity. Each region
+kind is its own token type (`4..7`: city, road, farm, cloister); a region
+token says who leads it, its points now and once complete, the empty cells it
+can grow into and how much of the bag fits them, the other regions of its kind
+it could merge with, and (farm) its adjacent cities. The global token gets 12
+more features (meeples by feature kind, frontier cells nothing in the bag
+fits) and every frontier token 17 (the regions open there by kind and leader,
+cities and roads it would close, cloisters around, bag tiles that fit). Tokens
+are `7 + 102 + 17` wide; the feature tables are in
+`carcassonne_net_adapter.cpp`.
+
+The last 17 columns are token relations (`TokenLayout::relation_*`): a
+region token's id (`1, 2, ...` in token order, at most 128), and up to 16
+linked ids on a frontier token (the regions open at that cell) and on a farm
+token (its incomplete adjacent cities). The network adds a learned attention
+bias per head for each linked pair, one per pair of token types (frontier
+cell and city, frontier cell and farm, farm and city, ...), so a frontier cell
+knows which regions it touches, not only how many. Ids are names: relabelling
+them changes nothing, and a quarter turn may renumber them.
+
+`tests/carcassonne/test_region_tokens.py` checks that the rest is the
+`carcassonne_tok` encoding, that the links agree with the per-cell and
+per-region counts computed independently of them, and the quarter turns.
+
+Training (`train_transformer_rtok.json`): the `train_transformer_guided.json`
+recipe with 10000 steps; the guidance teacher (500 steps, faded out by step
+1000) and the eval opponent are `tok_v2_mcts`, the shipped `carcassonne_tok`
+network with MCTS (`heuristic.json`), which reads its own `carcassonne_tok`
+encoding of the state.

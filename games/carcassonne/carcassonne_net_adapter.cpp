@@ -602,8 +602,10 @@ void add_regions(const CarcassonneState& s, int me, std::size_t first, int dim, 
   };
 
   std::vector<Region> regions;
+  std::vector<int> city_region(b.cities.size(), -1);
   for (std::size_t i = 0; i < b.cities.size(); ++i) {
     if (b.cities[i].complete()) continue;
+    city_region[i] = static_cast<int>(regions.size());
     regions.push_back({0, static_cast<int>(i), b.cities[i].meeples, b.cities[i].open_cells});
   }
   for (std::size_t i = 0; i < b.roads.size(); ++i) {
@@ -642,6 +644,17 @@ void add_regions(const CarcassonneState& s, int me, std::size_t first, int dim, 
   for (std::size_t i = 0; i < regions.size(); ++i) {
     for (int c : regions[i].cells) at_cell[static_cast<size_t>(c)].push_back(static_cast<int>(i));
   }
+
+  // Relation columns: a region's id is 1 + its index; links name ids.
+  const int rel = Enc::kVarHeader + Enc::kRegionTokenFeatures;
+  auto id_of = [](int region) { return region < Enc::kRelationMaxId ? static_cast<float>(region + 1) : 0.0f; };
+  auto write_links = [&](float* v, const std::vector<int>& linked) {
+    int m = 0;
+    for (int ri : linked) {
+      if (m == Enc::kRelationLinks) break;
+      if (ri < Enc::kRelationMaxId) v[rel + 1 + m++] = id_of(ri);
+    }
+  };
 
   auto token = [&](std::size_t i) { return out->data() + first + i * static_cast<std::size_t>(dim); };
   const std::size_t n_tokens = (out->size() - first) / static_cast<std::size_t>(dim);
@@ -693,6 +706,7 @@ void add_regions(const CarcassonneState& s, int me, std::size_t first, int dim, 
       x[kFxScarce] = k > 0 && k <= 2 ? 1.0f : 0.0f;
       x[kFxBigCity] = static_cast<float>(big) / 10.0f;
       x[kFxContested] = std::any_of(seen.begin(), seen.end(), [](unsigned w) { return (w & 3u) == 3u; }) ? 1.0f : 0.0f;
+      write_links(v, at_cell[static_cast<size_t>(cell)]);
     }
   }
 
@@ -703,7 +717,8 @@ void add_regions(const CarcassonneState& s, int me, std::size_t first, int dim, 
     float* v = out->data() + base;
     float* f = v + Enc::kVarHeader;
     v[0] = 1.0f;
-    v[3] = Enc::kRegionToken;
+    v[3] = static_cast<float>(Enc::kRegionToken + r.kind);
+    v[rel] = id_of(static_cast<int>(i));
     f[kRgKind + r.kind] = 1.0f;
     const int mine = r.meeples[static_cast<size_t>(me)], theirs = r.meeples[static_cast<size_t>(1 - me)];
     f[kRgMeeples] = static_cast<float>(mine) / 3.0f;
@@ -726,13 +741,17 @@ void add_regions(const CarcassonneState& s, int me, std::size_t first, int dim, 
       done = 3 * (fm.complete_cities + fm.open_cities);
       f[kRgFarmCities] = static_cast<float>(fm.complete_cities) / 5.0f;
       f[kRgFarmCities + 1] = static_cast<float>(fm.open_cities) / 5.0f;
+      std::vector<int> open_cities;
       for (int cid : fm.cities) {
         const Feature& city = b.cities[static_cast<size_t>(cid)];
         if (city.complete()) continue;
+        open_cities.push_back(city_region[static_cast<size_t>(cid)]);
         const unsigned who = leaders(city.meeples, me);
         if (who & 1u) f[kRgFarmLead] += 0.25f;
         if (who & 2u) f[kRgFarmLead + 1] += 0.25f;
       }
+      sort_unique(&open_cities);
+      write_links(v, open_cities);
     } else {
       const int occ = filled[static_cast<size_t>(r.id)];
       f[kRgTiles] = 0.1f;
@@ -786,7 +805,8 @@ void add_regions(const CarcassonneState& s, int me, std::size_t first, int dim, 
 }  // namespace
 
 CarcassonneTokenEncoder::CarcassonneTokenEncoder(bool regions)
-    : regions_(regions), var_dim_(regions ? kVarHeader + kRegionTokenFeatures : kVarTokenDim) {
+    : regions_(regions),
+      var_dim_(regions ? kVarHeader + kRegionTokenFeatures + kRelationColumns : kVarTokenDim) {
   static_assert(kTokenFeatures <= kRegionTokenFeatures && kGlobalFeatures + kGlobalExtra <= kRegionTokenFeatures &&
                 kRegionFeatures <= kRegionTokenFeatures);
   static_assert(kGlobalFeatures <= kTokenFeatures && kTileFeatures <= kTokenFeatures &&
@@ -795,7 +815,13 @@ CarcassonneTokenEncoder::CarcassonneTokenEncoder(bool regions)
   layout_.variable_tokens = true;
   layout_.token_positions = true;
   layout_.token_dim = var_dim_;
-  layout_.num_token_types = regions ? kRegionToken + 1 : kRegionToken;
+  layout_.num_token_types = regions ? kRegionToken + kRegionKinds : kRegionToken;
+  if (regions) {
+    layout_.relation_key_column = kVarHeader + kRegionTokenFeatures;
+    layout_.relation_link_column = layout_.relation_key_column + 1;
+    layout_.relation_link_count = kRelationLinks;
+    layout_.relation_max_id = kRelationMaxId;
+  }
   layout_.num_entity_ids = 1 + kTileTypes;
   layout_.num_pointer_heads = kPointerHeadCount;
   layout_.action_token.assign(kActionSpace, -1);
