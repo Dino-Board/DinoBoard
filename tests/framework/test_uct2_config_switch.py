@@ -15,7 +15,7 @@ from conftest import get_test_model
 from training import mcts_profile, pipeline
 from training.cli import find_game_config, find_heuristic_config, find_train_config
 
-MULTI, SINGLE = "loveletter", "quoridor"  # multi-outcome edges / none
+MULTI, SINGLE = "loveletter", "tictactoe"  # multi-outcome edges / none
 
 
 def _visits(ep):

@@ -64,8 +64,8 @@ HIDDEN_INFO_GAMES = games_with_capability("hidden_info", "snapshot")
 # Bernoulli's failure rate `≈ p^N`, so realistic per-game drift rates
 # (~2% per episode in the second-round Splendor bug) become reliable
 # pytest failures (P[no drift in 30 episodes] ≈ 0.55, in 60 ≈ 0.30, in
-# 120 ≈ 0.09 — we run 60 with model_path="" which is faster and gives
-# us a reliable but not flaky safety net).
+# 120 ≈ 0.09 — we run 60, each searched with 2 simulations since only its
+# observation trace matters, which gives us a reliable but not flaky safety net).
 DRIFT_SWEEP_TRUTH_SEEDS = list(range(50, 50 + 60 * 7, 7))  # 60 episodes
 DRIFT_SWEEP_MAX_PLIES = 60
 
@@ -99,9 +99,10 @@ def test_public_hash_invariant_under_internal_rng(game_id):
     drifts: list[tuple[int, int, str]] = []  # (seed_truth, ply, detail)
 
     for seed_truth in DRIFT_SWEEP_TRUTH_SEEDS:
+        # The episodes only provide observation traces; how well they are played does not matter.
         ep = engine.run_selfplay_episode(
             game_id=game_id, seed=seed_truth, model_path=model_path,
-            simulations=20, max_game_plies=DRIFT_SWEEP_MAX_PLIES,
+            simulations=2, max_game_plies=DRIFT_SWEEP_MAX_PLIES,
             trace_perspective=perspective,
         )
         trace = ep.get("observation_trace") or []

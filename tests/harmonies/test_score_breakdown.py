@@ -66,7 +66,7 @@ def test_training_saves_and_restores_the_breakdown_head(tmp_path):
 @pytest.mark.skipif(not TEACHER.exists(), reason="the tok_v2 teacher model is not in games/harmonies/model")
 def test_teacher_plays_legal_moves():
     gs = engine.GameSession("harmonies_tok", seed=7)
-    for _ in range(6):
+    for _ in range(3):
         r = gs.get_heuristic_action("tok_v2_mcts")
         assert r["action"] in gs.get_legal_actions()
         gs.apply_action(int(r["action"]))

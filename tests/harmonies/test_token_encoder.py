@@ -3,7 +3,7 @@ transformer.
 
 * Layout contract: every action is bound by anchor to exactly one (anchor,
   head), except ending the turn (global head).
-* Every token feature of real states (30 random + 10 greedy games) equals an
+* Every token feature of real states (side B: 30 random + 10 greedy games, side A: 12 + 4) equals an
   independent recomputation from the state dict (harmonies_reference.py).
 * Each legal action is scored by exactly one (token, head) present in the
   encoding, and no two legal actions share a logit.
@@ -104,13 +104,22 @@ def _bindings(x, lay):
     return out
 
 
+# Games played per side, and the least they must reach (states, cube tokens, cells with a nonzero
+# card_advance). Side A shares side B's layout and code but for the water columns, so fewer games.
+REFERENCE_GAMES = {
+    "harmonies_tok": ((("random", range(30)), ("greedy", range(100, 110))), (300, 30, 300)),
+    "harmonies_a_tok": ((("random", range(12)), ("greedy", range(100, 104))), (150, 15, 300)),
+}
+
+
 @pytest.mark.parametrize("game", GAMES)
 def test_every_feature_matches_independent_reference(game):
     lay = _meta(game)["token_layout"]
     js = _layout_json(game)
     end_turn = _meta(game)["action_space"] - 1
     states = cubes = advances = 0
-    for policy, seeds in (("random", range(30)), ("greedy", range(100, 110))):
+    plan, (min_states, min_cubes, min_advances) = REFERENCE_GAMES[game]
+    for policy, seeds in plan:
         for seed in seeds:
             for d, me, enc, legal in _play(seed, policy, game):
                 x = _tokens(enc["features"], game)
@@ -131,7 +140,7 @@ def test_every_feature_matches_independent_reference(game):
                 states += 1
                 cubes += len(exp["cube"])
                 advances += sum(any(v != 0 for v in c["card_advance"]) for c in exp["cell"].values())
-    assert states > 300 and cubes > 30 and advances > 300, (states, cubes, advances)
+    assert states > min_states and cubes > min_cubes and advances > min_advances, (states, cubes, advances)
 
 
 def _doc_tables(text):

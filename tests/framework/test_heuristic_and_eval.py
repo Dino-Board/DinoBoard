@@ -2,20 +2,7 @@
 import dinoboard_engine
 import pytest
 
-from conftest import get_test_model, load_game_config, run_short_heuristic
-
-
-def test_heuristic_episode_valid_samples_quoridor():
-    ep = run_short_heuristic("quoridor")
-    cfg = load_game_config("quoridor")
-    assert len(ep["samples"]) > 0, "heuristic episode produced no samples"
-    for s in ep["samples"]:
-        assert len(s["features"]) == cfg["feature_dim"]
-        assert len(s["legal_mask"]) == cfg["action_space"]
-    if len(ep["samples"]) >= 3:
-        assert ep["samples"][0]["features"] != ep["samples"][2]["features"], (
-            "heuristic features should vary across plies"
-        )
+from conftest import get_test_model
 
 
 def test_constrained_eval_returns_valid_result_quoridor():

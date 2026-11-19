@@ -112,7 +112,7 @@ def _run(game_id, train_cfg, out, steps, resume=False):
 SCORE = {"score_head": {"loss_weight": 0.5, "scale": 15.0}}
 
 
-def test_score_head_trains_and_survives_toggling_on_resume(tmp_path, caplog):
+def test_score_head_trains_and_survives_toggling_on_resume(tmp_path, caplog, small_search):
     caplog.set_level("INFO", logger="training.pipeline")
     ckpt = _run("splendor", _splendor_train_cfg(), tmp_path, 1)
     assert "score_head_state_dict" not in ckpt
@@ -204,7 +204,7 @@ def test_next_opponent_indices():
 OPP = {"opponent_policy_head": {"loss_weight": 0.15}}
 
 
-def test_opponent_policy_head_trains_and_toggles_on_resume(tmp_path, caplog):
+def test_opponent_policy_head_trains_and_toggles_on_resume(tmp_path, caplog, small_search):
     caplog.set_level("INFO", logger="training.pipeline")
     ckpt = _run("splendor", _splendor_train_cfg(**SCORE), tmp_path, 1)
     assert "opponent_policy_head_state_dict" not in ckpt

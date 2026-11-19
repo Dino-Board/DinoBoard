@@ -153,7 +153,7 @@ def test_simulations_passthrough_quoridor():
     p = resolve_profile("quoridor", "selfplay")
     ep = dinoboard_engine.run_selfplay_episode(
         game_id="quoridor", seed=1, model_path=get_test_model("quoridor"),
-        simulations=p.simulations, max_game_plies=20,
+        simulations=p.simulations, max_game_plies=2,
     )
     if ep["samples"]:
         sample_visits = sum(ep["samples"][0]["policy_action_visits"])

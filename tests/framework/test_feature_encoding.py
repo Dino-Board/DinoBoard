@@ -55,19 +55,17 @@ def _first_heuristic_episode_with_min_samples(game_id: str, min_samples: int):
 
 
 @pytest.mark.parametrize("game_id", FRAMEWORK_GAMES)
-def test_heuristic_features_vary_across_plies(game_id):
-    _seed, ep = _first_heuristic_episode_with_min_samples(game_id, min_samples=3)
-    samples = ep["samples"]
-    assert samples[0]["features"] != samples[2]["features"]
-
-
-@pytest.mark.parametrize("game_id", FRAMEWORK_GAMES)
-def test_heuristic_features_differ_from_initial(game_id):
+def test_heuristic_samples_carry_their_own_features(game_id):
+    """Heuristic-episode samples: features of the right width, varying across plies and not the
+    initial position's."""
     seed, ep = _first_heuristic_episode_with_min_samples(game_id, min_samples=3)
-    initial = dinoboard_engine.encode_state(game_id, seed)["features"]
+    cfg = load_game_config(game_id)
     samples = ep["samples"]
-    mid_ply = min(4, len(samples) - 1)
-    assert samples[mid_ply]["features"] != initial
+    for s in samples:
+        assert len(s["features"]) == cfg["feature_dim"] and len(s["legal_mask"]) == cfg["action_space"]
+    assert samples[0]["features"] != samples[2]["features"]
+    initial = dinoboard_engine.encode_state(game_id, seed)["features"]
+    assert samples[min(4, len(samples) - 1)]["features"] != initial
 
 
 # ---------------------------------------------------------------------------

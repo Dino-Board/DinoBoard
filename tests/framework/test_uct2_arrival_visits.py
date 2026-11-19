@@ -117,6 +117,6 @@ def test_arena_seat_config_selects_the_parent_count(batched):
     """Per-player switch (used for A/B): no effect without multi-outcome
     edges, a different search with them."""
     for seed in (1, 2, 3):
-        assert _arena("quoridor", seed, True, batched) == _arena("quoridor", seed, False, batched)
+        assert _arena("tictactoe", seed, True, batched) == _arena("tictactoe", seed, False, batched)
     assert any(_arena("splendor", seed, True, batched) != _arena("splendor", seed, False, batched)
                for seed in (1, 2, 3))

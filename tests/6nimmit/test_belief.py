@@ -365,10 +365,9 @@ def test_training_loop_trains_the_belief_net(game, tmp_path, caplog):
     train_cfg["network"] = {**train_cfg["network"], "d_model": 32, "num_layers": 2, "ffn_dim": 64}
     train_cfg["heuristic_guidance"] = {"name": "rule_v1", "hold_steps": 1, "steps": 2, "initial_ratio": 1.0,
                                        "temperature": 0.0}
-    train_cfg["training"] = {**train_cfg["training"], "train_batches_per_step": 2, "inference_precision": "fp32",
-                             "simulations_start": 4}
-    train_cfg["mcts"]["selfplay"]["simulations"] = 4
-    train_cfg["mcts"]["eval"]["simulations"] = 4
+    train_cfg["training"] = {**{k: v for k, v in train_cfg["training"].items() if k != "simulations_start"},
+                             "train_batches_per_step": 2, "inference_precision": "fp32",
+                             "playout_cap": {"full_simulations": 4, "fast_simulations": 2, "full_search_prob": 0.5}}
     with caplog.at_level(logging.INFO):
         run_training_loop(game_id=game, game_config=cfg, train_config=train_cfg, output_dir=tmp_path, steps=2,
                           episodes_per_step=2, eval_every=0, eval_games=2, max_workers=1, batch_size=16,

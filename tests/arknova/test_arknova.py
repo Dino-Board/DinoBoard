@@ -118,11 +118,17 @@ def test_greedy_beats_random():
     assert wins >= 5, f"greedy won {wins}/6 against random"
 
 
-@pytest.mark.parametrize("beam", ["beam_2x3", "beam_3x8"])
-def test_lookahead_heuristics_finish_a_game(beam):
-    gs = _play(31, (beam, "greedy"))
+def test_lookahead_heuristics_finish_a_game():
+    """beam_2x3 plays a whole game; beam_3x8 (the same search, deeper and wider: about 9 s a
+    game) its first 40 decisions, each a legal action."""
+    gs = _play(31, ("beam_2x3", "greedy"))
     st = gs.get_state_dict()
     assert st["is_terminal"] and st["winner"] in (-1, 0, 1)
+    gs = engine.GameSession(GAME, seed=31)
+    for _ in range(40):
+        action = gs.get_heuristic_action("beam_3x8" if gs.current_player == 0 else "greedy")["action"]
+        assert action in gs.get_legal_actions()
+        gs.apply_action(action)
 
 
 def test_belief_config_builds():

@@ -199,6 +199,24 @@ def game_config(game_id):
     return load_game_config(game_id)
 
 
+@pytest.fixture
+def small_search(monkeypatch):
+    """Caps the MCTS profiles run_training_loop reads from the game's train.json (selfplay, eval)
+    at 8 simulations, for tests of the training loop rather than of search. A test's train_config
+    cannot do this: the profiles do not come from it, and the simulations_start ramp reaches the
+    full count within the first 30% of the steps."""
+    import dataclasses
+
+    from training import pipeline
+    real = pipeline.resolve_profile
+
+    def capped(game_id, name):
+        profile = real(game_id, name)
+        return dataclasses.replace(profile, simulations=min(profile.simulations, 8))
+
+    monkeypatch.setattr(pipeline, "resolve_profile", capped)
+
+
 # `game_id` fixture defaults to FRAMEWORK_GAMES (the matrix carrier set).
 # Tests that need exhaustive coverage (e.g. tests/<game>/test_checklist.py)
 # hardcode their own game id and don't use this fixture; tests that need
@@ -222,10 +240,12 @@ def run_short_selfplay(game_id: str, seed: int = 42, **kwargs) -> dict:
 
 
 def run_short_heuristic(game_id: str, seed: int = 42, temperature: float = 1.0) -> dict:
+    """The first plies of an episode played by the game's guidance heuristic (whose search can be
+    expensive, e.g. Quoridor's 5000-simulation rule MCTS)."""
     from training.cli import find_train_config
     selector = find_train_config(game_id)[0]["heuristic_guidance"]["name"]
     return dinoboard_engine.run_heuristic_episode(
-        game_id=game_id, seed=seed, temperature=temperature, max_game_plies=50,
+        game_id=game_id, seed=seed, temperature=temperature, max_game_plies=5,
         heuristic_selector=selector,
     )
 
