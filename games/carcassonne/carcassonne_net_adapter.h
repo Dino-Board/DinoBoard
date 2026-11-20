@@ -39,12 +39,17 @@ class CarcassonneFeatureEncoder final : public IFeatureEncoder {
 //
 // With `regions` (`carcassonne_rtok`) the scoring units get tokens of their
 // own: one per city or road not yet complete, per farm and per cloister with
-// an empty neighbour, without position, anchor or entity, after the others.
+// an empty neighbour, without position, anchor or entity, after the others,
+// one token type per kind (kRegionToken + city / road / farm / cloister).
 // The global and frontier tokens then carry kGlobalExtra / kFrontierExtra
-// more features after their own (the tables in the .cpp).
+// more features after their own (the tables in the .cpp). The last
+// kRelationColumns columns are token relations (TokenLayout::relation_*):
+// a region's id, and the regions a frontier cell is open to / the
+// incomplete cities a farm touches.
 class CarcassonneTokenEncoder final : public IFeatureEncoder {
  public:
   enum TokenType { kGlobalToken = 0, kCurrentToken, kTileToken, kFrontierToken, kRegionToken };
+  static constexpr int kRegionKinds = 4;  // region token type = kRegionToken + kind
   // Heads [0, 4): place at rotation r. Heads [4, 17): meeple position p.
   static constexpr int kMeepleHeadBase = 4;
   static constexpr int kPointerHeadCount = kMeepleHeadBase + kMeeplePositions;
@@ -74,6 +79,11 @@ class CarcassonneTokenEncoder final : public IFeatureEncoder {
   static constexpr int kFrontierExtra = 17;
   static constexpr int kRegionFeatures = 30;
   static constexpr int kRegionTokenFeatures = kFrontierFeatures + kFrontierExtra;
+  // Region ids run 1..kRelationMaxId (regions past it get none); a token
+  // lists at most kRelationLinks of them.
+  static constexpr int kRelationMaxId = 128;
+  static constexpr int kRelationLinks = 16;
+  static constexpr int kRelationColumns = 1 + kRelationLinks;
 
   explicit CarcassonneTokenEncoder(bool regions = false);
 
