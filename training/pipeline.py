@@ -2355,10 +2355,19 @@ def run_training_loop(
     best_model_path = current_model_path
 
     if resume_from:
+        # Never gate against model_latest.onnx, which every step overwrites with the candidate.
         best_candidate = models_dir / "model_best.onnx"
         if best_candidate.exists():
             best_model_path = str(best_candidate)
             logger.info(f"Resume: best model loaded from {best_candidate}")
+        elif initial_onnx.exists():
+            best_model_path = str(initial_onnx)
+            logger.info(f"Resume: no model promoted yet, gating against {initial_onnx}")
+        else:
+            with atomic_write(best_candidate) as tmp:
+                shutil.copy2(resumed_onnx, tmp)
+            best_model_path = str(best_candidate)
+            logger.info(f"Resume: no model promoted yet, gating against the resumed weights ({best_candidate})")
 
     # Scheduling parameters (three-segment: hold → linear decay → zero).
     # heuristic_guidance lives at train.json's top level (it is a training

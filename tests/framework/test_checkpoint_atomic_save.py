@@ -9,6 +9,7 @@ The interrupted save is simulated by a torch.save that writes a few bytes and
 then fails, as a process dying mid-write would leave it.
 """
 import json
+from pathlib import Path
 
 import pytest
 import torch
@@ -91,6 +92,23 @@ def test_interrupted_checkpoint_save_leaves_a_resumable_checkpoint(tmp_path, mon
     # Step exports are complete files, and no temp file is left behind.
     assert (tmp_path / "models" / "model_step_00002.onnx").stat().st_size > 0
     assert not list(tmp_path.rglob("*.tmp"))
+
+
+def test_resume_before_any_promotion_gates_against_the_initial_model(tmp_path, monkeypatch):
+    """Resumed before the first promotion, gating plays model_init.onnx, not model_latest.onnx:
+    that file is the candidate itself, rewritten every step, and gating against it was a mirror
+    match (about 50%) that never promoted."""
+    _train(tmp_path, steps=1)
+    assert not (tmp_path / "models" / "model_best.onnx").exists()
+    games = []
+
+    def record(game_id, candidate, opponent, *args, **kwargs):
+        games.append((Path(candidate).name, Path(opponent).name))
+        return {"wins": 0, "losses": 2, "draws": 0, "win_rate": 0.0}
+
+    monkeypatch.setattr(pipeline, "run_eval_batch", record)
+    _train(tmp_path, steps=2, resume=True, eval_every=1)
+    assert games == [("model_latest.onnx", "model_init.onnx")]
 
 
 def test_interrupted_best_model_update_keeps_the_previous_best(tmp_path, monkeypatch):
