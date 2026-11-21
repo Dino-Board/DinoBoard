@@ -134,9 +134,9 @@ def configure(server, ai_module, dinoboard):
     def opponent(checkpoint=None, map_name="map0"):
         if map_name != "map0":
             raise HTTPException(400, "this board plays Map 0 only")
-        if checkpoint in (None, "", DINOBOARD):
+        if checkpoint == DINOBOARD:
             return dinoboard
-        if checkpoint == BEAM:
+        if checkpoint in (None, "", BEAM):
             return DinoBoardAI(dinoboard.Analysis, None, None, heuristic=BEAM)
         raise HTTPException(404, f"no opponent {checkpoint}: this board offers {DINOBOARD} and {BEAM}")
 
