@@ -744,7 +744,8 @@ are checked against the engine's layout by
 ## Playing on ark-nova-ai's Board
 
 `scripts/arknova_board.py` runs ark-nova-ai's server (its page and logins) with this
-engine as the referee and two opponents, `dinoboard` and the C++ `beam_3x8`, on Map 0.
+engine as the referee and two opponents, `dinoboard` and the C++ `beam_3x8` (the
+default; against it the human's hints are its own choice too), on Map 0.
 `--ref` is a checkout of ark-nova-ai with the three rulebook places fixed and two hooks
 the server reaches the rules through: `arknova/play/table.py` (`TABLE`: the game) and
 `arknova/play/rules.py` (`RULES`: the questions that explain a position). The script

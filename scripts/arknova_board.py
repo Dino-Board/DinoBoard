@@ -7,8 +7,9 @@ come from C++). This script starts the server with two opponents only, on Map 0:
   - dinoboard: DinoBoard's token-transformer MCTS (search from the web.json profile). Without
     --model it plays games/arknova/model/arknova_2p.onnx, for now a randomly initialised network
     (scripts/init_random_models.py --game arknova --variants 2p --no-belief).
-  - beam_3x8: the rule-based search of that name (DinoBoard's C++ port of ark-nova-ai's strongest
-    one, heuristic.json `named`); the human's hints then come from the network.
+  - beam_3x8 (the default): the rule-based search of that name (DinoBoard's C++ port of ark-nova-ai's
+    strongest one, heuristic.json `named`); the human's hints are then its own choice too, unless the
+    page's hint model setting names the network.
 
     git clone -b rulebook https://github.com/Zhiqi-Wang/ark-nova-ai.git ~/ark-nova-fork
     python scripts/arknova_board.py --ref ~/ark-nova-fork [--model m.onnx] [--profile web_expert]
@@ -53,14 +54,12 @@ RUN_DIR = PROJECT_ROOT / "runs" / "arknova_board"
 class DinoBoardAI:
     """ark-nova-ai's AI interface (analyse(game) -> Analysis) over a DinoBoard GameSession: the network's
     MCTS, or with `heuristic` one of the game's registered heuristics (heuristic.json `named`), which also
-    pick from the mover's masked view. A heuristic opponent leaves the human's hints to `adviser`."""
+    pick from the mover's masked view."""
 
-    def __init__(self, analysis_type, model: Path | None, profile: str | None, heuristic: str | None = None,
-                 adviser: DinoBoardAI | None = None):
+    def __init__(self, analysis_type, model: Path | None, profile: str | None, heuristic: str | None = None):
         self.Analysis = analysis_type
         self.name = self.checkpoint = heuristic or DINOBOARD
         self.heuristic = heuristic
-        self.adviser = adviser
         if heuristic is None:
             p = resolve_profile(GAME, profile)
             self.search = dict(simulations=p.simulations, world_cap=p.world_cap, c_puct=p.c_puct,
@@ -70,8 +69,6 @@ class DinoBoardAI:
         self.lock = threading.Lock()  # one session serves every game of the server
 
     def analyse(self, game):
-        if self.adviser is not None and game.to_move() == game.human:
-            return self.adviser.analyse(game)
         return self.analyse_state(game.state, game.options())
 
     def _pick(self):
@@ -123,7 +120,7 @@ class DinoBoardAI:
 
 
 def configure(server, ai_module, dinoboard):
-    """Map 0, and only the DinoBoard network and beam_3x8 as opponents and hint models."""
+    """Map 0, and only the DinoBoard network and beam_3x8 (the default) as opponents and hint models."""
     HTTPException = server.HTTPException
     server.MAPS[:] = ["map0"]
     server.OFFERED_NETWORKS[:] = []
@@ -140,7 +137,7 @@ def configure(server, ai_module, dinoboard):
         if checkpoint in (None, "", DINOBOARD):
             return dinoboard
         if checkpoint == BEAM:
-            return DinoBoardAI(dinoboard.Analysis, None, None, heuristic=BEAM, adviser=dinoboard)
+            return DinoBoardAI(dinoboard.Analysis, None, None, heuristic=BEAM)
         raise HTTPException(404, f"no opponent {checkpoint}: this board offers {DINOBOARD} and {BEAM}")
 
     def hint_model(name):
@@ -150,7 +147,7 @@ def configure(server, ai_module, dinoboard):
 
     server._ai = opponent
     server._hint_ai = hint_model
-    server.ctx["default"] = DINOBOARD
+    server.ctx["default"] = BEAM
 
 
 def setup(ref: Path, model: Path | None, profile: str, data: Path):
