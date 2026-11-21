@@ -11,7 +11,7 @@ All config lives in `games/<id>/config/`. Six files, each with a distinct scope.
 | game_id | string | Canonical ID (matches manifest.json) |
 | display_name | string | Chinese display name for web UI |
 | display_name_en | string | English display name for web UI |
-| victory_mode | "winner_takes"\|"loser_pays" | Controls gating threshold variance formula. `winner_takes` (default): 1 winner, N-1 losers. `loser_pays`: 1 loser, N-1 winners. Does NOT affect C++ value model (which reads `winners()`/`losers()` from state). Only consumer: Python training pipeline gating threshold. |
+| victory_mode | "winner_takes"\|"loser_pays" | `winner_takes` (default): 1 winner, N-1 losers. `loser_pays`: 1 loser, N-1 winners. Does NOT affect C++ value model (which reads `winners()`/`losers()` from state). Only consumer: the web platform's game sessions (`platform/game_service/sessions.py`). |
 | players.min | int | Minimum player count |
 | players.max | int | Maximum player count |
 | max_game_plies | int | Maximum plies before forced termination (used by dirichlet_on_first_n_plies sentinel) |
@@ -98,13 +98,12 @@ are always resolved from the base file).
 | opponent_pool_window | float | (0, 1], default 1. Only checkpoints from the last `window` fraction of the run so far are opponents |
 | opponent_pool_quality_lr | float | Default 0.01. Quality score lost per pool game the latest model wins (OpenAI Five's η) |
 | opponent_pool_uniform_mix | float | [0, 1], default 0.1. Share of the uniform distribution mixed into the quality draw |
-| gating_accept_win_rate | float | Override auto-computed gating threshold |
 | playout_cap | object | KataGo playout cap randomization: `{"full_simulations": int, "fast_simulations": int, "full_search_prob": float}`. Each selfplay MCTS ply is a full search (root noise, training sample) with probability full_search_prob, else a fast search without noise whose sample is dropped. Replaces the profile's simulations; exclusive with simulations_start; requires selfplay_concurrency. Splendor transformer 800/150/0.25: 6.4x games/hour, 1.5x training samples/hour vs 2000 every ply |
 | score_head | object | Training-only auxiliary head predicting the final score margin: `{"loss_weight": float, "scale": float}`, both > 0. Target per seat = (own score − best other score) / scale, MSE weighted by loss_weight. Needs the game's `final_score_extractor` (`has_final_score_extractor` in metadata); not exported to ONNX. Can be toggled across resumes |
 | opponent_policy_head | object | Training-only auxiliary head predicting the opponent's next move: `{"loss_weight": float}` (> 0; KataGo uses 0.15). Target = normalized root visits of the next ply acted by a different seat (fast PCR searches included); samples with no later opponent ply get weight 0. Not exported to ONNX. Can be toggled across resumes (optimizer groups are matched by name) |
-| ema | object | `{"decay": float}`, 0 < decay < 1. Exported ONNX models (selfplay/eval/gating) use an exponential moving average of the weights, updated after every optimizer step; the checkpoint stores it as `ema_state_dict` |
+| ema | object | `{"decay": float}`, 0 < decay < 1. Exported ONNX models (selfplay/eval) use an exponential moving average of the weights, updated after every optimizer step; the checkpoint stores it as `ema_state_dict` |
 | compact_replay | object | `{"features_dtype": "float16" \| "float32"}`. Replay buffer keeps features as numpy arrays in that dtype and policies sparse (densified per batch); selfplay returns numpy samples. Requires selfplay_concurrency. For large feature vectors (carcassonne_tok: up to ~15k floats, ~30 KB/sample in fp16 vs ~0.45 MB as Python float lists) |
-| inference_precision | string | `"fp32"` (default) or `"fp16"`: selfplay/eval/gating run an fp16 copy under `models/fp16/` (fp32 I/O); checkpoints stay fp32. Worth it when GPU-bound (Splendor d128 transformer: +38% sims/s) |
+| inference_precision | string | `"fp32"` (default) or `"fp16"`: selfplay/eval run an fp16 copy under `models/fp16/` (fp32 I/O); checkpoints stay fp32. Worth it when GPU-bound (Splendor d128 transformer: +38% sims/s) |
 | opening_exploration | object | Random starting positions: `{"episode_ratio", "min_plies", "max_plies", "temperature", "uniform_mix"}`, all five required. With probability episode_ratio (in [0, 1]; 0 = off) an episode opens with uniform{min_plies..max_plies} unsearched plies sampled from the acting seat's raw policy P as `(1 − uniform_mix)·P^(1/temperature)/Z + uniform_mix/n`; those plies are never training samples. 1 ≤ min_plies ≤ max_plies < max_game_plies, temperature > 0, uniform_mix in [0, 1]. Works for every game. Logged as `expl_eps` / `expl_plies` |
 | symmetry_augmentation | bool | Default false. Each sampled training example gets a uniformly random board symmetry of the encoder (`IFeatureEncoder::symmetries`, `engine/core/feature_encoder.h`) applied at batch time to its features, policy target, legal mask and opponent-policy target (`training/symmetry.py`); the replay buffer is unchanged. Rejected when the encoder offers no symmetries. Encoders with static tables: Harmonies (4 per board side). Encoders with sample-dependent symmetries (`sample_symmetry_count` / `apply_sample_symmetry`): `carcassonne_tok` (4 quarter turns); these cannot transform an opponent-policy target, so the flag is rejected together with `opponent_policy_head`. How to give an encoder symmetries: `game-ai/encoder.md` |
 
@@ -128,7 +127,7 @@ When to use `playout_cap`, `score_head`, `opponent_policy_head`, `ema` (and the 
 Contains `selfplay` and `eval` profile deltas. Each overrides baseline fields.
 
 Selfplay is the ONLY place dirichlet non-zero values belong.
-Eval profile is used for both benchmark eval and latest-vs-best gating.
+Eval profile is used for the benchmark eval. There is no gating (AlphaZero): selfplay always plays the latest model, and `models/model_best.onnx` is the latest model as of the last eval.
 
 Two exploration fields may appear only in `selfplay` (rejected in mcts.json,
 web.json and `eval`); when and how to use them: `training/exploration.md`.
@@ -149,7 +148,7 @@ incoming edge's visit count over all its outcomes (the behaviour before this
 key existed), which overstates the count at an outcome of probability p by
 1/p. Details: `UCT2 parent count` in engine/search/net_mcts.h.
 Set it to false in both profiles to resume a run started with the old
-behaviour unchanged. It reaches selfplay, eval vs heuristic, gating and
+behaviour unchanged. It reaches selfplay, eval vs heuristic and
 `scripts/eval_model.py`; the web platform always uses true, and the `mcts_pv`
 heuristic always uses false so its strength stays a fixed yardstick.
 

@@ -23,9 +23,11 @@ def _paths(*steps):
     return [(f"/m/model_step_{s:05d}.onnx", "") for s in steps]
 
 
-def _ep(opp_step, latest_won, draw=False):
-    return {"pool_opponent": f"/m/model_step_{opp_step:05d}.onnx", "latest_seat": 0,
-            "winner": -1 if draw else (0 if latest_won else 1), "draw": draw}
+def _ep(opp_step, latest_won, draw=False, z=None, latest_seat=0):
+    if z is None:
+        z = [0.0, 0.0] if draw else ([1.0, -1.0] if latest_won else [-1.0, 1.0])
+    return {"pool_opponent": f"/m/model_step_{opp_step:05d}.onnx", "latest_seat": latest_seat,
+            "terminal_z_values": z}
 
 
 def test_new_checkpoints_enter_at_the_top_score_and_deleted_ones_leave():
@@ -45,7 +47,7 @@ def test_window_keeps_recent_checkpoints_and_never_leaves_the_pool_empty():
 
 
 def test_update_lowers_beaten_opponents_only():
-    """Win 1, draw 1/N, loss 0, scaled by lr * G / (N * inclusion)."""
+    """Win 1, draw 1/2, loss 0, scaled by lr * G / (N * inclusion)."""
     pool = OpponentPool(PoolConfig(learning_rate=0.1))
     pool.candidates(_paths(10, 20, 30, 40), step=41)
     sel = Selection(paths=_paths(10, 20, 30), pool_size=4,
@@ -53,7 +55,7 @@ def test_update_lowers_beaten_opponents_only():
                                "model_step_00030.onnx": 1.0})
     eps = [_ep(10, True), _ep(10, True), _ep(20, True, draw=True), _ep(20, True, draw=True),
            _ep(30, False), _ep(30, False), {"pool_opponent": None}]
-    res = pool.update(sel, eps, num_players=2)
+    res = pool.update(sel, eps)
     assert res == {"model_step_00010.onnx": (2, 2.0), "model_step_00020.onnx": (2, 1.0),
                    "model_step_00030.onnx": (2, 0.0)}
     assert pool.scores["model_step_00010.onnx"] == pytest.approx(-0.1 * 6 * 1.0 / (4 * 0.5))
@@ -62,17 +64,26 @@ def test_update_lowers_beaten_opponents_only():
     assert pool.scores["model_step_00040.onnx"] == 0.0
 
     before = dict(pool.scores)
-    pool.update(sel, eps, num_players=2, weight=0.0)
+    pool.update(sel, eps, weight=0.0)
     assert pool.scores == before
     with pytest.raises(ValueError, match="did not draw"):
-        pool.update(sel, [_ep(40, True)], num_players=2)
+        pool.update(sel, [_ep(40, True)])
+
+
+def test_multiplayer_games_score_by_the_games_own_outcome():
+    """Loser-pays, 4 players: the loser (z = -1) scores 0, a survivor (z = 1/3) 2/3."""
+    pool = OpponentPool(PoolConfig())
+    sel = pool.select(_paths(10), step=11, rng=np.random.default_rng(0))
+    z = [-1.0, 1 / 3, 1 / 3, 1 / 3]
+    res = pool.update(sel, [_ep(10, None, z=z, latest_seat=0), _ep(10, None, z=z, latest_seat=2)])
+    assert res["model_step_00010.onnx"] == (2, pytest.approx(2 / 3))
 
 
 def test_uniform_mode_keeps_the_engine_draw_and_scores():
     pool = OpponentPool(PoolConfig(sampling="uniform"))
     sel = pool.select(_paths(10, 20, 30, 40, 50), step=51, rng=np.random.default_rng(0))
     assert len(sel.paths) == 5
-    pool.update(sel, [_ep(10, True)], num_players=2)
+    pool.update(sel, [_ep(10, True)])
     assert pool.scores["model_step_00010.onnx"] == 0.0
 
 
@@ -95,7 +106,7 @@ def test_outgrown_checkpoints_fade_from_the_draw():
         sel = pool.select(paths, step, rng)
         eps = [_ep(int(Path(p).stem[-5:]), latest_won=not p.endswith("00060.onnx"))
                for p, _ in sel.paths for _ in range(10)]
-        pool.update(sel, eps, num_players=2)
+        pool.update(sel, eps)
     p = pool.probabilities(pool.candidates(paths, 261))
     assert p[-1] > 0.85
     assert 0.1 / 6 <= p[0] < 0.025

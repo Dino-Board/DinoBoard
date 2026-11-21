@@ -1,10 +1,10 @@
 ---
-description: "Value head overfitting in self-play (memorised outcomes, overconfident values, gating stalls while eval vs heuristic stays high): the fresh-game value probe, sample reuse and replay buffer sizing, symmetry augmentation, restart policy, and head-to-head verification against old checkpoints"
+description: "Value head overfitting in self-play (memorised outcomes, overconfident values, head-to-head progress stalls while eval vs heuristic stays high): the fresh-game value probe, sample reuse and replay buffer sizing, symmetry augmentation, restart policy, and head-to-head verification against old checkpoints"
 ---
 
 # Value Overfitting
 
-When a run's gating stalls, training `v_loss` keeps falling, or you are sizing
+When a run's head-to-head progress stalls, training `v_loss` keeps falling, or you are sizing
 `train_batches_per_step` / `replay_buffer_size` for a new game. Read
 [reference.md](reference.md): symptoms, the value probe, the reuse formula with the
 Carcassonne and Harmonies data, the recipe, the restart policy, and how to verify.

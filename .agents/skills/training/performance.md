@@ -101,7 +101,7 @@ sessions).
 ### 2. Inference precision (`training.inference_precision`)
 
 `"fp16"` exports an fp16 copy next to every ONNX model (`models/fp16/`, fp32
-I/O) and uses it for selfplay, eval and gating; checkpoints and SGD stay
+I/O) and uses it for selfplay and eval; checkpoints and SGD stay
 fp32. Worth it whenever the GPU is a noticeable share of the cost (Splendor
 d128 transformer: about +38% simulations/s). No effect on CPU-only runs.
 

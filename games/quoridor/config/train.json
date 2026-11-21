@@ -21,7 +21,6 @@
   },
   "training": {
     "simulations_start": 1000,
-    "gating_accept_win_rate": 0.55,
     "episodes_per_step": 100,
     "batch_size": 1024,
     "train_batches_per_step": 6,

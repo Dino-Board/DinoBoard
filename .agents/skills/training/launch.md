@@ -101,7 +101,7 @@ pass the same file again on every resume.
 # Confirm the process is alive
 ps aux | grep "training.cli" | grep -v grep
 
-# Follow the metrics log (per-step p_loss/v_loss/lr + eval/gating)
+# Follow the metrics log (per-step p_loss/v_loss/lr + eval)
 # sleep 3s so nohup has time to create the log file before tail opens it
 sleep 3 && tail -f runs/<run_name>/train.log
 ```

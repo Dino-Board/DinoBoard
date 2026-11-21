@@ -94,28 +94,22 @@ def test_interrupted_checkpoint_save_leaves_a_resumable_checkpoint(tmp_path, mon
     assert not list(tmp_path.rglob("*.tmp"))
 
 
-def test_resume_before_any_promotion_gates_against_the_initial_model(tmp_path, monkeypatch):
-    """Resumed before the first promotion, gating plays model_init.onnx, not model_latest.onnx:
-    that file is the candidate itself, rewritten every step, and gating against it was a mirror
-    match (about 50%) that never promoted."""
-    _train(tmp_path, steps=1)
-    assert not (tmp_path / "models" / "model_best.onnx").exists()
-    games = []
+def test_eval_plays_no_gating_match_and_best_follows_the_latest_model(tmp_path, monkeypatch):
+    """No gating (AlphaZero): an eval step plays only the configured benchmarks
+    and model_best.onnx becomes the model it evaluated."""
+    def no_match(*args, **kwargs):
+        raise AssertionError("an eval step played a model-vs-model match")
 
-    def record(game_id, candidate, opponent, *args, **kwargs):
-        games.append((Path(candidate).name, Path(opponent).name))
-        return {"wins": 0, "losses": 2, "draws": 0, "win_rate": 0.0}
-
-    monkeypatch.setattr(pipeline, "run_eval_batch", record)
+    monkeypatch.setattr(pipeline, "run_eval_batch", no_match)
+    _train(tmp_path, steps=1, eval_every=1)
+    best = tmp_path / "models" / "model_best.onnx"
+    step1 = best.read_bytes()
     _train(tmp_path, steps=2, resume=True, eval_every=1)
-    assert games == [("model_latest.onnx", "model_init.onnx")]
+    assert best.read_bytes() == (tmp_path / "models" / "model_latest.onnx").read_bytes() != step1
 
 
 def test_interrupted_best_model_update_keeps_the_previous_best(tmp_path, monkeypatch):
-    """model_best.onnx is what a resumed run gates against."""
-    # Gating itself is not under test: every candidate is accepted as new best.
-    monkeypatch.setattr(pipeline, "run_eval_batch", lambda *a, **k: {
-        "wins": 2, "losses": 0, "draws": 0, "win_rate": 1.0})
+    """model_best.onnx, the latest model as of the last eval, is replaced atomically."""
     _train(tmp_path, steps=1, eval_every=1)
     best = tmp_path / "models" / "model_best.onnx"
     latest = tmp_path / "models" / "model_latest.onnx"
@@ -133,8 +127,6 @@ def test_interrupted_best_model_update_keeps_the_previous_best(tmp_path, monkeyp
     monkeypatch.undo()
     assert best.read_bytes() == step1
 
-    monkeypatch.setattr(pipeline, "run_eval_batch", lambda *a, **k: {
-        "wins": 2, "losses": 0, "draws": 0, "win_rate": 1.0})
     _train(tmp_path, steps=2, resume=True, eval_every=1)
     assert best.read_bytes() == latest.read_bytes() != step1
     assert not list(tmp_path.rglob("*.tmp"))

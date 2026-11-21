@@ -238,8 +238,8 @@ alongside the standard loss/win-rate columns.
 Configured by `train.json::training.opponent_pool_enabled` and
 `opponent_pool_self_ratio`. When enabled, each selfplay batch mixes mirror games
 against the latest model with games against historical `model_step_*.onnx`
-checkpoints from the current run's `models/` directory. The best model is
-tracked separately for gating and is not the opponent pool source. By default
+checkpoints from the current run's `models/` directory (`model_best.onnx`, the
+latest model as of the last eval, is not a pool source). By default
 the checkpoints are drawn by quality scores that the pool games' outcomes keep
 up to date (`opponent_pool_sampling`, `training/hyperparams.md`).
 

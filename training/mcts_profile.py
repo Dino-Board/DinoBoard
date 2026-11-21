@@ -7,10 +7,8 @@ Three config files per game, one shared baseline plus two profile sets:
                                      applied on top of the baseline. Selfplay
                                      carries the dirichlet root-noise override
                                      (the only place noise lives); eval is
-                                     used both for benchmark eval (vs heuristic /
-                                     vs ONNX) and for gating (latest vs best),
-                                     as those are the same MCTS behavior — a
-                                     pair-wise tournament for win-rate.
+                                     the benchmark eval (vs heuristic / vs ONNX),
+                                     a pair-wise tournament for win-rate.
   - `games/<g>/config/web.json`    — `<web_expert|web_casual|analysis>`: profile
                                      deltas applied on top of the baseline. The
                                      web/REST AI never injects noise.
@@ -88,7 +86,7 @@ _PROFILE_FIELDS = {
 _TRAIN_PROFILE_ONLY_FIELDS = {"uct2_arrival_visits"}
 
 # Selfplay exploration knobs: only train.json's `mcts.selfplay` may set them.
-# Eval, gating and the web AI never explore, and none of those paths forwards
+# Eval and the web AI never explore, and none of those paths forwards
 # these fields, so a value anywhere else would be silently ignored — rejected.
 _SELFPLAY_PROFILE_ONLY_FIELDS = {"dirichlet_total_alpha", "root_policy_temperature"}
 
@@ -233,7 +231,7 @@ def _reject_selfplay_profile_only_fields(node: dict, source: str) -> None:
     if misplaced:
         raise ValueError(
             f"{source}: field(s) {sorted(misplaced)} are selfplay exploration knobs and "
-            f"can only be set in train.json's `mcts.selfplay` profile. Eval, gating "
+            f"can only be set in train.json's `mcts.selfplay` profile. Eval "
             f"and the web AI do not explore, so a value here would be silently ignored.")
 
 

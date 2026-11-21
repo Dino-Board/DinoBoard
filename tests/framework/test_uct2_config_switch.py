@@ -140,10 +140,10 @@ def test_training_loop_passes_the_profile_switch_to_every_search(tmp_path, monke
     pipeline.run_training_loop(
         game_id="tictactoe", game_config=find_game_config("tictactoe"),
         train_config=train_cfg, output_dir=tmp_path, steps=1, episodes_per_step=4,
-        eval_every=1, eval_games=2, eval_benchmarks=["heuristic_free"], max_workers=1,
-        batch_size=16, learning_rate=0.001, seed=4)
+        eval_every=1, eval_games=2, max_workers=1, batch_size=16, learning_rate=0.001, seed=4,
+        eval_benchmarks=["heuristic_free", get_test_model(SINGLE)])
     assert set(seen) == {"run_concurrent_selfplay_step",
                          "run_concurrent_eval_vs_heuristic_batch",
-                         "run_concurrent_arena_batch"}  # selfplay, eval, gating
+                         "run_concurrent_arena_batch"}  # selfplay, eval vs heuristic, eval vs model
     for name, values in seen.items():
         assert values and all(v is switch for v in values), name

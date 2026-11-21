@@ -2,7 +2,7 @@
 
 How to notice that selfplay has locked onto one line of play, and the
 framework options that counter it. All of them work for every game, are
-**off unless configured**, and act in selfplay only — eval, gating and the
+**off unless configured**, and act in selfplay only — eval and the
 web AI never explore. Field types and validation: `game-config/reference.md`.
 
 ## The problem

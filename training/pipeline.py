@@ -73,42 +73,6 @@ def atomic_write(path: Path):
             os.close(dir_fd)
 
 
-def _default_gating_threshold(num_players: int, eval_games: int,
-                              victory_mode: str = "winner_takes") -> float:
-    """Default gating win-rate threshold, scaled to the N-player null baseline.
-
-    Scoring: winners split 1 point (score = max(0, z_candidate)); losers get 0.
-    Null baseline is always 1/N. Threshold = baseline + z * sqrt(Var / games),
-    z = 1.0 (one standard error above null; recovers 0.55 for 2p/100 games).
-
-    winner_takes (1 winner, N-1 losers): score ∈ {0, 1}.
-        Var = (1/N)(1-1/N) = (N-1)/N².
-        2p/100g: 0.5500, 3p/100g: 0.3805, 4p/100g: 0.2933.
-
-    loser_pays (1 loser, N-1 winners): score ∈ {0, 1/(N-1)}.
-        Var = 1/(N²(N-1)).
-        2p/100g: 0.5500, 3p/100g: 0.3610, 4p/100g: 0.2644.
-
-    Override per game by setting `gating_accept_win_rate` in train.json.
-    """
-    N = max(num_players, 1)
-    baseline = 1.0 / N
-    z = 1.0  # (0.55 - 0.5) / sqrt(0.25 / 100)
-    if victory_mode == "loser_pays" and N > 2:
-        # share is 0 (loser) or 1/(N-1) (non-loser).
-        # Var = p_lose * (0 - baseline)^2 + p_survive * (1/(N-1) - baseline)^2
-        #     = (1/N) * (1/N)^2 + ((N-1)/N) * (1/(N-1) - 1/N)^2
-        #     = 1/N^3 + ((N-1)/N) * (1/(N(N-1)))^2
-        #     = 1/N^3 + 1/(N^3(N-1))
-        #     = 1/N^3 * (1 + 1/(N-1)) = 1/N^3 * N/(N-1) = 1/(N^2(N-1))
-        var_share = 1.0 / (N * N * (N - 1))
-    else:
-        # winner_takes: share ∈ {0, 1}. Var = baseline*(1-baseline) = (N-1)/N^2
-        var_share = baseline * (1.0 - baseline)
-    se = math.sqrt(var_share / max(eval_games, 1))
-    return baseline + z * se
-
-
 _OPENING_EXPLORATION_KEYS = {"episode_ratio", "min_plies", "max_plies", "temperature", "uniform_mix"}
 
 
@@ -1780,7 +1744,7 @@ def run_eval_batch(
     # Per-seat AI config: candidate vs opponent share every MCTS knob except
     # model_path / simulations / world_cap. tail_solve_enabled is identical
     # on both sides — A/B comparisons of tail_solve live in stand-alone tools
-    # (scripts/eval_tail_solve.py), not in the gating eval batch.
+    # (scripts/eval_tail_solve.py), not in this eval batch.
     def _make_seat_config(
         model_path: str, sims: int, wcap: int,
         belief_model_path: str = "",
@@ -1808,7 +1772,7 @@ def run_eval_batch(
     # Single-process batched path (see run_eval_vs_heuristic for rationale):
     # all matches share one BatchedPolicyValueEvaluator pool across num_threads
     # OS threads — each distinct model is loaded ONCE, not once-per-worker.
-    # This is the direct fix for the gating OOM: the ProcessPool path fork-loads
+    # This is the direct fix for the arena OOM: the ProcessPool path fork-loads
     # candidate + opponent + belief in every worker, and at 100 workers that
     # blew past a 30GB box.
     if concurrent_cfg is not None:
@@ -1944,7 +1908,7 @@ def run_eval_batch(
 def eval_benchmark_setup(game_id: str, eval_profile: MctsProfile, heuristic_name: str | None,
                          heuristic_temperature: float, leaf_batch_size: int) -> dict[str, Any]:
     """What each side of `eval vs heuristic` searches with. The candidate uses
-    the eval MCTS profile (as does gating, on both sides); the opponent is the
+    the eval MCTS profile (as do both sides of a model-vs-model eval); the opponent is the
     named heuristic as the engine instantiates it (None = no heuristic
     benchmark). The two need not match (simulation budget, tail solver, FPU),
     so the win rate is only comparable between runs with the same pair of
@@ -1992,7 +1956,7 @@ def outcome_label(terminal_value: float) -> str:
     Terminal values are zero-sum with 0 = all tied, so the sign is the seat's
     result whatever the number of players: sharing first place among 3-4
     players is a win (+1/nw), finishing behind tied leaders a loss (-1/nl).
-    Same rule as the eval / gating tallies in this module, which compare the
+    Same rule as the eval tallies in this module, which compare the
     share (z + 1) / N with the 1 / N baseline."""
     if terminal_value > 1e-6:
         return "win"
@@ -2010,7 +1974,7 @@ def rotate_z_values(z_values: list[float], player: int, num_players: int = 0) ->
 
 def format_match_result(r: dict) -> str:
     """`win_rate` is (W + D/2) / games. `share` is r["win_rate"], the mean
-    candidate share that gating and guidance thresholds compare against; it
+    candidate share that guidance thresholds compare against; it
     differs from win_rate when terminal values are not +-1 (score margins,
     loser-pays)."""
     games = max(1, r["wins"] + r["losses"] + r["draws"])
@@ -2119,12 +2083,12 @@ def run_training_loop(
         )
     num_players = game_config["num_players"]
 
-    # MCTS profiles drive selfplay / arena (gating) / eval. Top-level
+    # MCTS profiles drive selfplay / eval. Top-level
     # max_game_plies is a game property shared across profiles.
     selfplay_profile = resolve_profile(game_id, "selfplay")
     eval_profile = resolve_profile(game_id, "eval")
     game_max_plies = max_game_plies(game_id)
-    # Selfplay seeds are seed + step*10000 + i; eval / gating seeds live in a
+    # Selfplay seeds are seed + step*10000 + i; eval seeds live in a
     # disjoint range so eval never replays a deal that was trained on.
     eval_seed_base = seed + 1_000_000_000
 
@@ -2132,7 +2096,7 @@ def run_training_loop(
         save_every = eval_every if eval_every > 0 else 50
 
     # Checkpoints stay fp32 (resume, deployment, pool); only the copies fed to
-    # selfplay / eval / gating inference are converted.
+    # selfplay / eval inference are converted.
     inference_precision = train_cfg.get("inference_precision", "fp32")
     if inference_precision not in ("fp32", "fp16"):
         raise ValueError(
@@ -2322,7 +2286,7 @@ def run_training_loop(
                                    ("score_breakdown_head", breakdown_head)) if h is not None}
 
     # EMA of the PV weights. When enabled, the averaged net (not the raw
-    # training weights) is what gets exported for selfplay / eval / gating.
+    # training weights) is what gets exported for selfplay / eval.
     ema_cfg = train_cfg.get("ema")
     ema_net: torch.nn.Module | None = None
     ema_decay = 0.0
@@ -2357,22 +2321,6 @@ def run_training_loop(
     else:
         export_onnx(export_net, initial_onnx, feature_dim)
         current_model_path = str(initial_onnx)
-    best_model_path = current_model_path
-
-    if resume_from:
-        # Never gate against model_latest.onnx, which every step overwrites with the candidate.
-        best_candidate = models_dir / "model_best.onnx"
-        if best_candidate.exists():
-            best_model_path = str(best_candidate)
-            logger.info(f"Resume: best model loaded from {best_candidate}")
-        elif initial_onnx.exists():
-            best_model_path = str(initial_onnx)
-            logger.info(f"Resume: no model promoted yet, gating against {initial_onnx}")
-        else:
-            with atomic_write(best_candidate) as tmp:
-                shutil.copy2(resumed_onnx, tmp)
-            best_model_path = str(best_candidate)
-            logger.info(f"Resume: no model promoted yet, gating against the resumed weights ({best_candidate})")
 
     # Scheduling parameters (three-segment: hold → linear decay → zero).
     # heuristic_guidance lives at train.json's top level (it is a training
@@ -2574,7 +2522,7 @@ def run_training_loop(
     )
     logger.info(f"  simulations: start={simulations_start}, full={simulations_full}")
     logger.info(f"  uct2_arrival_visits: selfplay={selfplay_profile.uct2_arrival_visits}, "
-                f"eval/gating={eval_profile.uct2_arrival_visits} "
+                f"eval={eval_profile.uct2_arrival_visits} "
                 f"(mcts_pv heuristics are pinned to False, whatever this is)")
     logger.info(
         f"  root noise (selfplay): dirichlet_alpha={selfplay_profile.dirichlet_alpha}, "
@@ -2617,7 +2565,7 @@ def run_training_loop(
     worker_pool = PersistentPool(pool_workers)
 
     # Concurrent (single-process, multi-thread, shared-ONNX) eval routing. When
-    # selfplay_concurrency is on, eval/gating go through the batched C++
+    # selfplay_concurrency is on, eval goes through the batched C++
     # bindings (run_concurrent_arena_batch / run_concurrent_eval_vs_heuristic_
     # batch) instead of the ProcessPool — one shared ONNX session per distinct
     # model rather than one stack per fork worker. num_threads can be large
@@ -2641,7 +2589,7 @@ def run_training_loop(
     else:
         concurrent_eval_cfg = None
 
-    # Benchmark transparency: state once what eval / gating search with. The
+    # Benchmark transparency: state once what eval searches with. The
     # heuristic opponent is resolved only when a heuristic benchmark will run.
     logger.info(f"  eval: benchmarks={eval_benchmarks or []}, every={eval_every} steps, "
                 f"games={eval_games}")
@@ -2652,7 +2600,7 @@ def run_training_loop(
             game_id, eval_profile, selector_eval if vs_heuristic else None,
             eval_constrained_temperature,
             concurrent_eval_cfg["leaf_batch_size"] if concurrent_eval_cfg is not None else 1)
-        logger.info(f"  eval candidate (mcts profile 'eval'; gating uses it on both sides): "
+        logger.info(f"  eval candidate (mcts profile 'eval'): "
                     f"{eval_setup['candidate']}")
         if vs_heuristic:
             logger.info(f"  eval heuristic opponent (heuristic.json selector "
@@ -2752,7 +2700,7 @@ def run_training_loop(
             selfplay_elapsed = time.perf_counter() - t_selfplay_start
             # Guided plies are the heuristic's play, not the latest model's.
             pool_results = opponent_pool.update(
-                pool_selection, episodes, num_players, weight=1.0 - heuristic_ratio)
+                pool_selection, episodes, weight=1.0 - heuristic_ratio)
             if opponent_pool_enabled:
                 with atomic_write(pool_state_path) as tmp:
                     tmp.write_text(json.dumps(opponent_pool.state()))
@@ -3237,54 +3185,13 @@ def run_training_loop(
                         f"{guidance_until['threshold']:.0%} at step {step}; decaying over "
                         f"{guidance_until['decay_steps']} steps")
 
-                # Gating: latest vs best (always runs) — shares the eval profile
-                # since gating and benchmark eval are the same MCTS behavior
-                # (pair-wise tournament for win-rate).
-                # Per-seat belief: candidate (latest) gets belief_latest,
-                # opponent (best) gets belief_best. Falls back to latest when
-                # belief_best doesn't exist yet (first gating pass).
-                belief_best_path = str(models_dir / "belief_best.onnx")
-                if not Path(belief_best_path).exists():
-                    belief_best_path = current_belief_model_path
-                gating_result = run_eval_batch(
-                    game_id, eval_infer, inference_model(best_model_path),
-                    eval_games, eval_seed_base + step * 100000 + 80000,
-                    eval_profile.simulations, eval_profile.simulations,
-                    eval_profile.world_cap, eval_profile.world_cap,
-                    max_workers,
-                    max_plies=game_max_plies,
-                    c_puct=eval_profile.c_puct,
-                    temperature=eval_profile.temperature,
-                    opponent_selection=eval_profile.opponent_selection,
-                    tail_solve_enabled=eval_profile.tail_solve_enabled,
-                    tail_solve_depth_limit=eval_profile.tail_solve_depth_limit,
-                    tail_solve_node_budget=eval_profile.tail_solve_node_budget,
-                    tail_solve_auxiliary_weight=eval_profile.tail_solve_auxiliary_weight,
-                    belief_model_path=current_belief_model_path,
-                    belief_model_path_opponent=belief_best_path,
-                    pool=worker_pool,
-                    concurrent_cfg=concurrent_eval_cfg,
-                    safe_mode=safe_mode,
-                    top_k=eval_profile.top_k,
-                    fpu_reduction=eval_profile.fpu_reduction,
-                    uct2_arrival_visits=eval_profile.uct2_arrival_visits,
-                )
-                gating_wr = gating_result["win_rate"]
-                logger.info(
-                    f"  gating vs best: {format_match_result(gating_result)}")
-                gating_threshold = train_cfg.get(
-                    "gating_accept_win_rate",
-                    _default_gating_threshold(num_players, eval_games,
-                                              game_config.get("victory_mode", "winner_takes")))
-                if gating_wr >= gating_threshold:
-                    best_onnx = models_dir / "model_best.onnx"
-                    with atomic_write(best_onnx) as tmp:
-                        shutil.copy2(eval_model, tmp)
-                    best_model_path = str(best_onnx)
-                    if belief_enabled:
-                        with atomic_write(models_dir / "belief_best.onnx") as tmp:
-                            shutil.copy2(belief_latest, tmp)
-                    logger.info(f"  new best model: step {step}, share={gating_wr:.1%}")
+                # No gating (AlphaZero): selfplay always plays the latest model, so
+                # model_best.onnx is just the latest model as of the last eval.
+                with atomic_write(models_dir / "model_best.onnx") as tmp:
+                    shutil.copy2(eval_model, tmp)
+                if belief_enabled:
+                    with atomic_write(models_dir / "belief_best.onnx") as tmp:
+                        shutil.copy2(belief_latest, tmp)
 
             checkpoint = {
                 "step": step,
@@ -3320,4 +3227,4 @@ def run_training_loop(
             signal.signal(sig, handler)
         worker_pool.close()
 
-    logger.info(f"Training complete. Best model: {best_model_path}")
+    logger.info(f"Training complete. Latest model: {current_model_path}")

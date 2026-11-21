@@ -128,12 +128,15 @@ class OpponentPool:
         )
 
     def update(self, selection: Selection, episodes: list[dict[str, Any]],
-               num_players: int, weight: float = 1.0) -> dict[str, tuple[int, float]]:
-        """Score the latest model's pool games (win 1, draw 1/N, loss 0) and,
-        in quality mode, lower each opponent by
-        weight * lr * G * score_rate / (N * inclusion): G pool games, N
-        checkpoints in the window. Its expectation over the draw equals the
-        per-game rule q -= lr / (N p) on every win.
+               weight: float = 1.0) -> dict[str, tuple[int, float]]:
+        """Score the latest model's pool games and, in quality mode, lower each
+        opponent by weight * lr * G * score_rate / (N * inclusion): G pool
+        games, N checkpoints in the window. Its expectation over the draw
+        equals the per-game rule q -= lr / (N p) on every win.
+
+        A game scores (z + 1) / 2 from the latest seat's terminal value z: with
+        two players 1 for a win, 0 for a loss, 1/2 for a draw; with more, it
+        follows the game's own outcome (loser-pays games reward not losing).
 
         Returns {checkpoint name: (games, latest's score)}."""
         games: dict[str, int] = defaultdict(int)
@@ -144,10 +147,8 @@ class OpponentPool:
                 continue
             name = Path(opp).name
             games[name] += 1
-            if ep["draw"] or ep["winner"] < 0:
-                score[name] += 1.0 / num_players
-            elif ep["winner"] == ep["latest_seat"]:
-                score[name] += 1.0
+            z = ep["terminal_z_values"]
+            score[name] += 0.5 if not z else min(1.0, max(0.0, (z[ep["latest_seat"]] + 1.0) / 2.0))
         total = sum(games.values())
         if self.cfg.sampling == "quality" and weight > 0.0 and selection.pool_size > 0:
             for name, n in games.items():

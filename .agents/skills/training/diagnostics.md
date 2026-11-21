@@ -11,15 +11,13 @@ Symptom-to-cause checklist, concurrent inference setup, config principles, and k
 | 1 | Self-play loss not decreasing | Normal -- opponent also improves | Not a bug. Monitor eval win-rate instead. |
 | 2 | Eval win-rate drops after initially rising | Learning rate too high causing catastrophic forgetting | Reduce lr or use cosine schedule with lower lr_min |
 | 3 | Training loss NaN | Learning rate too high, or batch_size too small | Halve lr; ensure batch_size >= 256 |
-| 4 | Gating never accepts new model | Threshold too aggressive for game variance | Lower gating_accept_win_rate; increase eval_games for tighter CI |
-| 5 | Gating always accepts (best = latest) | Threshold too loose, or eval too short | Increase eval_games; verify eval simulations match selfplay |
-| 6 | ONNX export fails | Feature dim mismatch between Python model and C++ encoder | Run `game_metadata(game_id)` to get correct dims from C++ |
-| 7 | Selfplay episodes very slow | Missing selfplay_concurrency, or GIL not released | Enable selfplay_concurrency; verify pybind11 wrappers release GIL |
-| 8 | "Unknown game" error at startup | Game not in manifest.json or not compiled | Check games/manifest.json `enabled: true`; rebuild with `python3 setup.py build_ext --inplace` |
-| 9 | Value head outputs wrong shape | num_players mismatch | Verify game.json variants match C++ state's num_players |
-| 10 | "Tuned a config knob, no effect on training/eval" | Param defined in config/profile but never forwarded through one of the layers (CLI → pipeline → worker → binding → C++). Each layer's own default silently absorbs the missing arg. | See [Always verify param-flow](#always-verify-param-flow) below. `grep -rn '<param>'` and walk the chain before assuming the change took effect. |
-| 11 | Every selfplay game opens the same way / one pattern reused everywhere; `prior_ent` near 0, `prior_top1` near 1 while eval has stalled | Policy lock-in: PUCT keeps visiting what the prior already prefers, equally good alternatives never get searched | See [exploration.md](exploration.md): random starting positions, root policy temperature, Dirichlet noise by legal-action count; opponent pool |
-| 12 | In pure self-play `v_loss` keeps falling but eval / gating stalls; on freshly generated games the value's error is higher than the logged `v_loss`, and higher than a small regression on scoreboard numbers | Value head memorises the outcomes of the games in the replay buffer (too many sample draws per game, window of too few games) | Fewer `train_batches_per_step` (draws per game, see [hyperparams.md](hyperparams.md)), larger `replay_buffer_size`, symmetry augmentation if the encoder offers it. Measure with fresh games, not `v_loss`; probe, recipe and restart policy: `value-overfit` skill |
+| 4 | ONNX export fails | Feature dim mismatch between Python model and C++ encoder | Run `game_metadata(game_id)` to get correct dims from C++ |
+| 5 | Selfplay episodes very slow | Missing selfplay_concurrency, or GIL not released | Enable selfplay_concurrency; verify pybind11 wrappers release GIL |
+| 6 | "Unknown game" error at startup | Game not in manifest.json or not compiled | Check games/manifest.json `enabled: true`; rebuild with `python3 setup.py build_ext --inplace` |
+| 7 | Value head outputs wrong shape | num_players mismatch | Verify game.json variants match C++ state's num_players |
+| 8 | "Tuned a config knob, no effect on training/eval" | Param defined in config/profile but never forwarded through one of the layers (CLI → pipeline → worker → binding → C++). Each layer's own default silently absorbs the missing arg. | See [Always verify param-flow](#always-verify-param-flow) below. `grep -rn '<param>'` and walk the chain before assuming the change took effect. |
+| 9 | Every selfplay game opens the same way / one pattern reused everywhere; `prior_ent` near 0, `prior_top1` near 1 while eval has stalled | Policy lock-in: PUCT keeps visiting what the prior already prefers, equally good alternatives never get searched | See [exploration.md](exploration.md): random starting positions, root policy temperature, Dirichlet noise by legal-action count; opponent pool |
+| 10 | In pure self-play `v_loss` keeps falling but eval stalls; on freshly generated games the value's error is higher than the logged `v_loss`, and higher than a small regression on scoreboard numbers | Value head memorises the outcomes of the games in the replay buffer (too many sample draws per game, window of too few games) | Fewer `train_batches_per_step` (draws per game, see [hyperparams.md](hyperparams.md)), larger `replay_buffer_size`, symmetry augmentation if the encoder offers it. Measure with fresh games, not `v_loss`; probe, recipe and restart policy: `value-overfit` skill |
 
 ---
 
@@ -149,7 +147,7 @@ When tuning anything (training cfg, MCTS knob, profile field, web setting), **do
 ```
 games/<id>/config/<file>.json
   ↓ training/mcts_profile.py::resolve_profile()       (profile loader)
-  ↓ training/pipeline.py                              (selfplay/eval/gating dispatch)
+  ↓ training/pipeline.py                              (selfplay/eval dispatch)
   ↓ pybind11 binding (bindings/py_engine.cpp)        (each Python kwarg mapped to a C++ param)
   ↓ engine/runtime/*_runner.cpp                       (per-episode SelfplayConfig / ArenaPlayerConfig)
   ↓ engine/search/net_mcts.cpp                        (the loop that actually reads the value)
@@ -218,5 +216,5 @@ Both bugs were invisible to every test, every metric, and every loss curve. Only
 ### DEC-001: Self-play loss not decreasing
 **Decision**: Documented as normal behavior. Self-play loss is not a training quality signal because the opponent improves at the same rate. Eval win-rate vs fixed baseline is the correct metric.
 
-### DEC-002: Gating threshold auto-scaling
-**Decision**: Gating threshold scales with num_players: `threshold = 1/N + z * sqrt((1/N)(1-1/N)/eval_games)`, with `z=1.0` ("one standard error above the null"). Anchor: 2p @ 100 games → 0.55. Sample values at 100 games: 2p=0.5500, 3p=0.3805, 4p=0.2933. 3p/4p look closer to baseline because Bernoulli variance `p(1-p)` is smaller off-center; same statistical bar, smaller absolute margin. Override per game by setting `gating_accept_win_rate` in train.json.
+### DEC-002: No gating
+**Decision**: Selfplay always plays the latest model (AlphaZero), and the pipeline plays no latest-vs-best match; `models/model_best.onnx` is the latest model as of the last eval. Gating never fed the training data (selfplay and the opponent pool use the latest model and the `model_step_*` checkpoints), cost 2-5% of a run, and late in runs sat near 50%, so it decided nothing. Measure progress with the benchmark eval and head-to-head games between checkpoints (`value-overfit` skill).

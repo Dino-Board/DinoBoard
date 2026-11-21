@@ -314,4 +314,4 @@ std::vector<int> winners() const override {
 - Players in neither set get `0`
 - If all N players are in one set → all get `0`
 
-**When to override**: any game where the natural payoff is "don't be the loser" rather than "be the winner". Set `"victory_mode": "loser_pays"` in `game.json` so the training pipeline uses the correct gating threshold variance.
+**When to override**: any game where the natural payoff is "don't be the loser" rather than "be the winner". Set `"victory_mode": "loser_pays"` in `game.json` so the web platform labels the outcome that way (training reads only the terminal values).

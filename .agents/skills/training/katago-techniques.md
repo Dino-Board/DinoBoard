@@ -99,7 +99,7 @@ blocking).
 
 After every optimizer step an exponential moving average of the PV weights
 is updated; the averaged net (not the raw weights) is what gets exported for
-selfplay, eval and gating. Averaging smooths SGD noise and usually yields a
+selfplay and eval. Averaging smooths SGD noise and usually yields a
 slightly stronger, steadier model. The raw weights keep training as before.
 
 - `decay` 0.99–0.999. The effective window is about `1 / (1 − decay)`

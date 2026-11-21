@@ -519,7 +519,7 @@ def test_guidance_until_win_rate_needs_its_benchmark(tmp_path):
 
 
 def test_full_training_loop_with_eval(tmp_path):
-    """Run 3 steps with eval and gating. Verify the whole pipeline end-to-end."""
+    """Run 3 steps with eval. Verify the whole pipeline end-to-end."""
     from training.cli import find_heuristic_config
     cfg = find_game_config("tictactoe")
     train_cfg, _ = find_train_config("tictactoe")
@@ -580,13 +580,9 @@ def test_full_training_loop_with_eval(tmp_path):
     )
     assert ep["total_plies"] > 0
 
-    # eval ran at step 2 → if gating passed, model_best.onnx exists and differs from latest
+    # eval ran at step 2 → model_best.onnx is the step-2 model, a copy that step 3 left alone
     best = models_dir / "model_best.onnx"
-    if best.exists():
-        best_bytes = best.read_bytes()
-        # best is a snapshot, not a symlink/alias to latest
-        # After step 3 training, latest has newer weights. best should be frozen at step 2.
-        assert best_bytes != latest_bytes, "model_best should be a frozen copy, not track latest"
+    assert best.read_bytes() != latest_bytes, "model_best should be a frozen copy, not track latest"
 
 
 def _onnx_float_types(path: Path) -> tuple[set, set]:
@@ -686,21 +682,6 @@ def test_training_loop_rejects_unknown_inference_precision(tmp_path):
             output_dir=tmp_path, steps=1, episodes_per_step=2, eval_every=0,
             eval_games=2, max_workers=1, batch_size=32, learning_rate=0.001, seed=1,
         )
-
-
-# ---------------------------------------------------------------------------
-# Gating logic
-# ---------------------------------------------------------------------------
-
-def test_gating_threshold():
-    """Win rate >= threshold should accept; below should reject."""
-    threshold = 0.55
-    assert 0.60 >= threshold  # accept
-    assert 0.50 < threshold   # reject (but this is just a sanity check)
-
-    cfg = find_train_config("quoridor")[0]["training"]
-    gar = cfg.get("gating_accept_win_rate", 0.6)
-    assert 0.0 < gar < 1.0, "gating threshold should be between 0 and 1"
 
 
 # ---------------------------------------------------------------------------

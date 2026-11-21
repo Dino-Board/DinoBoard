@@ -8,13 +8,14 @@ confirmed the new runs are much stronger.
 
 ## Symptoms
 
-- Gating fails several evals in a row while eval vs the heuristic stays near saturation.
+- Newer checkpoints stop beating older ones head-to-head while eval vs the heuristic stays near
+  saturation.
 - Training `v_loss` keeps falling in pure self-play (it should stay roughly flat once
   the opponent improves as fast as the learner, see training DEC-001).
 - The search's value estimates swing hard on small changes; `best_value` near +-1 in
   positions that are still open.
 
-None of these proves overfitting. Gating can stall for other reasons, and a falling
+None of these proves overfitting. A run can stall for other reasons, and a falling
 `v_loss` can be real learning. Measure before changing the recipe.
 
 ## Measure: the value probe
@@ -110,11 +111,11 @@ the search, which produces games that confirm it. Once the probe shows overconfi
 3. Put the new knobs in a `--config-override` JSON first; move them into the repo's
    train config once head-to-head games confirm the fix.
 
-## Verify: head-to-head, not gating
+## Verify: head-to-head
 
-Gating only compares with the previous best, so a steadily improving run can still fail
-it often (both v2 runs passed less and less while getting much stronger). Play fixed
-checkpoints against each other:
+The gating the pipeline used to run only compared with the previous best, so a steadily
+improving run could still fail it often (both v2 runs passed less and less while getting
+much stronger). Play fixed checkpoints against each other:
 
 ```bash
 python scripts/eval_model.py --game <game> --model new.onnx --opponent old.onnx \
