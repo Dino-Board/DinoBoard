@@ -94,6 +94,10 @@ are always resolved from the base file).
 | eval_benchmarks | string[] | Benchmark list, e.g. ["heuristic_free"] |
 | opponent_pool_enabled | bool | Enable past-model opponent pool |
 | opponent_pool_self_ratio | float | Fraction of games vs self (vs pool) |
+| opponent_pool_sampling | string | `"quality"` (default): OpenAI Five quality scores, steered by the pool games' outcomes; `"uniform"`: every checkpoint in the window equally likely. See `training/hyperparams.md` |
+| opponent_pool_window | float | (0, 1], default 1. Only checkpoints from the last `window` fraction of the run so far are opponents |
+| opponent_pool_quality_lr | float | Default 0.01. Quality score lost per pool game the latest model wins (OpenAI Five's η) |
+| opponent_pool_uniform_mix | float | [0, 1], default 0.1. Share of the uniform distribution mixed into the quality draw |
 | gating_accept_win_rate | float | Override auto-computed gating threshold |
 | playout_cap | object | KataGo playout cap randomization: `{"full_simulations": int, "fast_simulations": int, "full_search_prob": float}`. Each selfplay MCTS ply is a full search (root noise, training sample) with probability full_search_prob, else a fast search without noise whose sample is dropped. Replaces the profile's simulations; exclusive with simulations_start; requires selfplay_concurrency. Splendor transformer 800/150/0.25: 6.4x games/hour, 1.5x training samples/hour vs 2000 every ply |
 | score_head | object | Training-only auxiliary head predicting the final score margin: `{"loss_weight": float, "scale": float}`, both > 0. Target per seat = (own score − best other score) / scale, MSE weighted by loss_weight. Needs the game's `final_score_extractor` (`has_final_score_extractor` in metadata); not exported to ONNX. Can be toggled across resumes |

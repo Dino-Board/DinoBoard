@@ -228,10 +228,20 @@ Guidance duration by heuristic strength:
 |-------|---------|-------------|
 | opponent_pool_enabled | false | Self-play vs past checkpoints |
 | opponent_pool_self_ratio | 0.5 | Fraction of games vs current model |
+| opponent_pool_sampling | quality | `quality` or `uniform` (below) |
+| opponent_pool_window | 1.0 | Opponents only from the last `window` fraction of the run so far |
+| opponent_pool_quality_lr | 0.01 | Score lost per pool game the latest model wins |
+| opponent_pool_uniform_mix | 0.1 | Uniform share mixed into the quality draw |
 
 Enable for bluff/deception games (coup, liarsdice) where playing only against self leads to exploitable strategies. The pool prevents strategy collapse.
 
-`selfplay_concurrency.opponent_pool_max_distinct`: max distinct ONNX models loaded for concurrent pool play (memory bound; 3 is typical).
+`selfplay_concurrency.opponent_pool_max_distinct`: max distinct ONNX models loaded for concurrent pool play (memory bound; 3 is typical). Each step draws that many opponents; every pool game of the step plays one of them.
+
+Opponents are the run's `model_step_*.onnx` checkpoints (`training/opponent_pool.py`):
+
+- `uniform` draws them all with equal chance. Late in a run most are early checkpoints the latest model beats almost every game: pool games spent on them teach little.
+- `quality` (OpenAI Five, Berner et al. 2019, appendix N) gives each checkpoint a score q and draws from softmax(q) mixed with `uniform_mix` of uniform. A checkpoint enters at the top score and loses `lr / (N p)` for each pool game the latest model wins against it (a draw counts 1/N of a win), N being the checkpoints in the window. Checkpoints the latest model has outgrown fade from the draw; ones it still loses to keep their share, and the uniform mix keeps revisiting old ones so a forgotten weakness shows up. It uses only the pool games' own outcomes: no evaluation games. Pool games during heuristic guidance count `1 - guidance ratio`. Scores live in `models/opponent_pool.json` and survive `--resume`; the step log lists each opponent played with its draw probability and the latest model's score (`vs step_01750 p=0.21 14/20`).
+- `window` (Bansal et al. 2018, opponents from Uniform(δv, v)) drops early checkpoints outright; `window = 0.5` is their δ = 0.5. Useful when early networks play too weakly to be worth a game, with either sampling.
 
 ---
 

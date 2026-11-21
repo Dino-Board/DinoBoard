@@ -993,7 +993,7 @@ py::dict run_selfplay_episodes_batch_py(
 // Returns: { "episodes": [episode_dict, ...] } where each ep dict carries
 // `latest_seat: -1` for mirror runs and `latest_seat >= 0` for pool runs
 // (matching run_selfplay_episodes_batch's labeling for downstream sample
-// filtering).
+// filtering), and `pool_opponent`: the opponent's model path, "" for mirror.
 py::dict run_concurrent_selfplay_step_py(
     const std::string& game_id,
     const std::vector<std::uint64_t>& seeds,
@@ -1281,6 +1281,7 @@ py::dict run_concurrent_selfplay_step_py(
   const std::size_t total_episodes = seeds.size();
   std::vector<runtime::SelfplayEpisodeResult> results(total_episodes);
   std::vector<int> result_latest_seat(total_episodes, -1);   // -1 = self/mirror
+  std::vector<std::string> result_opponent(total_episodes);  // "" = self/mirror
   std::vector<std::exception_ptr> errors(total_episodes);
   std::atomic<std::size_t> next_idx{0};
 
@@ -1320,6 +1321,7 @@ py::dict run_concurrent_selfplay_step_py(
     //       evaluator in SplitPolicyValueEvaluator so its MCTS uses opp
     //       policy at non-latest perspective.
     int chosen_latest_seat = -1;
+    std::string chosen_opponent;
     std::vector<const search::IPolicyValueEvaluator*> seat_eval_ptrs(
         static_cast<size_t>(num_players), latest_eval);
 
@@ -1340,6 +1342,7 @@ py::dict run_concurrent_selfplay_step_py(
       std::uniform_int_distribution<size_t> opp_dist(0, opp_evals.size() - 1);
       chosen_latest_seat = seat_dist(thread_rng);
       const size_t chosen_opp_idx = opp_dist(thread_rng);
+      chosen_opponent = active_opp_paths[chosen_opp_idx];
       auto* opp_eval = opp_evals[chosen_opp_idx];
       // No split evaluator: latest seat uses latest, opp seats use opp.
       // SplitPolicyValueEvaluator's "opp policy + latest value" hybrid is
@@ -1396,6 +1399,7 @@ py::dict run_concurrent_selfplay_step_py(
         per_seat_belief_evals,
         bundle.belief_label_extractor.get());
     result_latest_seat[idx] = chosen_latest_seat;
+    result_opponent[idx] = chosen_opponent;
   };
 
   auto worker_fn = [&](int thread_id, bool is_pool) {
@@ -1437,6 +1441,7 @@ py::dict run_concurrent_selfplay_step_py(
     py::dict ep = result_to_py(results[i], master, compact_samples);
     results[i] = {};
     ep["latest_seat"] = result_latest_seat[i];
+    ep["pool_opponent"] = result_opponent[i];
     episodes.append(ep);
   }
   py::dict out;

@@ -39,6 +39,7 @@ from .model import (
     export_onnx,
     padded_token_count,
 )
+from .opponent_pool import OpponentPool, format_pool_step, parse_pool_config
 from .symmetry import parse_symmetry_augmentation
 
 logger = logging.getLogger(__name__)
@@ -259,8 +260,11 @@ def _worker_selfplay_batch(args: tuple) -> list[dict[str, Any]]:
         exploration=selfplay_exploration_args(cfg),
     )
     episodes = out["episodes"]
+    opponent = (None if latest_seat is None else
+                next(p for s, p in enumerate(model_paths_per_seat) if s != latest_seat))
     for ep in episodes:
         ep["latest_seat"] = latest_seat
+        ep["pool_opponent"] = opponent
     return episodes
 
 
@@ -1249,10 +1253,11 @@ def _run_selfplay_batch_concurrent(
     )
     episodes = out["episodes"]
     # Pipeline downstream expects latest_seat=None for mirror, int>=0 for pool.
-    # The C++ binding emits -1 for mirror, normalize here.
+    # The C++ binding emits -1 (and pool_opponent "") for mirror, normalize here.
     for ep in episodes:
         if ep.get("latest_seat", -1) < 0:
             ep["latest_seat"] = None
+            ep["pool_opponent"] = None
     n_self_done = sum(1 for ep in episodes if ep["latest_seat"] is None)
     n_pool_done = len(episodes) - n_self_done
 
@@ -2457,6 +2462,13 @@ def run_training_loop(
         opponent_pool_self_ratio = train_cfg["opponent_pool_self_ratio"]
     else:
         opponent_pool_self_ratio = 1.0  # unused; full mirror
+    pool_cfg = parse_pool_config(
+        train_cfg, (train_cfg.get("selfplay_concurrency") or {}).get("opponent_pool_max_distinct", 3))
+    # Scores of a fresh run start empty even if an older run left the file behind.
+    pool_state_path = models_dir / "opponent_pool.json"
+    opponent_pool = OpponentPool(
+        pool_cfg,
+        json.loads(pool_state_path.read_text()) if resume_from and pool_state_path.exists() else None)
 
     replay_buffer_size = int(train_cfg.get("replay_buffer_size",
                                             episodes_per_step * 50 * 20))
@@ -2580,6 +2592,8 @@ def run_training_loop(
     logger.info(
         f"  opponent_pool: enabled={opponent_pool_enabled}, "
         f"self_ratio={opponent_pool_self_ratio}"
+        + (f", {pool_cfg}, scores restored for {len(opponent_pool.scores)} checkpoints"
+           if opponent_pool_enabled else "")
     )
     logger.info(f"  replay_buffer: maxlen={replay_buffer_size}, "
                 f"storage={'compact/' + compact_dtype.name if compact_dtype is not None else 'lists'}")
@@ -2724,24 +2738,33 @@ def run_training_loop(
             # Recompute the pool every step — newly saved checkpoints automatically
             # enrol the step after they land. Empty pool ⇒ all episodes mirror.
             # Disabled via train.json `opponent_pool_enabled: false` ⇒ same.
-            pool_paths = _collect_pool_paths(models_dir)
+            pool_selection = opponent_pool.select(
+                _collect_pool_paths(models_dir), step,
+                np.random.default_rng([seed, step, 0x9001]))
             t_selfplay_start = time.perf_counter()
             episodes, sp_stats = run_selfplay_batch(
                 game_id, inference_model(current_model_path), episodes_per_step,
                 seed + step * 10000, selfplay_cfg, max_workers,
-                pool_paths=pool_paths, num_players=num_players,
+                pool_paths=pool_selection.paths, num_players=num_players,
                 pool_enabled=opponent_pool_enabled,
                 self_ratio=opponent_pool_self_ratio,
                 pool=worker_pool)
             selfplay_elapsed = time.perf_counter() - t_selfplay_start
+            # Guided plies are the heuristic's play, not the latest model's.
+            pool_results = opponent_pool.update(
+                pool_selection, episodes, num_players, weight=1.0 - heuristic_ratio)
+            if opponent_pool_enabled:
+                with atomic_write(pool_state_path) as tmp:
+                    tmp.write_text(json.dumps(opponent_pool.state()))
             logger.info(
                 f"  pool: enabled={sp_stats['pool_enabled']}, "
-                f"|P|={sp_stats['pool_size']}, "
+                f"|P|={pool_selection.pool_size}, "
                 f"workers(self/pool)={sp_stats['n_self_workers']}/"
                 f"{sp_stats['n_pool_workers']}, "
                 f"episodes(self/pool)={sp_stats['n_self']}/"
                 f"{sp_stats['n_pool']}, "
                 f"dropped={sp_stats['dropped']}"
+                + (f", vs {format_pool_step(pool_selection, pool_results)}" if pool_results else "")
             )
 
             # `step_samples` counts what actually entered the replay buffer
