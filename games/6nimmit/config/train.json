@@ -51,8 +51,8 @@
       "temperature_schedule": {
         "enabled": true,
         "initial": 1.0,
-        "final": 0.5,
-        "decay_plies": 20
+        "final": 0.1,
+        "decay_plies": 5
       }
     },
     "eval": {

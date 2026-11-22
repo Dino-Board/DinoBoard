@@ -58,7 +58,7 @@
         "enabled": true,
         "initial": 1.0,
         "final": 0.1,
-        "decay_plies": 60
+        "decay_plies": 12
       }
     },
     "eval": {
