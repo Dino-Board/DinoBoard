@@ -89,7 +89,8 @@ constexpr int cards_draw = 0, cards_discard = 1, cards_may_snap = 2, cards_upgra
 constexpr int build_budget = 0, build_upgraded = 1, build_normal_done = 2, build_engineer_used = 3,
               build_built_n = 4, build_built = 5;  // built: pairs (BuildingKind, size)
 constexpr int kMaxBuilt = 10;
-constexpr int animals_remaining = 0, animals_played = 1, animals_phase = 2, animals_all_small = 3;
+// animals_upgraded: the side the action started on (kNull under g_upstream_rules: read live).
+constexpr int animals_remaining = 0, animals_played = 1, animals_phase = 2, animals_all_small = 3, animals_upgraded = 4;
 constexpr int kAnimalsPlay = 0, kAnimalsBonus = 1, kAnimalsTake = 2;  // animals_phase values
 constexpr int assoc_strength = 0, assoc_remaining = 1, assoc_used = 2 /* Task bit mask */, assoc_donated = 3,
               assoc_side2 = 4;

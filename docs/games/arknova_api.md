@@ -34,24 +34,37 @@ the state after each step (with Python's random outcomes replayed) must be
 identical. 2000 games on Map 0 (about 1.14 million steps) agree, and 300 games
 over all ten maps in turn (`--maps all`, the default; 181,020 steps).
 
-Checked against the rulebook (`games/arknova/Arche_Nova_Rules_EN_Low_2022_01.pdf`),
-ark-nova-ai departs from it in three places, which the engine fixes:
+Checked against the rulebook (`games/arknova/Arche_Nova_Rules_EN_Low_2022_01.pdf`)
+and the official FAQ and errata (Feuerland, Ark Nova FAQ V2,
+https://www.feuerland-spiele.de/fileadmin/game/Arche_Nova/Arche_Nova_FAQ_V2_EN_A4_low.pdf),
+ark-nova-ai departs from them in six places, which the engine fixes:
 
 - whether a second animal can be played is decided after the first one's
   effects (rulebook p. 12: the Eagle-Owl draws the Lynx, which is then played);
 - Animals II at strength 5+ is judged with the +1 reputation it gains first (p. 13);
 - an animal leaving a standard enclosure (release, move into a new Reptile House
-  or Aviary) flips the smallest occupied standard enclosure meeting its needs (pp. 12, 15).
+  or Aviary) flips the smallest occupied standard enclosure meeting its needs (pp. 12, 15;
+  the FAQ's errata);
+- Determination's any action may be the X-token action (FAQ);
+- appeal stops at 113 and conservation points at 41, the ends of the tracks (FAQ);
+- an Animals card upgraded during its own action (reputation 5, 2 conservation points)
+  keeps its old side until the next action: no animal from the display in that action
+  (FAQ). The `act_animals` frame records the side it started on (`upgraded`); the other
+  actions already decide their side at the start, or end before an upgrade could matter.
 
 `arknova_diff_cli` runs with `g_upstream_rules` (ark-nova-ai's behaviour
 there), so the differential test still covers everything else;
 `games/arknova/tools/rule_scenarios.py` (same `--ref`/`--cli` arguments)
-plays the three rulebook situations through `arknova_diff_cli --rulebook`
-and checks both behaviours. Not modelled:
+plays these situations through `arknova_diff_cli --rulebook` and without it,
+and checks both behaviours. It also plays a position for every other FAQ
+answer a position can show (Boost, Hypnosis tokens, Pilfering, bonus tiles, the
+third partner zoo, Build II spaces, cards 228, 251 and 260, workers gained
+mid-action, Venom and X-tokens, Multiplier tokens, partner zoo discounts, water
+adjacency, Maps 2 and 5); both behaviours must follow the FAQ there. Not modelled:
 the player choosing the order of simultaneous effects and of "after finishing"
 effects (fixed order here).
 
-Against a checkout of ark-nova-ai with those three places fixed (the
+Against a checkout of ark-nova-ai with those six places fixed (the
 `rulebook` branch of the fork, the board's reference, see "Playing on
 ark-nova-ai's Board"), `diff_test.py --rulebook` runs the CLI with
 `--rulebook`; the fork's `main` branch is ark-nova-ai as published. Every step it also checks that `import_state` (the

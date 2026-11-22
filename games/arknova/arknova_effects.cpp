@@ -204,12 +204,19 @@ void icons_played(State& s, int p, const IconCounts& added, const IconCounts& be
   }
 }
 
+namespace {
+
+// ark-nova-ai has no track ends.
+std::int16_t on_track(int value, int max) { return static_cast<std::int16_t>(g_upstream_rules ? value : std::min(value, max)); }
+
+}  // namespace
+
 void score(State& s, int p, EffectKind kind, int amount) {
   Player& pl = s.players[p];
   if (kind == EffectKind::kEffConservation) {
-    pl.conservation += amount;
+    pl.conservation = on_track(pl.conservation + amount, kConservationMax);
   } else if (kind == EffectKind::kEffAppeal) {
-    pl.appeal += amount;
+    pl.appeal = on_track(pl.appeal + amount, kAppealMax);
   } else {
     engine_error("score: bad kind");
   }
@@ -233,7 +240,7 @@ void push_free_build(State& s, int p, std::initializer_list<std::pair<BuildingKi
 void gain_conservation(State& s, int p, int amount) {
   Player& pl = s.players[p];
   int old = pl.conservation;
-  pl.conservation += amount;
+  pl.conservation = on_track(pl.conservation + amount, kConservationMax);
   int now = pl.conservation;
   auto crossed = [&](int space) { return old < space && space <= now; };
   if (g_feed) {
@@ -256,7 +263,7 @@ void gain_reputation(State& s, int p, int amount) {
   Player& pl = s.players[p];
   for (int i = 0; i < amount; ++i) {
     if (pl.reputation >= kReputationMax) {
-      pl.appeal += 1;
+      pl.appeal = on_track(pl.appeal + 1, kAppealMax);
       continue;
     }
     if (pl.reputation >= kReputationCapWithoutCardsII && !pl.is_upgraded(kCards)) break;
@@ -282,7 +289,7 @@ void gain(State& s, int p, EffectKind kind, int amount) {
   if (g_feed) feed_gain(p, kind, amount);
   switch (kind) {
     case EffectKind::kEffMoney: pl.money += amount; break;
-    case EffectKind::kEffAppeal: pl.appeal += amount; break;
+    case EffectKind::kEffAppeal: pl.appeal = on_track(pl.appeal + amount, kAppealMax); break;
     case EffectKind::kEffXtoken: pl.xtokens = static_cast<std::int8_t>(std::min(kMaxXtokens, pl.xtokens + amount)); break;
     case EffectKind::kEffConservation: gain_conservation(s, p, amount); break;
     case EffectKind::kEffReputation: gain_reputation(s, p, amount); break;

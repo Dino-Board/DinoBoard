@@ -148,7 +148,14 @@ struct Play {
   int cost;
 };
 
-std::vector<Play> plays(const State& s, int p, bool small_only = false) {
+// Side II (playing from the display) is the side the action started on: an upgrade during the
+// action counts from the next action on (official FAQ).
+bool side2(const State& s, const Frame& f) {
+  const std::int16_t at_start = f.d[fd::animals_upgraded];
+  return at_start == kNull ? is_upgraded(s, f.player, kAnimals) : at_start != 0;
+}
+
+std::vector<Play> plays(const State& s, int p, bool side2, bool small_only = false) {
   const Player& pl = s.players[p];
   struct Source {
     Head head;
@@ -158,7 +165,7 @@ std::vector<Play> plays(const State& s, int p, bool small_only = false) {
   };
   std::vector<Source> sources;
   for (CardIdx c : pl.hand_cards()) sources.push_back({Head::play, c, c, 0});
-  if (is_upgraded(s, p, kAnimals)) {
+  if (side2) {
     for (int i : cards_in_range(s, p)) sources.push_back({Head::play_display, i, s.display[i], i + 1});
   }
   std::vector<Play> out;
@@ -184,7 +191,7 @@ bool animals_feasible(State& s, int p, int strength) {
       (pl.reputation < kReputationCapWithoutCardsII || pl.is_upgraded(kCards))) {
     ++pl.reputation;
   }
-  const bool any = !plays(s, p).empty();
+  const bool any = !plays(s, p, is_upgraded(s, p, kAnimals)).empty();
   pl.reputation = reputation;
   return any;
 }
@@ -196,6 +203,7 @@ void animals_start(State& s, int p, int strength) {
   f.d[fd::animals_played] = 0;
   f.d[fd::animals_phase] = fd::kAnimalsPlay;
   f.d[fd::animals_all_small] = 1;
+  if (!g_upstream_rules) f.d[fd::animals_upgraded] = is_upgraded(s, p, kAnimals);
   if (is_upgraded(s, p, kAnimals) && strength >= kAnimalsIIReputationStrength) gain(s, p, EffectKind::kEffReputation, 1);
 }
 
@@ -216,7 +224,7 @@ void advance(State& s, int fi) {
       return;
     }
     f.d[fd::animals_phase] = fd::kAnimalsBonus;
-    if (!plays(s, p, true).empty()) return;
+    if (!plays(s, p, side2(s, f), true).empty()) return;
   }
   if (f.d[fd::animals_phase] == fd::kAnimalsBonus) {
     f.d[fd::animals_phase] = fd::kAnimalsTake;
@@ -234,7 +242,7 @@ void animals_options(State& s, int fi, std::vector<Option>& out) {
     if (small.empty()) out.push_back(opt(Head::done));
     return;
   }
-  std::vector<Play> ps = plays(s, p, f.d[fd::animals_phase] == fd::kAnimalsBonus);
+  std::vector<Play> ps = plays(s, p, side2(s, f), f.d[fd::animals_phase] == fd::kAnimalsBonus);
   for (const Play& pl : ps) out.push_back(pl.key);
   if (f.d[fd::animals_played] || ps.empty() || f.d[fd::animals_phase] == fd::kAnimalsBonus) out.push_back(opt(Head::done));
 }
@@ -256,7 +264,7 @@ void animals_apply(State& s, int fi, const Option& o, Chance& ch) {
     to_hand(s, p, take_from_display(s, o.a[0]), true);
     return;
   }
-  std::vector<Play> ps = plays(s, p, f.d[fd::animals_phase] == fd::kAnimalsBonus);
+  std::vector<Play> ps = plays(s, p, side2(s, f), f.d[fd::animals_phase] == fd::kAnimalsBonus);
   auto match = std::find_if(ps.begin(), ps.end(), [&](const Play& m) { return m.key == o; });
   if (match == ps.end()) engine_error("act_animals: play not found");
   Play m = *match;
@@ -282,7 +290,9 @@ void animals_apply(State& s, int fi, const Option& o, Chance& ch) {
   ++f.d[fd::animals_played];
   bool in_play_phase = f.d[fd::animals_phase] == fd::kAnimalsPlay;
   f.d[fd::animals_all_small] = f.d[fd::animals_all_small] && is_small(m.card);
-  if (!in_play_phase || f.d[fd::animals_remaining] <= 0 || (g_upstream_rules && plays(s, p).empty())) advance(s, fi);
+  if (!in_play_phase || f.d[fd::animals_remaining] <= 0 || (g_upstream_rules && plays(s, p, side2(s, f)).empty())) {
+    advance(s, fi);
+  }
   const CardDef& c = card(m.card);
   gain(s, p, EffectKind::kEffAppeal, c.appeal);
   gain(s, p, EffectKind::kEffConservation, c.conservation);

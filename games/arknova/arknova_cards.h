@@ -205,6 +205,9 @@ inline int victory_points(int appeal, int conservation) { return appeal - target
 
 constexpr int kReputationMax = 15;
 constexpr int kReputationCapWithoutCardsII = 9;
+// The ends of the appeal and conservation tracks: no gain goes past them (official FAQ).
+constexpr int kAppealMax = 113;
+constexpr int kConservationMax = 41;
 // Reputation track bonus at each space (kEffMoney with amount 0 = none).
 Effect reputation_bonus(int space, bool* present);
 int reputation_folders(int reputation);

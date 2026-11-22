@@ -26,7 +26,7 @@ TAKE, GIVE, PICK = "take", "give", "pick"  # gain / play / keep it; give it up; 
 MEANING = {
     "setup_keep": {"hand_discard": GIVE},
     "turn": {"act": PICK, "xtoken": PICK},
-    "extra_action": {"act": PICK, "skip": PICK},
+    "extra_action": {"act": PICK, "xtoken": PICK, "skip": PICK},  # xtoken: Determination's any action
     "multiplier_repeat": {"repeat": PICK, "skip": PICK},
     "act_cards": {"deck": TAKE, "display": TAKE, "snap": TAKE},
     "take_card": {"deck": TAKE, "display": TAKE},

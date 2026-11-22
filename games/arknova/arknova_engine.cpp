@@ -448,11 +448,21 @@ void turn_end(State& s, int fi, Chance& ch) {
 
 // ---- extra actions -----------------------------------------------------------------
 
+// Determination's "any action", the only extra action over every card that cannot be skipped: it
+// may be the X-token action (official FAQ), which ark-nova-ai never offers.
+bool xtoken_allowed(const State& s, const Frame& f) {
+  return !g_upstream_rules && f.d[fd::extra_owner] == f.player && !f.d[fd::extra_optional] &&
+         f.d[fd::extra_actions] == (1 << kNumActions) - 1 && s.players[f.player].xtokens < kMaxXtokens;
+}
+
 void extra_options(State& s, int fi, std::vector<Option>& out) {
   const Frame f = frame(s, fi);
   int p = f.player, owner = f.d[fd::extra_owner];
   const Registry& r = registry();
   std::size_t n0 = out.size();
+  if (xtoken_allowed(s, f)) {
+    for (int action = 0; action < kNumActions; ++action) out.push_back(opt(Head::xtoken, action));
+  }
   for (int action = 0; action < kNumActions; ++action) {
     if (!(f.d[fd::extra_actions] >> action & 1)) continue;
     int base = card_strength(s, owner, action);
@@ -474,11 +484,12 @@ void extra_options(State& s, int fi, std::vector<Option>& out) {
 void extra_apply(State& s, int fi, const Option& o, Chance&) {
   const Frame f = frame(s, fi);
   pop(s, fi);
-  if (o.head != Head::act) return;
+  if (o.head != Head::act && o.head != Head::xtoken) return;
   int p = f.player, owner = f.d[fd::extra_owner];
-  int action = o.a[0], x = o.a[1];
+  const bool xtoken = o.head == Head::xtoken;
+  int action = o.a[0], x = xtoken ? 0 : o.a[1];
   Player& pl = s.players[p];
-  pl.last_action = static_cast<std::int8_t>(action);
+  pl.last_action = xtoken ? kLastActionXtoken : static_cast<std::int8_t>(action);
   if (owner == p && has_venom(s, p) && !has_token(s, p, action, TokenKind::kVenom)) {
     pl.money -= std::min<int>(pl.money, kVenomCost);
   }
@@ -488,6 +499,14 @@ void extra_apply(State& s, int fi, const Option& o, Chance&) {
   TurnCtx& t = s.turns[s.turn_depth++];
   t = TurnCtx{};
   t.action = static_cast<std::int8_t>(action);
+  if (xtoken) {
+    t.xtoken = true;
+    int ee = push(s, FrameKind::extra_end, p);
+    frame(s, ee).d[fd::phase] = 0;
+    frame(s, ee).d[fd::extra_end_owner] = static_cast<std::int16_t>(owner);
+    gain(s, p, EffectKind::kEffXtoken, 1);
+    return;
+  }
   t.strength = static_cast<std::int8_t>(strength);
   t.has_strength = true;
   if (owner != p) {
