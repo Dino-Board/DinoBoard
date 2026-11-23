@@ -194,15 +194,39 @@ When the number of legal moves changes a lot within a game, set `dirichlet_total
   "enabled": true,
   "initial": 1.0,
   "final": 0.1,
-  "decay_plies": 60
+  "decay_plies": 12
 }
 ```
 
-- Start at 1.0 for exploration in opening.
-- Decay to 0.1 for exploitation in midgame/endgame.
-- `decay_plies`: about 20% of a game's real length (`plies=` in the step log, not max_game_plies), as AlphaZero's 30 sampled moves. Azul 54 plies: 11; Splendor 59: 12; Harmonies 128: 25; Carcassonne 142: 30; 6 nimmt! 24: 5.
-- The moves played this way are the games the value head learns from. 6 nimmt! sampled every move (1.0 to 0.5 over 20 of its 24 plies, never below 0.5): with its flat search distributions the latest net, a match for its guided-phase self when both pick the most visited move (-0.6 bullheads a hand), lost by 3.6 bullheads a hand when both sampled, and the run made no progress after guidance (two runs, 3500 and 9800 steps).
-- Bluff games (coup): consider `enabled: false` with flat `temperature: 1.0` -- exploration throughout is important.
+**Rule: finish the decay early.** The temperature picks the move actually played from the finished
+visit counts; it does not change the search or the policy target. What it changes is the game: the
+positions training sees and the result every sample of that game is labelled with. Sampled moves are
+weaker moves, so a long schedule trains the value head on how games end when play is half random.
+Variety of positions, the reason for a long schedule, comes from random openings
+(`training.opening_exploration`, `exploration.md`) or from the game's own chance (deals, tile draws),
+not from the temperature.
+
+- `decay_plies`: about 20% of a game's real length (`plies=` in the step log, not max_game_plies),
+  then 0.1 (all but the most visited move). Azul 54 plies: 11; Splendor 59: 12; Harmonies 128: 25;
+  Carcassonne 142: 30; 6 nimmt! 24: 5. A deterministic game with no opening randomness needs
+  `opening_exploration`, not a longer schedule.
+- Why it matters more after heuristic guidance: guided plies are the teacher's moves, so the
+  temperature does not act on them. Once the network plays, its search distributions are much flatter
+  than the teacher's (`prior_ent` 6 nimmt! 0.6 -> 1.4, Harmonies 1.05 -> 1.87), and sampling from
+  them picks bad moves often.
+- 6 nimmt! sampled every move (1.0 to 0.5 over 20 of its 24 plies, never below 0.5). Its latest net,
+  a match for its guided-phase self when both picked the most visited move (-0.6 bullheads a hand),
+  lost by 3.6 bullheads a hand when both sampled, and the run made no progress after guidance (two
+  runs, 3500 and 9800 steps). Restarted with 1.0 to 0.1 over 5 plies, the same step was 1.1
+  bullheads a hand better than the old run (paired games, 55.9%) and kept improving.
+- Harmonies (1.0 to 0.1 over 60 of 128 plies): step 2200 beat step 800 55.5% picking the most
+  visited move but lost 41.7% when both sampled at 0.5, and no gating pass for 2700 steps.
+  Resumed at step 3196 with 25 plies: a new best at step 3500 (60.2%) and its highest eval within
+  400 steps.
+- Check what a run uses: `resolve_profile(game, "selfplay")` (`temperature_initial`,
+  `temperature_final`, `temperature_decay_plies`); the startup log does not print it.
+- Bluff games (coup): consider `enabled: false` with flat `temperature: 1.0` -- the mixed strategy is
+  the point there.
 
 ---
 

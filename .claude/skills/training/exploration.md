@@ -17,6 +17,11 @@ the model is weak in positions it never steers into.
 An opponent pool (`hyperparams.md`) varies the *opponent*. The options here
 vary the *positions* and the *root search*, and combine freely with it.
 
+Not among them: the played-move temperature (`temperature_schedule`). Use these
+options for variety and let that temperature reach 0.1 after about 20% of a
+game (`hyperparams.md`, temperature_schedule): every sampled move makes the
+game, and so its value targets, worse.
+
 | Option | Config | Acts on |
 |--------|--------|---------|
 | Opening exploration | `training.opening_exploration` | Which positions selfplay games start from |
@@ -161,7 +166,7 @@ changes a lot during a game (board-filling and tile-placement games).
 
 1. Look at `prior_ent` / `prior_top1` / `policy_kl` of the existing run.
 2. Lock-in visible in the opening (same first moves every game): add
-   `opening_exploration`.
+   `opening_exploration`, rather than sampling played moves longer.
 3. Lock-in throughout the game (one pattern everywhere): add
    `root_policy_temperature`, and switch to `dirichlet_total_alpha` if the
    branching factor varies.
