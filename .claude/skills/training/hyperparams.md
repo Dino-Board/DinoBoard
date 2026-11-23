@@ -200,7 +200,7 @@ When the number of legal moves changes a lot within a game, set `dirichlet_total
 
 - Start at 1.0 for exploration in opening.
 - Decay to 0.1 for exploitation in midgame/endgame.
-- `decay_plies`: about 20% of a game's real length (`plies=` in the step log, not max_game_plies), as AlphaZero's 30 sampled moves. Azul 54 plies: 11; Splendor 59: 12; Carcassonne 142: 30; 6 nimmt! 24: 5.
+- `decay_plies`: about 20% of a game's real length (`plies=` in the step log, not max_game_plies), as AlphaZero's 30 sampled moves. Azul 54 plies: 11; Splendor 59: 12; Harmonies 128: 25; Carcassonne 142: 30; 6 nimmt! 24: 5.
 - The moves played this way are the games the value head learns from. 6 nimmt! sampled every move (1.0 to 0.5 over 20 of its 24 plies, never below 0.5): with its flat search distributions the latest net, a match for its guided-phase self when both pick the most visited move (-0.6 bullheads a hand), lost by 3.6 bullheads a hand when both sampled, and the run made no progress after guidance (two runs, 3500 and 9800 steps).
 - Bluff games (coup): consider `enabled: false` with flat `temperature: 1.0` -- exploration throughout is important.
 
