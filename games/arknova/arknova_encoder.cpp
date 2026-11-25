@@ -176,6 +176,7 @@ class Writer {
       : st_(st), s_(st.core), me_(me), opp_(1 - me), out_(out) {
     if (s_.stack_n) top_ = &s_.top();
     for (int i : cards_in_range(s_, me_)) in_range_[i] = true;
+    for (int i : cards_in_range(s_, opp_)) opp_in_range_[i] = true;
   }
 
   // Appends a token and returns its features; valid until the next token is appended. `anchor` is
@@ -436,11 +437,12 @@ class Writer {
     const int end_appeal = pl.appeal + static_cast<int>(std::lround(eg.card_appeal));
     const int end_conservation = pl.conservation + static_cast<int>(std::lround(eg.final_cp + eg.card_cp));
     f[pf::projected_vp] = victory_points(end_appeal, end_conservation) / 30.0f;
-    const int project_cp = best_project_cp(p);
+    const auto [project_cp, project_lost] = best_project(p);
     const auto [animal_appeal, animal_cp] = best_animals(p);
     f[pf::best_project] = project_cp / 5.0f;
+    f[pf::best_project_release] = project_lost / 10.0f;
     f[pf::best_animals] = animal_appeal / 15.0f;
-    const int gain = std::max(victory_points(pl.appeal, pl.conservation + project_cp),
+    const int gain = std::max(victory_points(pl.appeal - project_lost, pl.conservation + project_cp),
                               victory_points(pl.appeal + animal_appeal, pl.conservation + animal_cp)) -
                      pl.victory_points();
     f[pf::best_turn_vp] = std::max(gain, 0) / 15.0f;
@@ -723,14 +725,15 @@ class Writer {
     return e;
   }
 
-  // The most conservation one Association action could bring p now: one project level it could
-  // support (in play, in its hand as far as I know it, on the display within range with
-  // Association II), with a worker free for it and the strength, X-tokens included.
-  int best_project_cp(int p) {
+  // The best project level one Association action could support for p now ({conservation, appeal
+  // the release takes}, the most victory points net): one it could support (in play, in its hand
+  // as far as I know it, on the display within range with Association II), with a worker free for
+  // it and the strength, X-tokens included.
+  std::pair<int, int> best_project(int p) {
     const Player& pl = s_.players[p];
     const int workers = workers_needed(pl, kTaskProject);
-    if (workers < 0 || workers > pl.active_workers()) return 0;
-    if (effective_strength(s_, p, kAssociation) + pl.xtokens < project_strength_needed(pl)) return 0;
+    if (workers < 0 || workers > pl.active_workers()) return {0, 0};
+    if (effective_strength(s_, p, kAssociation) + pl.xtokens < project_strength_needed(pl)) return {0, 0};
     std::vector<CardIdx> projects(s_.base_projects, s_.base_projects + s_.n_base_projects);
     projects.insert(projects.end(), s_.projects, s_.projects + s_.n_projects);
     for (int c = 0; c < num_cards(); ++c) {
@@ -744,17 +747,24 @@ class Writer {
         if (c != kNoCard && card(c).type == CardType::kProject && pl.money >= i + 1) projects.push_back(c);
       }
     }
-    int best = 0;
+    std::pair<int, int> best{0, 0};
+    int best_vp = 0;
+    bool found = false;
     for (CardIdx c : projects) {
-      const std::array<bool, 3> levels = supportable_levels(s_, p, c);
+      const std::array<int, 3> lost = support_appeal_lost(s_, p, c);
       const CardDef& d = card(c);
       for (int k = 0; k < d.n_slots; ++k) {
-        if (!levels[k]) continue;
+        if (lost[k] < 0) continue;
         int cp = 0;
         for (int i = 0; i < d.slots[k].n_rewards; ++i) {
           if (d.slots[k].rewards[i].reward == Reward::kRewardConservation) cp += d.slots[k].rewards[i].amount;
         }
-        best = std::max(best, cp);
+        const int vp = victory_points(pl.appeal - lost[k], pl.conservation + cp);
+        if (!found || vp > best_vp || (vp == best_vp && cp > best.first)) {
+          best = {cp, lost[k]};
+          best_vp = vp;
+          found = true;
+        }
       }
     }
     return best;
@@ -762,7 +772,8 @@ class Writer {
 
   // The most appeal one Animals action could bring p now ({appeal, conservation printed with it}):
   // as many animals as its strength (X-tokens included) plays, from its hand as far as I know it
-  // and from the display within range with Animals II, each playable, housed and paid for.
+  // and from the display within range with Animals II, each playable, paid for and housed, no two
+  // in one standard enclosure nor more than a special enclosure's free spaces in it.
   std::pair<int, int> best_animals(int p) {
     const Player& pl = s_.players[p];
     const int strength = std::clamp(effective_strength(s_, p, kAnimals) + pl.xtokens, 1, 5);
@@ -770,14 +781,16 @@ class Writer {
     if (n <= 0) return {0, 0};
     struct Candidate {
       int appeal, conservation, cost;
+      std::vector<Housing> homes;
     };
     std::vector<Candidate> cands;
     auto consider = [&](CardIdx c, int extra) {
       const CardDef& d = card(c);
       if (d.type != CardType::kAnimal) return;
-      if (!sr::requirements_ok(s_, p, c) || !sr::animal_allowed(pl, c) || housings(pl, c).empty()) return;
+      if (!sr::requirements_ok(s_, p, c) || !sr::animal_allowed(pl, c)) return;
+      std::vector<Housing> homes = housings(pl, c);
       const int cost = animal_cost(pl, c) + extra;
-      if (cost <= pl.money) cands.push_back({d.appeal, d.conservation, cost});
+      if (!homes.empty() && cost <= pl.money) cands.push_back({d.appeal, d.conservation, cost, std::move(homes)});
     };
     for (int c = 0; c < num_cards(); ++c) {
       if (st_.hand[p][c] == 1) consider(static_cast<CardIdx>(c), 0);
@@ -787,14 +800,37 @@ class Writer {
         if (s_.display[i] != kNoCard) consider(s_.display[i], i + 1);
       }
     }
+    // Standard enclosures taken and special enclosure spaces used by the animals chosen so far. An
+    // occupied standard enclosure is a home only for a flock animal joining it, which takes nothing.
+    const Zoo& zoo = pl.zoo;
+    std::vector<bool> taken(static_cast<std::size_t>(zoo.n_buildings), false);
+    std::vector<int> used(static_cast<std::size_t>(zoo.n_buildings), 0);
     std::pair<int, int> best{0, 0};
     auto search = [&](auto&& self, std::size_t from, int left, int money, int appeal, int conservation) -> void {
       if (std::make_pair(appeal, conservation) > best) best = {appeal, conservation};
       if (left == 0) return;
       for (std::size_t i = from; i < cands.size(); ++i) {
-        if (cands[i].cost > money) continue;
-        self(self, i + 1, left - 1, money - cands[i].cost, appeal + cands[i].appeal,
-             conservation + cands[i].conservation);
+        const Candidate& a = cands[i];
+        if (a.cost > money) continue;
+        for (const Housing& h : a.homes) {
+          const Building& b = zoo.buildings[h.building];
+          const auto at = static_cast<std::size_t>(h.building);
+          if (b.kind == BuildingKind::kEnclosure) {
+            if (b.occupied) {
+              self(self, i + 1, left - 1, money - a.cost, appeal + a.appeal, conservation + a.conservation);
+              break;
+            }
+            if (taken[at]) continue;
+            taken[at] = true;
+            self(self, i + 1, left - 1, money - a.cost, appeal + a.appeal, conservation + a.conservation);
+            taken[at] = false;
+          } else {
+            if (b.size - b.used - used[at] < h.spaces) continue;
+            used[at] += h.spaces;
+            self(self, i + 1, left - 1, money - a.cost, appeal + a.appeal, conservation + a.conservation);
+            used[at] -= h.spaces;
+          }
+        }
       }
     };
     search(search, 0, n, pl.money, 0, 0);
@@ -859,39 +895,57 @@ class Writer {
 
     const bool held = w.loc == cf::my_zoo || w.loc == cf::opp_zoo || w.loc == cf::my_final;
     if (!held && (animal || sponsor)) {
-      // What playing it now would take: money (with the holder's discounts and the display
-      // folder), its conditions, a place for it in the holder's zoo, and action card strength.
-      const int money = (w.display >= 0 ? w.display + 1 : 0) + (animal ? animal_cost(owner, c) : 0);
-      f[cf::money_now] = money / 36.0f;
-      f[cf::affordable] = owner.money >= money ? 1.0f : 0.0f;
-      bool req_ok, has_place;
-      if (animal) {
-        req_ok = sr::requirements_ok(s_, holder, c) && sr::animal_allowed(owner, c);
-        has_place = !housings(owner, c).empty();
-        f[cf::strength_short] = strength_short(holder, kAnimals, animals_strength_needed(owner));
-      } else {
-        req_ok = unmet_requirements(owner, c) == 0;
-        bool has_building = false;
-        const bool spot = !building_spots(s_, holder, c, &has_building).empty();
-        has_place = !has_building || spot;
-        f[cf::strength_short] = strength_short(holder, kSponsors, sponsor_strength_needed(s_, holder, c));
+      play_features(f, c, holder, w.display, kHolderPlay);
+      if (w.loc == cf::display) {
+        f[cf::opp_in_range] = opp_in_range_[w.display] ? 1.0f : 0.0f;
+        play_features(f, c, opp_, w.display, kOpponentPlay);
       }
-      f[cf::req_ok] = req_ok ? 1.0f : 0.0f;
-      f[cf::has_place] = has_place ? 1.0f : 0.0f;
     }
     // What the card's end-of-game effect would score right now for the player holding it (me for
-    // my final cards and the ones I am offered).
-    if (has_endgame(c) && (held || w.loc == cf::private_list)) {
+    // my final cards and the ones I am offered); a sponsor not yet in a zoo as if played now.
+    if (has_endgame(c) && (held || w.loc == cf::private_list || sponsor)) {
       State& x = scratch();
       Player& pl = x.players[holder];
-      const auto appeal = pl.appeal, conservation = pl.conservation;
-      endgame_effect(x, c, static_cast<int>(&pl - x.players));
-      f[cf::yield + 0] = (pl.conservation - conservation) / 4.0f;
-      f[cf::yield + 1] = (pl.appeal - appeal) / 10.0f;
-      pl.appeal = appeal;
-      pl.conservation = conservation;
+      const bool add = sponsor && !held && pl.n_zoo_cards < kMaxZooCards;
+      if (add) add_zoo_card(pl, c);
+      const auto [appeal, conservation] = endgame_yield(x, c, holder);
+      if (add) --pl.n_zoo_cards;
+      f[cf::yield + 0] = conservation / 4.0f;
+      f[cf::yield + 1] = appeal / 10.0f;
     }
     if (sponsor) sponsor_features(f, c, w, held);
+  }
+
+  // Where play_features writes: the holder's columns, or the opponent's for a display card.
+  struct PlayAt {
+    int money_now, affordable, req_ok, has_place, strength_short;
+  };
+  static constexpr PlayAt kHolderPlay{cf::money_now, cf::affordable, cf::req_ok, cf::has_place, cf::strength_short};
+  static constexpr PlayAt kOpponentPlay{cf::opp_money_now, cf::opp_affordable, cf::opp_req_ok, cf::opp_has_place,
+                                        cf::opp_strength_short};
+
+  // What playing animal or sponsor c now would take player p: money (with p's discounts and the
+  // display folder), its conditions, a place for it in p's zoo, and action card strength.
+  void play_features(float* f, CardIdx c, int p, int display, const PlayAt& at) {
+    const Player& pl = s_.players[p];
+    const bool animal = card(c).type == CardType::kAnimal;
+    const int money = (display >= 0 ? display + 1 : 0) + (animal ? animal_cost(pl, c) : 0);
+    f[at.money_now] = money / 36.0f;
+    f[at.affordable] = pl.money >= money ? 1.0f : 0.0f;
+    bool req_ok, has_place;
+    if (animal) {
+      req_ok = sr::requirements_ok(s_, p, c) && sr::animal_allowed(pl, c);
+      has_place = !housings(pl, c).empty();
+      f[at.strength_short] = strength_short(p, kAnimals, animals_strength_needed(pl));
+    } else {
+      req_ok = unmet_requirements(pl, c) == 0;
+      bool has_building = false;
+      const bool spot = !building_spots(s_, p, c, &has_building).empty();
+      has_place = !has_building || spot;
+      f[at.strength_short] = strength_short(p, kSponsors, sponsor_strength_needed(s_, p, c));
+    }
+    f[at.req_ok] = req_ok ? 1.0f : 0.0f;
+    f[at.has_place] = has_place ? 1.0f : 0.0f;
   }
 
   // A sponsor's effects, measured by running the rules' effect code on a copy of the state: what
@@ -918,7 +972,8 @@ class Writer {
         income_effect(x, c, p);
         f[cf::income + 0] = part(pl.money - m.money, 10.0f);
         f[cf::income + 1] = part(pl.conservation - m.conservation, 2.0f);
-        f[cf::income + 2] = part(pl.xtokens - m.xtokens + pushed(m, FrameKind::take_card), 2.0f);
+        f[cf::income + 2] = part(pl.xtokens - m.xtokens, 2.0f);
+        f[cf::income + 3] = part(pushed(m, FrameKind::take_card), 2.0f);
       }
       if (immediate) {
         const Mark m = mark();
@@ -926,20 +981,26 @@ class Writer {
         f[cf::immediate + 0] = part(pl.money - m.money, 20.0f);
         f[cf::immediate + 1] = part(pl.appeal - m.appeal, 10.0f);
         f[cf::immediate + 2] = part(pl.conservation - m.conservation, 5.0f);
-        f[cf::immediate + 3] = part(pushed(m, FrameKind::take_card) + pl.workers - m.workers +
-                                        pushed(m, FrameKind::free_build), 2.0f);
+        f[cf::immediate + 3] = part(pushed(m, FrameKind::take_card), 2.0f);
+        f[cf::immediate + 4] = part(pl.workers - m.workers, 2.0f);
+        f[cf::immediate + 5] = part(pushed(m, FrameKind::free_build), 2.0f);
       }
     }
     if (has_icon_trigger(c)) {
       const IconTriggerSpec t = icon_trigger_spec(c);
       if (t.icon >= 0) f[cf::trigger_icon + t.icon] = 1.0f;
       f[cf::trigger_any] = t.any_zoo ? 1.0f : 0.0f;
-      if (t.amount > 0 && t.kind == EffectKind::kEffMoney) {
-        f[cf::trigger_gain + 0] = t.amount / 3.0f;
-      } else if (t.amount > 0 && t.kind == EffectKind::kEffAppeal) {
-        f[cf::trigger_gain + 1] = t.amount / 2.0f;
+      if (t.amount > 0) {
+        switch (t.kind) {
+          case EffectKind::kEffMoney: f[cf::trigger_gain + 0] = t.amount / 3.0f; break;
+          case EffectKind::kEffAppeal: f[cf::trigger_gain + 1] = t.amount / 2.0f; break;
+          case EffectKind::kEffConservation: f[cf::trigger_gain + 2] = static_cast<float>(t.amount); break;
+          case EffectKind::kEffReputation: f[cf::trigger_gain + 3] = static_cast<float>(t.amount); break;
+          case EffectKind::kEffXtoken: f[cf::trigger_gain + 4] = static_cast<float>(t.amount); break;
+          default: throw std::logic_error("arknova encoder: an icon trigger gain without a feature");
+        }
       } else {
-        f[cf::trigger_gain + 2] = 1.0f;  // a track step, an X-token, a free building, a card, an ability
+        f[cf::trigger_gain + (t.free_building ? 5 : t.card_pick ? 6 : 7)] = 1.0f;  // 7: an ability
       }
     }
   }
@@ -992,6 +1053,7 @@ class Writer {
 
   std::vector<float>* out_;
   bool in_range_[kDisplaySize] = {};
+  bool opp_in_range_[kDisplaySize] = {};
   std::optional<State> scratch_;
 };
 
@@ -1029,8 +1091,11 @@ void check_card_table() {
     }
     if (d.type == CardType::kSponsor && has_icon_trigger(static_cast<CardIdx>(i))) {
       const IconTriggerSpec t = icon_trigger_spec(static_cast<CardIdx>(i));
+      const bool step = t.kind == EffectKind::kEffConservation || t.kind == EffectKind::kEffReputation ||
+                        t.kind == EffectKind::kEffXtoken;
       if (t.icon >= kNumIcons || (t.kind == EffectKind::kEffMoney && t.amount > 3) ||
-          (t.kind == EffectKind::kEffAppeal && t.amount > 2)) {
+          (t.kind == EffectKind::kEffAppeal && t.amount > 2) || (step && t.amount > 1) ||
+          (t.amount > 0 && !step && t.kind != EffectKind::kEffMoney && t.kind != EffectKind::kEffAppeal)) {
         throw std::logic_error("arknova encoder: icon trigger outside its features: " + name);
       }
     }

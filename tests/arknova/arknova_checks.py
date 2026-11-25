@@ -16,6 +16,7 @@ import numpy as np
 import dinoboard_engine as engine
 
 from arknova_reference import (ACTIONS, BUILD_ACTION, BUILDING_TYPES, DONATION_COSTS, GAME, SPONSOR_TRIGGERS,
+                               TRIGGER_GAINS,
                                TASKS, adjacent_terrain, animal_cost, appeal_income, atom_index, atom_names,
                                PLACEMENT_BONUS_EFFECT, building_cells, building_type, card_index, cards, decode,
                                effect_vector, enums, final_card_points, final_scoring_cards, kiosk_income_of, known_to,
@@ -364,16 +365,19 @@ def check_state(ck: Checker, toks, me, core, own, state_dict, tracker, legal):
         vp = pl["appeal"] - target_appeal(pl["conservation"])
         ck.eq(tok, "projected_vp", (end_appeal - target_appeal(end_conservation)) / 30)
         # best_project / best_animals search one action; here what they must satisfy: a project level
-        # gives 1-5 conservation, nothing without a free worker, and best_turn_vp is at least what
-        # either would add (the animals' own conservation only adds to it).
+        # gives 1-5 conservation, nothing without a free worker, a release takes at most the appeal
+        # there is, and best_turn_vp is at least what either would add (the animals' own
+        # conservation only adds to it).
         project, animals = round(tok["best_project"] * 5), round(tok["best_animals"] * 15)
+        released = round(tok["best_project_release"] * 10)
         assert 0 <= project <= 5 and animals >= 0, f"player {p}: best_project {project}, best_animals {animals}"
+        assert 0 <= released <= pl["appeal"] and (project or not released), f"player {p}: release {released}"
         if pl["workers"] - sum(out) == 0:
             assert project == 0, f"player {p}: a project with no worker free"
-        gain = max(pl["appeal"] - target_appeal(pl["conservation"] + project),
+        gain = max(pl["appeal"] - released - target_appeal(pl["conservation"] + project),
                    pl["appeal"] + animals - target_appeal(pl["conservation"])) - vp
         assert tok["best_turn_vp"] * 15 >= gain - 1e-4, f"player {p}: best_turn_vp below {gain}"
-        for name in ("best_project", "best_animals", "best_turn_vp"):
+        for name in ("best_project", "best_project_release", "best_animals", "best_turn_vp"):
             ck.mark("player", name, tok[name])
         ck.eq(tok, "conservation_to_bonus",
               next((t - pl["conservation"] for t in (2, 5, 8, 10) if pl["conservation"] < t), 0) / 5)
@@ -705,14 +709,23 @@ def check_card(ck, t, loc, display_i, take, discard, *, me, core, prefix, top):
     ck.eq(t, "tokens", {"small": 1, "large": 2}.get(n, n) / 5)
     ck.eq(t, "unmet", unmet_requirements(holder, c) / 3 if animal or sponsor else 0)
     held = loc in ("my_zoo", "opp_zoo", "my_final")
-    if not held and (animal or sponsor):
-        money = folder + (animal_cost(holder, c) if animal else 0)
-        ck.eq(t, "money_now", money / 36)
-        ck.eq(t, "affordable", holder["money"] >= money)
-        ck.eq(t, "strength_short", strength_short(holder, c, core["map"]))
+    # Who may play it now: its holder, and the opponent too for a display card. req_ok / has_place
+    # are checked against the legal actions (check_playable) and, for the opponent, against its own
+    # view (check_perspectives).
+    players = [("", holder)] if not held and (animal or sponsor) else []
+    if players and loc == "display":
+        players.append(("opp_", theirs))
+        ck.eq(t, "opp_in_range", display_i < reputation_folders(theirs["reputation"]))
     else:
+        ck.eq(t, "opp_in_range", 0)
+    for prefix_, pl in players:
+        money = folder + (animal_cost(pl, c) if animal else 0)
+        ck.eq(t, prefix_ + "money_now", money / 36)
+        ck.eq(t, prefix_ + "affordable", pl["money"] >= money)
+        ck.eq(t, prefix_ + "strength_short", strength_short(pl, c, core["map"]))
+    for prefix_ in {"", "opp_"} - {p for p, _ in players}:
         for name in ("money_now", "affordable", "req_ok", "has_place", "strength_short"):
-            ck.eq(t, name, 0)
+            ck.eq(t, prefix_ + name, 0)
     effect = t["effect"]
     assert set(np.unique(effect)) <= {0.0, 1.0}
     assert effect[4] == c["lasting_effect"]
@@ -724,30 +737,30 @@ def check_card(ck, t, loc, display_i, take, discard, *, me, core, prefix, top):
     if c["type"] == "endgame":
         points = final_card_points(core, me, c["id"]) if loc in ("my_final", "private_list") else 0
         ck.eq(t, "yield", [points / 4, 0])
-    elif sponsor and (held or loc == "private_list"):
-        conservation, appeal = sponsor_endgame(holder, c, core["map"])
+    elif sponsor:
+        conservation, appeal = sponsor_endgame(holder, c, core["map"], in_zoo=held)
         ck.eq(t, "yield", [conservation / 4, appeal / 10])
     else:
         ck.eq(t, "yield", [0, 0])
     if not sponsor:
-        for name, width in (("immediate", 4), ("income", 3), ("trigger_icon", 15), ("trigger_any", 1),
-                            ("trigger_gain", 3)):
+        for name, width in (("immediate", 6), ("income", 4), ("trigger_icon", 15), ("trigger_any", 1),
+                            ("trigger_gain", 8)):
             ck.eq(t, name, [0] * width if width > 1 else 0)
         return
 
     def part(v, top):
         return min(max(v, 0), top) / top
 
-    imm = sponsor_immediate(holder, c, core["map"]) if not held else dict(money=0, appeal=0, conservation=0, other=0)
+    imm = sponsor_immediate(holder, c, core["map"]) if not held else collections.Counter()
     ck.eq(t, "immediate", [part(imm["money"], 20), part(imm["appeal"], 10), part(imm["conservation"], 5),
-                           part(imm["other"], 2)])
+                           part(imm["cards"], 2), part(imm["workers"], 2), part(imm["buildings"], 2)])
     inc = sponsor_income(holder, c, held)
-    ck.eq(t, "income", [part(inc["money"], 10), part(inc["conservation"], 2), part(inc["other"], 2)])
-    icon, any_zoo, money, appeal = SPONSOR_TRIGGERS.get(c["id"], (None, False, 0, 0))
-    triggered = c["id"] in SPONSOR_TRIGGERS
+    ck.eq(t, "income", [part(inc["money"], 10), part(inc["conservation"], 2), part(inc["xtokens"], 2),
+                        part(inc["cards"], 2)])
+    icon, any_zoo, gain, amount = SPONSOR_TRIGGERS.get(c["id"], (None, False, None, 0))
     ck.eq(t, "trigger_icon", [i == icon for i in e["icons"]])
     ck.eq(t, "trigger_any", any_zoo)
-    ck.eq(t, "trigger_gain", [money / 3, appeal / 2, triggered and not (money or appeal)])
+    ck.eq(t, "trigger_gain", [amount / scale if kind == gain else 0 for kind, scale in TRIGGER_GAINS.items()])
 
 
 def check_playable(ck, toks, legal, kind, data, prefix, mine, folders, side2, key):
@@ -932,7 +945,8 @@ def check_perspectives(ck, episode, sample, me, core, own, state, legal):
 
     # What a player holds back depends on who looks: its own Final Scoring cards and hand are known
     # to it, the opponent sees an expectation and the hand cards it has seen.
-    held_back = {"endgame_final", "projected_vp", "best_project", "best_animals", "best_turn_vp"}
+    held_back = {"endgame_final", "projected_vp", "best_project", "best_project_release", "best_animals",
+                 "best_turn_vp"}
     for a, b in zip(group(mine, "player"), reversed(group(other, "player"))):
         same(a, b, {"me", "opponent"} | held_back)
     # An opponent hand card I saw says what it would do for the opponent: the same as that card in
@@ -962,3 +976,15 @@ def check_perspectives(ck, episode, sample, me, core, own, state, legal):
                      ("occupied_me", "occupied_opp"), ("occupied_opp", "occupied_me")):
             assert np.array_equal(a[x], b[y]), f"project {c}: my {x} is not the other view's {y}"
         ck.mark("project", "can_opp", a["can_opp"].any())
+    # A display card says what playing it would take each player: my opp_ columns are the other
+    # view's own ones.
+    shown_a = {t.card(): t for t in group(mine, "card") if t["display"]}
+    shown_b = {t.card(): t for t in group(other, "card") if t["display"]}
+    assert shown_a.keys() == shown_b.keys()
+    for c, a in shown_a.items():
+        b = shown_b[c]
+        for name in ("in_range", "money_now", "affordable", "req_ok", "has_place", "strength_short"):
+            assert np.array_equal(a["opp_" + name], b[name]), f"display card {c}: my opp_{name} is not the other's {name}"
+            assert np.array_equal(a[name], b["opp_" + name]), f"display card {c}: my {name} is not the other's opp_{name}"
+        for name in ("opp_req_ok", "opp_has_place"):
+            ck.mark("card", name, a[name])

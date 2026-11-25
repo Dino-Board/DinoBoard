@@ -412,20 +412,23 @@ def final_card_points(core, p: int, card_id: int) -> int:
 
 # ---- sponsor effects, typed from the printed card texts (not from the engine's effect code) ------
 
-# Icon triggers: printed id -> (icon, plays into any zoo count, money per icon, appeal per icon); a
-# trigger with neither gives something else per icon (a track step, an X-token, a free building, a
-# card, an ability). Explorer (262) counts icons new to the zoo, so it has no icon.
+# Icon triggers: printed id -> (icon, plays into any zoo count, what each icon gives, how much); the
+# gains are money, appeal, a track step (conservation, reputation), an X-token, a free building, a
+# card to pick, or an ability (Pouch, Clever, Sun Bathing, Hunter, Okapi Stable, Explorer). Explorer
+# (262) counts icons new to the zoo, so it has no icon.
 SPONSOR_TRIGGERS = {
-    208: ("science", True, 2, 0), 236: ("primate", True, 3, 0), 237: ("reptile", True, 3, 0),
-    238: ("bird", True, 3, 0), 239: ("predator", True, 3, 0), 240: ("herbivore", True, 3, 0),
-    251: ("bear", True, 0, 2), 243: ("herbivore", False, 0, 2), 244: ("bird", False, 0, 2),
-    245: ("water", False, 0, 2), 246: ("rock", False, 0, 2), 247: ("primate", False, 0, 2),
-    202: ("science", False, 0, 0), 204: ("science", False, 0, 0), 248: ("primate", False, 0, 0),
-    210: ("americas", False, 0, 0), 211: ("europe", False, 0, 0), 212: ("australia", False, 0, 0),
-    213: ("asia", False, 0, 0), 214: ("africa", False, 0, 0), 249: ("bird", False, 0, 0),
-    250: ("reptile", False, 0, 0), 252: ("predator", False, 0, 0), 253: ("herbivore", False, 0, 0),
-    262: (None, False, 0, 0),
+    208: ("science", True, "money", 2), 236: ("primate", True, "money", 3), 237: ("reptile", True, "money", 3),
+    238: ("bird", True, "money", 3), 239: ("predator", True, "money", 3), 240: ("herbivore", True, "money", 3),
+    251: ("bear", True, "appeal", 2), 243: ("herbivore", False, "appeal", 2), 244: ("bird", False, "appeal", 2),
+    245: ("water", False, "appeal", 2), 246: ("rock", False, "appeal", 2), 247: ("primate", False, "appeal", 2),
+    202: ("science", False, "reputation", 1), 204: ("science", False, "conservation", 1),
+    248: ("primate", False, "xtoken", 1), 210: ("americas", False, "building", 1),
+    211: ("europe", False, "building", 1), 212: ("australia", False, "ability", 1), 213: ("asia", False, "building", 1),
+    214: ("africa", False, "ability", 1), 249: ("bird", False, "card", 1), 250: ("reptile", False, "ability", 1),
+    252: ("predator", False, "ability", 1), 253: ("herbivore", False, "ability", 1), 262: (None, False, "ability", 1),
 }
+TRIGGER_GAINS = {"money": 3, "appeal": 2, "conservation": 1, "reputation": 1, "xtoken": 1, "building": 1, "card": 1,
+                 "ability": 1}  # in trigger_gain order, with the scale of each
 CATEGORY_SPONSORS = {231: "primate", 232: "reptile", 233: "bird", 234: "predator", 235: "herbivore"}
 
 
@@ -436,17 +439,17 @@ def _distinct(icons, continents=True, categories=True) -> int:
 
 def sponsor_immediate(pl, c, key: str) -> dict:
     """What sponsor c's immediate effect gives pl when played now (the card already counts as in
-    the zoo): money, appeal, conservation and other gains (cards to take, workers, free buildings)."""
+    the zoo): money, appeal, conservation, cards to take, workers, free buildings."""
     icons = zoo_icons(pl) + c["icons"]
     facts = map_facts(pl, key)
-    out = dict(money=0, appeal=0, conservation=0, other=0)
+    out = dict(money=0, appeal=0, conservation=0, cards=0, workers=0, buildings=0)
     cid = c["id"]
     if cid in CATEGORY_SPONSORS:
         out["appeal"] = icons[CATEGORY_SPONSORS[cid]]
     elif cid in (201, 254):
-        out["other"] = 1
+        out["cards"] = 1
     elif cid == 216 and pl["workers"] < 4:  # the 4th worker brings what the map prints next to it
-        out["other"] = 1
+        out["workers"] = 1
         last = zoo_map(key)["last_worker"]
         assert last is None or last[0] == "conservation"
         out["conservation"] = last[1] if last and pl["workers"] == 3 else 0
@@ -467,25 +470,25 @@ def sponsor_immediate(pl, c, key: str) -> dict:
     elif cid == 219:
         out["money"] = 2 * (icons["water"] + icons["rock"])
     elif cid == 263:
-        out["other"] = 1
+        out["buildings"] = 1
     return out
 
 
 def sponsor_income(pl, c, in_zoo: bool) -> dict:
     """What sponsor c pays pl at a break (as if it were in pl's zoo when it is not): money,
-    conservation and other gains (X-tokens, cards)."""
+    conservation, X-tokens, cards to take."""
     icons = zoo_icons(pl) + (collections.Counter() if in_zoo else c["icons"])
-    out = dict(money=0, conservation=0, other=0)
+    out = dict(money=0, conservation=0, xtokens=0, cards=0)
     cid = c["id"]
     if cid in CATEGORY_SPONSORS:
         n = icons[CATEGORY_SPONSORS[cid]]
         out["money"] = 9 if n >= 5 else 6 if n >= 3 else 3 if n >= 1 else 0
     elif cid == 201:
-        out["other"] = 1
+        out["cards"] = 1
     elif cid == 206:
         out["conservation"] = 1
     elif cid == 209:
-        out["other"] = int(pl["xtokens"] < 5)
+        out["xtokens"] = int(pl["xtokens"] < 5)
     elif cid == 220:
         out["money"] = 3
     elif cid == 257:  # 2 money per building next to the side entrance, except empty standard enclosures
@@ -497,9 +500,11 @@ def sponsor_income(pl, c, in_zoo: bool) -> dict:
     return out
 
 
-def sponsor_endgame(pl, c, key: str) -> tuple:
-    """(conservation, appeal) sponsor c's end-of-game effect gives pl now."""
-    icons, facts, cid = zoo_icons(pl), map_facts(pl, key), c["id"]
+def sponsor_endgame(pl, c, key: str, in_zoo: bool = True) -> tuple:
+    """(conservation, appeal) sponsor c's end-of-game effect gives pl now (as if played now, its
+    icons counted, when it is not in pl's zoo)."""
+    icons = zoo_icons(pl) + (collections.Counter() if in_zoo else c["icons"])
+    facts, cid = map_facts(pl, key), c["id"]
     steps = {201: "science", 251: "bear"}
     if cid in steps:
         n = icons[steps[cid]]

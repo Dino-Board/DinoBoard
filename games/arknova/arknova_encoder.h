@@ -20,8 +20,9 @@
 //                 among the cards the opponent may have tucked face down, on the display, in either
 //                 zoo, in the top frame's public list, in my pending private list and among my
 //                 final cards. Carries the card's printed facts and what they mean now for its
-//                 holder (the opponent for its hand, maybe-tucked and zoo cards, else me); a
-//                 sponsor also what its effects would give (from the rules' effect code).
+//                 holder (the opponent for its hand, maybe-tucked and zoo cards, else me), a
+//                 display card also for the opponent; a sponsor also what its effects would give
+//                 (from the rules' effect code).
 //   project       the same for conservation project cards, plus the projects in play: who holds
 //                 which level, and which levels each player could support now
 //   cell    x58   the map both zoos are on, with its axial hex position (relative position bias in
@@ -96,8 +97,8 @@ namespace board_ai::arknova {
   X(next_university, ARKNOVA_EFFECT_WIDTH) X(last_worker, ARKNOVA_EFFECT_WIDTH) X(map_income, 1)    \
   X(can_trade, 1) X(ignore_conditions, 1) X(sponsor_discount, 1) X(group_left, 1)                 \
   X(endgame_final, 1) X(endgame_cards, 1) X(endgame_appeal, 1) X(projected_vp, 1)                 \
-  X(best_project, 1) X(best_animals, 1) X(best_turn_vp, 1) X(conservation_to_bonus, 1)            \
-  X(reputation_to_bonus, 1) X(reputation_capped, 1) X(break_income, 1)
+  X(best_project, 1) X(best_project_release, 1) X(best_animals, 1) X(best_turn_vp, 1)            \
+  X(conservation_to_bonus, 1) X(reputation_to_bonus, 1) X(reputation_capped, 1) X(break_income, 1)
 
 #define ARKNOVA_ACTION_CARD_FEATURES(X)                                                            \
   X(mine, 1) X(opponent, 1) X(action, 5) X(slot, 5) X(strength, 1) X(effective_strength, 1)        \
@@ -115,8 +116,10 @@ namespace board_ai::arknova {
   X(type, 3) X(cost, 1) X(money_now, 1) X(affordable, 1) X(size, 1) X(appeal, 1)                   \
   X(conservation, 1) X(reputation, 1) X(level, 1) X(rock, 1) X(water, 1) X(no_standard, 1)         \
   X(special, 6) X(tags, 15) X(req, 20) X(unmet, 1) X(req_ok, 1) X(has_place, 1) X(ability, 44)     \
-  X(effect, 5) X(building, 6) X(scoring, 8) X(yield, 2) X(tokens, 1) X(immediate, 4)               \
-  X(income, 3) X(trigger_icon, 15) X(trigger_any, 1) X(trigger_gain, 3) X(strength_short, 1)
+  X(effect, 5) X(building, 6) X(scoring, 8) X(yield, 2) X(tokens, 1) X(immediate, 6)               \
+  X(income, 4) X(trigger_icon, 15) X(trigger_any, 1) X(trigger_gain, 8) X(strength_short, 1)       \
+  X(opp_in_range, 1) X(opp_money_now, 1) X(opp_affordable, 1) X(opp_req_ok, 1) X(opp_has_place, 1) \
+  X(opp_strength_short, 1)
 
 #define ARKNOVA_PROJECT_FEATURES(X)                                                                \
   ARKNOVA_LOCATION_FEATURES(X)                                                                     \

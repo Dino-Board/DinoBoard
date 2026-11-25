@@ -370,6 +370,17 @@ std::array<bool, 3> supportable_levels(const State& s, int p, CardIdx project) {
   return levels;
 }
 
+std::array<int, 3> support_appeal_lost(const State& s, int p, CardIdx project) {
+  std::array<int, 3> lost{-1, -1, -1};
+  const int appeal = s.players[p].appeal;
+  for (const SupportChoice& c : support_choices(s, p, project)) {
+    const int n = c.extra.kind == kExtraRelease ? std::min<int>(appeal, card(c.extra.card).appeal) : 0;
+    int& at = lost[c.position - 1];
+    if (at < 0 || n < at) at = n;
+  }
+  return lost;
+}
+
 void register_association_action() {
   register_action(kAssociation, association_feasible, association_start);
   register_choice(FrameKind::act_association, association_options, association_apply);

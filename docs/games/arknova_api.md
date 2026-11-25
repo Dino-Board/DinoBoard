@@ -233,14 +233,14 @@ Labels are the opponent's hand cards in that pool, the pool is `remaining`.
 ## Token Encoder
 
 `ArknovaTokenEncoder` is variable-length (`TokenLayout.variable_tokens`,
-`feature_dim` 0) with positions (`TokenLayout.token_positions`): 173 floats per
+`feature_dim` 0) with positions (`TokenLayout.token_positions`): 187 floats per
 token, as many tokens as the state has (96–178 over 30 random and 10 greedy
 games on all maps, median 127).
 
 Token header (7 floats): `valid` (1), `entity` (see [entities](#entities); 0 =
 none), `anchor` (1 + anchor index, 0 = no pointer atoms), `type` (0–8 in the
 order of the tables below), `has_position`, `q`, `r`. Features start at float
-7; a token type narrower than 166 features (the `card` token) leaves the rest 0.
+7; a token type narrower than 180 features (the `card` token) leaves the rest 0.
 
 Token order: `global`, `decision`, `player` (me, opponent), 5 `action_card`
 tokens of mine and 5 of the opponent, then `card` / `project` tokens (a
@@ -264,7 +264,10 @@ tucked cards and private draws not at all. Features about the opponent
 computed from its public zoo. Card features about playing a card now are for the
 card's *holder*: the opponent for its seen hand cards, maybe-tucked cards and
 zoo cards, me for everything else (my hand, the display, lists I choose from).
-So a seen opponent hand card says whether the opponent could play it now.
+So a seen opponent hand card says whether the opponent could play it now. A
+display card is open to both players, so it says it for the opponent too
+(`opp_in_range`, `opp_money_now`, … `opp_strength_short`): a card the opponent
+could use at once is one to take away from it.
 
 **Positions.** My `cell` tokens carry their axial hex coordinates (q 0–8, r
 −4–6), my `enclosure` tokens those of their lowest cell. With
@@ -343,7 +346,10 @@ a big turn kept ready for the end. The `player` token therefore sums them up:
 on a copy of the masked state (`endgame_yield`, the effect code final scoring
 runs), `projected_vp` is the score with them, and `best_project` /
 `best_animals` / `best_turn_vp` are the most one Association or Animals action
-could add now. The opponent's Final Scoring cards are hidden, so its
+could add now: the animals housed together (two cannot share one empty
+standard enclosure), a release project's level net of the appeal it takes
+(`best_project_release`). A sponsor's `yield` outside a zoo is what its
+end-of-game effect would score were it played now. The opponent's Final Scoring cards are hidden, so its
 `endgame_final` is the expectation over the final cards I have not seen, under
 its zoo. Training can also predict the final split per seat
 (`final_score_breakdown_extractor`: appeal and conservation from play,
@@ -498,13 +504,14 @@ in the pools (only their composition).
 | 127 | 1 | `endgame_cards` | conservation the end-of-game effects of the zoo cards would score now / 4 |
 | 128 | 1 | `endgame_appeal` | appeal the end-of-game effects of the zoo cards would score now / 10 |
 | 129 | 1 | `projected_vp` | `victory_points` with the three above added / 30 |
-| 130 | 1 | `best_project` | the most conservation one Association action could bring now / 5: one supportable project level (in play, in the hand as far as I know it, on the display within range with Association II), a worker free for it, the strength reachable with X-tokens |
-| 131 | 1 | `best_animals` | the most appeal one Animals action could bring now / 15: as many animals as the strength with X-tokens plays, from the hand as far as I know it and the display within range with Animals II, each playable, with a place and paid for |
-| 132 | 1 | `best_turn_vp` | victory points the better of those two would add / 15 |
-| 133 | 1 | `conservation_to_bonus` | conservation still needed for the next Conservation track space with an effect (2, 5, 8, 10) / 5; 0 past 10 |
-| 134 | 1 | `reputation_to_bonus` | reputation still needed for the next Reputation track bonus within reach (9 at most before Cards II) / 5 |
-| 135 | 1 | `reputation_capped` | reputation stands at 9 without Cards II: more is lost |
-| 136 | 1 | `break_income` | money the next break would pay now (appeal, kiosks, map tokens, income cards, the map rule) / 40 |
+| 130 | 1 | `best_project` | conservation of the best project level one Association action could support now (the most victory points net of a release) / 5: one supportable project level (in play, in the hand as far as I know it, on the display within range with Association II), a worker free for it, the strength reachable with X-tokens |
+| 131 | 1 | `best_project_release` | appeal that level takes (the animal a release project lets go, the least of those it could release) / 10 |
+| 132 | 1 | `best_animals` | the most appeal one Animals action could bring now / 15: as many animals as the strength with X-tokens plays, from the hand as far as I know it and the display within range with Animals II, each playable and paid for, housed together: each in its own empty standard enclosure (a flock animal may join an occupied one) or within a special enclosure's free spaces |
+| 133 | 1 | `best_turn_vp` | victory points the better of those two would add / 15 (a release's appeal counted off) |
+| 134 | 1 | `conservation_to_bonus` | conservation still needed for the next Conservation track space with an effect (2, 5, 8, 10) / 5; 0 past 10 |
+| 135 | 1 | `reputation_to_bonus` | reputation still needed for the next Reputation track bonus within reach (9 at most before Cards II) / 5 |
+| 136 | 1 | `reputation_capped` | reputation stands at 9 without Cards II: more is lost |
+| 137 | 1 | `break_income` | money the next break would pay now (appeal, kiosks, map tokens, income cards, the map rule) / 40 |
 
 ### `action_card` token
 
@@ -564,14 +571,20 @@ in the pools (only their composition).
 | 117-121 | 5 | `effect` | the card has: an immediate effect, an icon-triggered effect, a break income, an end-of-game effect, any lasting effect |
 | 122-127 | 6 | `building` | sponsor's unique building: [present, size / 5, rock next to it / 2, water / 2, border spaces / 2, must touch a building] |
 | 128-135 | 8 | `scoring` | final scoring card: 4 x [threshold / 24, conservation / 4] |
-| 136-137 | 2 | `yield` | what its end-of-game effect would score now for its holder: [conservation / 4, appeal / 10] (final scoring cards: my final cards and offered ones; sponsors: in a zoo for its owner, in my private list for me) |
+| 136-137 | 2 | `yield` | what its end-of-game effect would score now for its holder: [conservation / 4, appeal / 10] (final scoring cards: my final cards and offered ones; sponsors: in a zoo for its owner, anywhere else as if its holder played it now, its icons counted in the zoo) |
 | 138 | 1 | `tokens` | tokens on the card / 5 (breeding, Okapi; Waza: 1 small, 2 large) |
-| 139-142 | 4 | `immediate` | sponsor: what its immediate effect would give its holder if played now (cards not yet in a zoo; the rules' effect run on a copy of the state, with the card counted in the holder's zoo): [money / 20, appeal / 10, conservation / 5, cards to take + workers + free buildings / 2], each capped at 1 |
-| 143-145 | 3 | `income` | sponsor: what its break income pays its holder now (as if in the holder's zoo when not yet there): [money / 10, conservation / 2, X-tokens + cards to take / 2], each capped at 1 |
-| 146-160 | 15 | `trigger_icon` | sponsor with an icon trigger: the icon whose plays trigger it, one-hot (same order as `player.icons`; none for Explorer, which reacts to icons new to the zoo) |
-| 161 | 1 | `trigger_any` | the trigger counts icons played into any zoo (else only into its owner's) |
-| 162-164 | 3 | `trigger_gain` | per triggering icon: [money / 3, appeal / 2, something else: a track step, an X-token, a free building, a card, an ability] |
-| 165 | 1 | `strength_short` | animal / sponsor not yet in a zoo: strength points the holder's Animals / Sponsors card lacks to play it now, X-tokens aside, / 5 (capped at 1). Animals I plays from strength 2, Animals II from 1; Sponsors plays levels up to its strength, +1 on side II |
+| 139-144 | 6 | `immediate` | sponsor: what its immediate effect would give its holder if played now (cards not yet in a zoo; the rules' effect run on a copy of the state, with the card counted in the holder's zoo): [money / 20, appeal / 10, conservation / 5, cards to take / 2, workers / 2, free buildings / 2], each capped at 1 |
+| 145-148 | 4 | `income` | sponsor: what its break income pays its holder now (as if in the holder's zoo when not yet there): [money / 10, conservation / 2, X-tokens / 2, cards to take / 2], each capped at 1 |
+| 149-163 | 15 | `trigger_icon` | sponsor with an icon trigger: the icon whose plays trigger it, one-hot (same order as `player.icons`; none for Explorer, which reacts to icons new to the zoo) |
+| 164 | 1 | `trigger_any` | the trigger counts icons played into any zoo (else only into its owner's) |
+| 165-172 | 8 | `trigger_gain` | per triggering icon: [money / 3, appeal / 2, conservation, reputation, X-token, a free building, a card to pick, an ability (Pouch, Clever, Sun Bathing, Hunter, Okapi Stable, Explorer)] |
+| 173 | 1 | `strength_short` | animal / sponsor not yet in a zoo: strength points the holder's Animals / Sponsors card lacks to play it now, X-tokens aside, / 5 (capped at 1). Animals I plays from strength 2, Animals II from 1; Sponsors plays levels up to its strength, +1 on side II |
+| 174 | 1 | `opp_in_range` | display card within the opponent's reputation range |
+| 175 | 1 | `opp_money_now` | display card: `money_now` for the opponent |
+| 176 | 1 | `opp_affordable` | display card: the opponent has that money |
+| 177 | 1 | `opp_req_ok` | display card: the opponent meets its conditions |
+| 178 | 1 | `opp_has_place` | display card: the opponent's zoo has room for it |
+| 179 | 1 | `opp_strength_short` | display card: `strength_short` for the opponent |
 
 ### `project` token
 

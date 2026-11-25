@@ -252,6 +252,9 @@ int workers_needed(const Player& pl, int task);  // workers the task would take 
 // not yet supported by p, condition met, a map token left). The strength and the workers of an
 // Association action are not part of it. Works for projects in play, in a hand or on the display.
 std::array<bool, 3> supportable_levels(const State& s, int p, CardIdx project);
+// Per level, the least appeal supporting it would take from p (the animal a release project lets
+// go), or -1 for a level p cannot support.
+std::array<int, 3> support_appeal_lost(const State& s, int p, CardIdx project);
 
 // ---- card tokens (Player::card_tokens; a dict with setdefault semantics in Python) ------
 
@@ -299,12 +302,14 @@ void icon_trigger(State& s, CardIdx trigger, int owner, int p, const IconCounts&
 bool has_icon_trigger(CardIdx c);
 // What icon_trigger reacts to: the icon (-1 for Explorer, which counts icons new to the zoo),
 // whether plays into any zoo count, and the gain per icon when it is a plain gain (amount 0 when
-// the effect is something else: a free building, a card, an ability).
+// the effect is something else: a free building, a card to pick, an ability).
 struct IconTriggerSpec {
   int icon = -1;
   bool any_zoo = false;
   EffectKind kind = EffectKind::kEffMoney;
   int amount = 0;
+  bool free_building = false;
+  bool card_pick = false;
 };
 IconTriggerSpec icon_trigger_spec(CardIdx c);
 bool has_immediate(CardIdx c);

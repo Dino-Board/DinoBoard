@@ -18,7 +18,7 @@ from conftest import get_test_model
 sys.path.insert(0, str(Path(__file__).parent))
 import arknova_checks as checks  # noqa: E402
 from arknova_reference import (GAME, ROOT, atom_index, atom_names, card_index, cards, decode, known_to, layout,  # noqa: E402
-                               own_slots)
+                               own_slots, sponsor_endgame, target_appeal)
 
 # Features that need a rare situation (Hypnosis, Snapping 2, Dominance, the Engineer, an extra
 # action offered as a decision, a donation followed by another decision, ...). The games below do
@@ -200,6 +200,107 @@ def test_layout_is_what_the_network_is_built_from():
         "final_discard": {("final", 1)}, "enclosure": {("enclosure", 0)}, "cell": cell}
     assert meta["action_space"] == json.loads((ROOT / "games/arknova/config/game.json").read_text())[
         "variants"]["arknova"]["action_space"]
+
+
+# ---- positions built on the midgame state exported from ark-nova-ai: player 0 has one empty
+# 4-space standard enclosure (building 0), a unique building (1) and a petting zoo (2) ------------
+
+def _midgame():
+    states = json.loads((Path(__file__).parent / "data" / "ark_nova_ai_states.json").read_text())
+    return states["midgame"]["state"]
+
+
+def _deal(state, p, ids):
+    """Player p's hand becomes `ids`, taken from the deck; its old hand goes to the deck."""
+    pl = state["players"][p]
+    assert all(i in state["deck"] for i in ids)
+    state["deck"] = [i for i in state["deck"] if i not in ids] + pl["hand"]
+    pl["hand"], pl["public_hand"] = list(ids), []
+
+
+def _player_token(state, p=0):
+    gs = engine.GameSession(GAME, 0, "")
+    gs.load_external_state(json.dumps(state))
+    toks = decode(gs._encode(p)["features"])
+    return next(t for t in toks if t.type == "player" and t["me"] == 1.0), toks, json.loads(
+        gs.get_state_dict()["core_json"])
+
+
+def _plain_animals(state, n, max_size):
+    """n animals in the deck that live in a standard enclosure of at most max_size spaces and have
+    no condition, no terrain need and an appeal."""
+    found = [c for c in cards() if c["type"] == "animal" and c["id_str"] in state["deck"] and
+             1 <= c["enc_standard"] <= max_size and not c["enc_rock"] and not c["enc_water"] and
+             not any(c["req"].values()) and c["min_reputation"] < 0 and c["max_appeal"] < 0 and c["appeal"] > 0]
+    found.sort(key=lambda c: -c["appeal"])
+    assert len(found) >= n
+    return found[:n]
+
+
+def test_best_animals_houses_each_animal_apart():
+    """player.best_animals: two animals that each fit the only empty standard enclosure cannot both be
+    played into it; with a second empty enclosure they can."""
+    state = _midgame()
+    pl = state["players"][0]
+    pl["slots"] = ["association", "build", "cards", "sponsors", "animals"]  # Animals 5: two animals
+    pl["money"] = 80
+    a, b = _plain_animals(state, 2, 3)
+    _deal(state, 0, [a["id_str"], b["id_str"]])
+    tok, toks, _ = _player_token(state)
+    for t in toks:
+        if t.type == "card" and t["my_hand"] == 1.0:
+            assert t["has_place"] == 1.0 and t["affordable"] == 1.0 and t["req_ok"] == 1.0
+    assert round(tok["best_animals"] * 15) == max(a["appeal"], b["appeal"])
+    unique = pl["buildings"][1]
+    unique.update(kind="enclosure", name=None)  # a second empty enclosure, 3 spaces
+    pl["zoo_cards"].remove("249")
+    state["discard"].append("249")
+    tok, _, _ = _player_token(state)
+    assert round(tok["best_animals"] * 15) == a["appeal"] + b["appeal"]
+
+
+def test_best_project_counts_the_released_animal():
+    """player.best_project / best_project_release / best_turn_vp: supporting a release project takes
+    the released animal's appeal, and the victory points net of it are what best_turn_vp adds."""
+    state = _midgame()
+    pl = state["players"][0]
+    pl["slots"] = ["animals", "build", "cards", "sponsors", "association"]  # Association 5
+    pl["workers_out"], pl["appeal"] = {}, 20
+    table = cards()
+    for project in (c for c in table if c["proj_category"] == "kProjRelease" and c["id_str"] in state["deck"]):
+        icon = project["proj_icon"][len("kPIcon_"):]
+        animal = next((c for c in table if c["type"] == "animal" and c["tags"][icon] and c["appeal"] > 0 and
+                       1 <= c["enc_standard"] <= 4 and not c["enc_rock"] and not c["enc_water"] and
+                       c["id_str"] in state["deck"]), None)
+        if animal is not None:
+            break
+    else:
+        pytest.fail("no release project in the deck with an animal for it")
+    # The levels split the animals by size: the released animal's size picks its level.
+    cp = next(s["rewards"]["conservation"] for s in project["slots"]
+              if max(s["size_min"], 0) <= animal["size"] <= (s["size_max"] if s["size_max"] >= 0 else 99))
+    _deal(state, 0, [project["id_str"]])
+    state["deck"].remove(animal["id_str"])
+    pl["zoo_cards"].append(animal["id_str"])
+    pl["housing"] = {animal["id_str"]: [0, 0]}
+    pl["buildings"][0]["occupied"] = True
+    tok, _, _ = _player_token(state)
+    assert round(tok["best_project"] * 5) == cp
+    assert round(tok["best_project_release"] * 10) == animal["appeal"]
+    gain = (20 - animal["appeal"] - target_appeal(pl["conservation"] + cp)) - (20 - target_appeal(pl["conservation"]))
+    assert round(tok["best_turn_vp"] * 15) == max(gain, 0)
+
+
+def test_hand_sponsor_yields_its_end_of_game_effect():
+    """card.yield of a sponsor in my hand: what its end-of-game effect would score were it played now
+    (here 260, conservation for every 6 empty spaces of the zoo)."""
+    state = _midgame()
+    _deal(state, 0, ["260"])
+    _, toks, core = _player_token(state)
+    t = next(t for t in toks if t.type == "card" and t["my_hand"] == 1.0)
+    conservation, appeal = sponsor_endgame(core["players"][0], cards()[card_index()["260"]], core["map"], in_zoo=False)
+    assert conservation > 0
+    assert np.allclose(t["yield"], [conservation / 4, appeal / 10])
 
 
 def _random_belief_model(tmp_path):

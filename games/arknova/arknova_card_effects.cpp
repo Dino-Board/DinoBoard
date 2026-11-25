@@ -444,6 +444,8 @@ IconTriggerSpec icon_trigger_spec(CardIdx c) {
   } else if ((t.icon = own_icon(id, &t.kind, &t.amount)) < 0) {
     t.icon = effect_icon(id);
     t.amount = 0;
+    t.free_building = id == 210 || id == 211 || id == 213;
+    t.card_pick = id == 249;
   }
   return t;
 }
