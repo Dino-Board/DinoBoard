@@ -80,6 +80,7 @@ struct MonteCarloConfig {
   int rollouts = 16;          // sampled worlds, each played once from every candidate
   int replies = 2;            // opponent turns in a rollout; it stops at the mover's next turn after the last
   double prior_weight = 0.5;  // weight of a candidate's beam value, added to its rollout mean
+  double seconds = 0.0;       // > 0: no further rollouts once a decision has taken this long (at least one)
 };
 
 // The beam refined by Monte Carlo rollouts at every decision of the mover's own turn. The beam

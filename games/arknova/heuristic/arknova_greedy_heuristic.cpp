@@ -1,6 +1,7 @@
 #include "arknova_greedy_heuristic.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <map>
@@ -572,7 +573,8 @@ double rollout(State& s, const Option& first, int p, int replies, const GreedyWe
 // keep -inf. The beam's values unchanged when it kept fewer than two.
 std::vector<double> rollout_values(const State& s, const IGameState& masked_state, const IBeliefTracker& tracker,
                                    int p, const std::vector<Option>& options, const std::vector<double>& beam,
-                                   const MonteCarloConfig& cfg, const GreedyWeights& w, std::mt19937_64& rng) {
+                                   const MonteCarloConfig& cfg, const GreedyWeights& w, std::mt19937_64& rng,
+                                   std::chrono::steady_clock::time_point started) {
   std::vector<int> order;
   for (int i = 0; i < static_cast<int>(options.size()); ++i) {
     if (std::isfinite(beam[i])) order.push_back(i);
@@ -584,7 +586,12 @@ std::vector<double> rollout_values(const State& s, const IGameState& masked_stat
   std::vector<std::string> keys;
   for (int i : order) keys.push_back(option_to_json(s, options[i]));
   std::vector<double> total(order.size(), 0.0);
-  for (int r = 0; r < cfg.rollouts; ++r) {
+  int done = 0;
+  for (; done < cfg.rollouts; ++done) {
+    if (done && cfg.seconds > 0 &&
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count() >= cfg.seconds) {
+      break;
+    }
     const std::uint64_t seed = rng();
     std::mt19937_64 world_rng(seed);
     auto world_ptr = masked_state.clone_state();
@@ -603,7 +610,7 @@ std::vector<double> rollout_values(const State& s, const IGameState& masked_stat
   }
   std::vector<double> out(options.size(), -std::numeric_limits<double>::infinity());
   for (std::size_t c = 0; c < order.size(); ++c) {
-    out[order[c]] = total[c] / cfg.rollouts + cfg.prior_weight * beam[order[c]];
+    out[order[c]] = total[c] / done + cfg.prior_weight * beam[order[c]];
   }
   return out;
 }
@@ -677,6 +684,7 @@ HeuristicResult ArknovaLookaheadHeuristic::pick(IGameState& masked_state, const 
 
 HeuristicResult ArknovaMonteCarloHeuristic::pick(IGameState& masked_state, const IBeliefTracker* tracker,
                                                  const IGameRules& rules, std::uint64_t rng_seed) const {
+  const auto started = std::chrono::steady_clock::now();
   return score_atoms(masked_state, tracker, rules, rng_seed, "arknova monte carlo",
                      [&](const State& s, int p, const std::vector<Option>& options, std::mt19937_64& rng) {
                        const Frame& f = s.top();
@@ -684,7 +692,7 @@ HeuristicResult ArknovaMonteCarloHeuristic::pick(IGameState& masked_state, const
                        if (f.kind == FrameKind::setup_keep || !own_turn) return greedy_values(s, p, options, w_, rng);
                        SearchChance chance(rng);
                        std::vector<double> beam = Lookahead(cfg_.beam, w_, chance).plan_candidates(s, p, options);
-                       return rollout_values(s, masked_state, *tracker, p, options, beam, cfg_, w_, rng);
+                       return rollout_values(s, masked_state, *tracker, p, options, beam, cfg_, w_, rng, started);
                      });
 }
 

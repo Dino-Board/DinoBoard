@@ -1,5 +1,5 @@
 {
-  "_doc": "C++ ports of ark-nova-ai's bots, each searching one world sampled by the tracker from the masked state. greedy is GreedyBot (position valuation plus a search to the end of its own turn). beam_2x3 / beam_3x8 are LookaheadBot (depth x width) with opponents passive; at turn decisions they search a beam of whole turns, other decisions are greedy's. Measured over 100 games per pair: beam_2x3 beats greedy 64%, beam_3x8 beats greedy 74% and beam_2x3 64% (ark-nova-ai's Python bots: 67% / 75% / 75%). Wall time of a game on one core: greedy vs greedy ~1 s, beam_2x3 vs greedy ~2 s, beam_3x8 vs greedy ~9 s. mc_beam is beam_3x8 refined by Monte Carlo rollouts (sampled worlds, both players greedy for two opponent turns) at every decision of its own turn: it beats beam_3x8 64% over 400 games (seats swapped per deal), about 1.5 s per turn on one core.",
+  "_doc": "C++ ports of ark-nova-ai's bots, each searching one world sampled by the tracker from the masked state. greedy is GreedyBot (position valuation plus a search to the end of its own turn). beam_2x3 / beam_3x8 are LookaheadBot (depth x width) with opponents passive; at turn decisions they search a beam of whole turns, other decisions are greedy's. Measured over 100 games per pair: beam_2x3 beats greedy 64%, beam_3x8 beats greedy 74% and beam_2x3 64% (ark-nova-ai's Python bots: 67% / 75% / 75%). Wall time of a game on one core: greedy vs greedy ~1 s, beam_2x3 vs greedy ~2 s, beam_3x8 vs greedy ~9 s. mc_beam is beam_3x8 refined by Monte Carlo rollouts (sampled worlds, both players greedy for two opponent turns) at every decision of its own turn: it beats beam_3x8 64% over 400 games (seats swapped per deal), about 1.5 s per turn on one core. mc_beam_5s is the same with up to 64 rollouts per decision, stopping once a decision has taken 5 s.",
   "named": {
     "greedy": {
       "type": "rule"
@@ -11,6 +11,9 @@
       "type": "rule"
     },
     "mc_beam": {
+      "type": "rule"
+    },
+    "mc_beam_5s": {
       "type": "rule"
     },
     "random": {

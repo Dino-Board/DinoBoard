@@ -152,6 +152,8 @@ board_ai::GameBundle make_arknova(const std::string& game_id, std::uint64_t seed
                                               "beam_3x8", LookaheadConfig{3, 8, 10, 8}));
   b.heuristics.register_named("mc_beam", std::make_unique<ArknovaMonteCarloHeuristic>(
                                              "mc_beam", MonteCarloConfig{{3, 8, 10, 8}, 8, 16, 2, 0.5}));
+  b.heuristics.register_named("mc_beam_5s", std::make_unique<ArknovaMonteCarloHeuristic>(
+                                                "mc_beam_5s", MonteCarloConfig{{3, 8, 10, 8}, 8, 64, 2, 0.5, 5.0}));
   b.heuristics.register_named("random", std::make_unique<board_ai::heuristic::RandomHeuristic>("random"));
   b.final_score_extractor = [](const IGameState& state) -> std::vector<float> {
     const State& core = board_ai::checked_cast<ArknovaState>(state).synced_core();
