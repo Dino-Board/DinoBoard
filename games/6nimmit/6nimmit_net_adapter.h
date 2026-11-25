@@ -66,7 +66,7 @@ class SixNimmtBeliefTracker final : public IBeliefTracker {
   };
 
   // payload "own_hand": the perspective's cards, for a session that was not
-  // seeded like the truth state (AI API / web).
+  // seeded like the truth state (observation sessions / web).
   void init(IGameState& state, int perspective, const AnyMap& payload) override;
   AnyMap pack_init_payload(const IGameState& gt_state, int perspective) const override;
   // Remembers the rounds from the `card_played` events (public, the same for

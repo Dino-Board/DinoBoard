@@ -3,7 +3,7 @@
 Love Letter is an asymmetric-hidden-info elimination game with:
   - belief_tracker with per-player private hand (owner-only viz on the
     `hand` slot; state_hash_for_perspective(p) sees only own hand)
-  - public_event_extractor / applier (so the AI API can advance from
+  - public_event_extractor / applier (so an observation session can advance from
     observations alone, no state-passing)
   - initial observation via framework walker (viz=1 slots only,
     no per-game extractor/applier hooks)

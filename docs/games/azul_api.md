@@ -1,4 +1,4 @@
-# Azul — AI API 接入文档
+# Azul — AI 接入文档
 
 ## 概览
 
@@ -230,47 +230,6 @@ python3 -m training.cli --game azul_tok \
     --train-config games/azul/config/train_transformer.json \
     --output runs/azul_tok_guided20k --providers cuda,cpu
 # 中断后继续：同一条命令加 --resume runs/azul_tok_guided20k
-```
-
----
-
-## 完整示例（Python）
-
-```python
-import requests
-BASE = "http://localhost:8000"
-
-initial_observation = gt_session.extract_initial_observation(2)
-sess = requests.post(f"{BASE}/ai/sessions", json={
-    "game_id": "azul_3p", "seed": 42, "my_seat": 2,
-    "initial_observation": initial_observation,
-}).json()
-sid = sess["session_id"]
-
-while True:
-    status = requests.get(f"{BASE}/ai/sessions/{sid}").json()
-    if status["is_terminal"]: break
-
-    if status["current_player"] == 2:
-        r = requests.post(f"{BASE}/ai/sessions/{sid}/decide").json()
-        action_id = r["action_id"]
-        info = r["action_info"]
-        print(f"AI: 从{'工厂'+str(info['source']) if info['source']<7 else 'center'}拿色{info['color']}到{'line'+str(info['target']) if info['target']<5 else 'floor'}")
-    else:
-        action_id = opp_pick()
-
-    # GT 端:`apply_action_with_trace` 一行包揽 do_action_fast 推进 +
-    # `azul_events::extract_events`(注册时 wired 到 `b.public_event_extractor`)
-    # diff 出 `factory_refill` / `round_settled` 等事件 + perspective 视角的
-    # public_snapshot。
-    trace = gt_session.apply_action_with_trace(action_id, perspective=2)
-    requests.post(f"{BASE}/ai/sessions/{sid}/observe", json={
-        "action_id": action_id,
-        "events": trace["events"],
-        "public_snapshot": trace["public_snapshot"],
-    })
-
-requests.delete(f"{BASE}/ai/sessions/{sid}")
 ```
 
 ---

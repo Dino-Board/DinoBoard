@@ -57,7 +57,7 @@ The rationale: BUG-011 — a silent `return false` in evaluate() caused weeks of
 When you add a knob (config field, profile field, function parameter, kwarg), every layer in the chain has its own default. A missing forward at any layer silently falls back to that layer's default — NEVER errors out. The user sees a config setting, the actual run uses something else, and metrics look "fine." This is the silent-degradation pattern at the API-glue level.
 
 **Past examples this codebase ate**:
-- `top_k`: `mcts_profile._BASE_DICT["top_k"]=0` was set, but `platform/ai_service/sessions.py::decide()` never forwarded `top_k` to `get_ai_action()`, and the C++ binding's `py::arg("top_k") = 3` default ate it. `web.json::web_expert.top_k=3` happened to match by coincidence; if the user had set 5, the web would still use 3 silently.
+- `top_k`: `mcts_profile._BASE_DICT["top_k"]=0` was set, but the REST AI service of the time (`platform/ai_service/sessions.py::decide()`, since removed) never forwarded `top_k` to `get_ai_action()`, and the C++ binding's `py::arg("top_k") = 3` default ate it. `web.json::web_expert.top_k=3` happened to match by coincidence; if the user had set 5, the web would still use 3 silently.
 - Belief temperature: a temperature param existed in the config but the binding signature stripped it before reaching the C++ evaluator. Belief distributions were too sharp/flat; MCTS world sampling was biased; bluff games (liarsdice especially) trained on a corrupted prior for weeks.
 
 **Mandatory check whenever you add or rename a param**:

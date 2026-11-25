@@ -1,4 +1,4 @@
-"""GameSession.get_heuristic_action on an observation-driven (AI API) session.
+"""GameSession.get_heuristic_action on an observation-driven session.
 
 Once a session is fed by apply_initial_observation / apply_observation, its
 own state is the AI view and the per-seat views built in the constructor stop

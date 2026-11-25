@@ -1,4 +1,4 @@
-# Jaipur — AI API 接入文档
+# Jaipur — AI 接入文档
 
 ## 概览
 

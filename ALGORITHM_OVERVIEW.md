@@ -379,7 +379,7 @@ Frozen-prior 缓解 ISMCTS 的策略融合 / 对手全知偏差——bandit 在�
 determinization 之间积累统计会让对手节点"跨世界共享"，变得不合理地精准。
 Acting player 自己的 root selection 始终是 PUCT。
 
-设在 `mcts.json` baseline 里（所有 profile 继承），REST API 不接受 wire 传入。
+设在 `mcts.json` baseline 里（所有 profile 继承）。
 
 ---
 

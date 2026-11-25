@@ -1,4 +1,4 @@
-"""AI API belief-equivalence: a self-play-generated observation trace must
+"""Observation-session belief-equivalence: a self-play-generated observation trace must
 drive an independent API session to the SAME belief as self-play's own
 tracker, step by step.
 

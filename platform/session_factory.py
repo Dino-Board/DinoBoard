@@ -1,6 +1,6 @@
 """Single source of truth for constructing engine.GameSession instances.
 
-Both ai_service and game_service create GameSessions with similar shapes
+game_service creates GameSessions in several places with similar shapes
 (seed, model path, optional action filter, optional tail-solve, optional
 action-history replay). Centralizing the construction eliminates ad-hoc
 helpers like _apply_tail_solve_config and prevents call sites from

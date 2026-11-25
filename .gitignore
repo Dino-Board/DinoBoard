@@ -103,4 +103,3 @@ benchmarks/
 tmp/
 
 # External-GT compiled binaries (built locally from .cpp; the source is in tree)
-games/*/external_ground_truth/*.out

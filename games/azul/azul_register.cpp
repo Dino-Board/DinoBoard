@@ -150,7 +150,7 @@ AnyMap describe_azul(ActionId action) {
   return m;
 }
 
-// --- Public-event protocol for AI API belief-equivalence --------------
+// --- Public-event protocol for observation-session belief-equivalence -
 //
 // Azul has one source of hidden randomness: the bag. At game start and at
 // every round-end, factories are refilled by drawing from the bag. An AI

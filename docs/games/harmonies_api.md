@@ -1,4 +1,4 @@
-# Harmonies — AI API 接入文档
+# Harmonies — AI 接入文档
 
 ## 概览
 

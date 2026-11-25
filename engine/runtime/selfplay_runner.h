@@ -340,7 +340,7 @@ SelfplayEpisodeResult run_selfplay_episode(
     TrainingActionFilter training_action_filter = nullptr,
     TailSolveTrigger tail_solve_trigger = nullptr,
     EpisodeStatsExtractor episode_stats_extractor = nullptr,
-    // Tracing hooks for AI API belief-equivalence tests. trace_perspective
+    // Tracing hooks for observation-session belief-equivalence tests. trace_perspective
     // >= 0 enables recording; -1 disables (default, zero overhead).
     // trace_belief_tracker must be a SEPARATE tracker instance dedicated to
     // the trace_perspective, kept decoupled from the per_perspective_trackers

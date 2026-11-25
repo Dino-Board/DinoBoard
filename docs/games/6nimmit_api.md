@@ -1,4 +1,4 @@
-# 6 nimmt! — AI API 接入文档
+# 6 nimmt! — AI 接入文档
 
 ## 概览
 
@@ -31,7 +31,7 @@
 | `104 .. 107` | `small_choose_row` | 牌比所有行尾都小时选择一行收走；`row = action_id - 104` |
 | `108` | （观察值）hidden commit | 不是合法动作、不在策略头里。**其他人还没出完牌时**的 commit 在观察流里的替身：`public_action` 把它投影成 108，`apply_action_with_trace(...)["action"]`、selfplay 的 `observation_trace`、各座位 tracker、网页轮询拿到的都是 108，牌号不随动作外传。本轮最后一个 commit 会在同一步把所有暗扣翻开，因此原样透传 |
 
-**`/observe` 要传投影后的 id**：GT 端用 `trace["action"]` 回灌 `/observe`。
+**`apply_observation` 要传投影后的 id**：GT 端用 `trace["action"]` 回灌 `apply_observation`。
 
 合法约束：
 - `small_phase_active == true` 时仅 `small_choose_row` 合法（4 行都可选），由 `small_player` 决定。
@@ -215,46 +215,6 @@ Token（变长，只有存在的才出现；2 / 3 / 4 人局最多 18 / 20 / 22 
 ## 启发式
 
 `rule_v1`（规则决策树）和 `lkf_v1`（一份人类启发式的移植，每步约 150 ms）。两者看桌面、手牌和 `used`。`heuristic.json::selectors` 让 `eval_vs_heuristic` / `web` 用 `lkf_v1`；`train.json` 用 `rule_v1` 做开局引导（warm start）。
-
----
-
-## 完整示例（Python）
-
-```python
-import requests
-BASE = "http://localhost:8000"
-
-# 4 人局，AI 扮演 2 号玩家
-initial_observation = gt_session.extract_initial_observation(2)
-sess = requests.post(f"{BASE}/ai/sessions", json={
-    "game_id": "6nimmit_4p",
-    "seed": 1234,
-    "my_seat": 2,
-    "initial_observation": initial_observation,
-}).json()
-sid = sess["session_id"]
-
-while True:
-    status = requests.get(f"{BASE}/ai/sessions/{sid}").json()
-    if status["is_terminal"]:
-        break
-
-    if status["current_player"] == 2:
-        action_id = requests.post(f"{BASE}/ai/sessions/{sid}/decide").json()["action_id"]
-    else:
-        action_id = opp_pick()
-
-    # GT 端推进并取 2 号视角的 trace：events 是 card_played，public_snapshot 是
-    # 这一步之后 2 号看得到的所有槽位。
-    trace = gt_session.apply_action_with_trace(action_id, 2)
-    requests.post(f"{BASE}/ai/sessions/{sid}/observe", json={
-        "action_id": trace["action"],   # 公开投影：未翻开的 commit 在这里是 108
-        "events": trace["events"],
-        "public_snapshot": trace["public_snapshot"],
-    })
-
-requests.delete(f"{BASE}/ai/sessions/{sid}")
-```
 
 ---
 

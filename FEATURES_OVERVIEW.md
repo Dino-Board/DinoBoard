@@ -81,9 +81,9 @@ Value head N 维 perspective-relative（`values[0]`=当前玩家）。网络可�
 
 ---
 
-## AI API
+## 外部接入
 
-`platform/ai_service/` 提供 observation-only REST API。调用方只传 action_id + 公开事件，session 内部自维护 state。每游戏的动作编码见 `docs/games/<game>_api.md`。
+外部平台直接用引擎的 `GameSession`：`apply_initial_observation` 从公开快照（加 tracker 初始化）建起 AI 视角的局面，`apply_observation` 逐步喂动作，`get_ai_action` 决策。AI 只见公开信息，隐藏部分由 belief tracker 采样。每游戏的动作编码和快照字段见 `docs/games/<game>_api.md`。
 
 ---
 

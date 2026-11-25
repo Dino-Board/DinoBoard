@@ -5,7 +5,6 @@
 ```
 tests/
   framework/           # Layer 1: structural invariants on fixed carrier
-    test_ai_api_separation.py
     test_encode_state.py
     test_dag_reuse.py
     test_public_hash_excludes_internal_rng.py

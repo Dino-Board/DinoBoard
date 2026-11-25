@@ -2891,7 +2891,7 @@ class GameSessionWrapper {
     bt_ = bundle_->belief_tracker.get();
     // Per-perspective AI views: MCTS searches on these, never on the truth
     // state (bundle_->state). Skipped when external_obs_mode_ is set
-    // (AI API path) — in that mode bundle_->state IS the AI view.
+    // (external observations) — in that mode bundle_->state IS the AI view.
     init_ai_views_();
   }
 
@@ -3184,7 +3184,7 @@ class GameSessionWrapper {
     ++ply_count_;
   }
 
-  // Combined action + events step for the AI API. Sequence:
+  // Combined action + events step for external observations. Sequence:
   //   1. begin_step_for_session_observe() bumps step_count for DAG
   //      acyclicity (do_action_fast is intentionally skipped — the AI
   //      session never runs rules).
@@ -3423,19 +3423,15 @@ class GameSessionWrapper {
     }
   }
 
-  // Adapter-only escape hatch: write a single schema slot directly.
-  //
-  // Used by `games/6nimmit/judge_adapter/adapter.py` to bootstrap an initial GT
-  // state from a judge-supplied "this is your hand" payload before
-  // calling `extract_initial_observation(seat)` to ship to the AI side.
+  // Test-only escape hatch: write a single schema slot directly (e.g. to
+  // scramble the hidden slots of a state and check the AI never reads them).
   // Bypasses do_action_fast / viz on purpose — caller is responsible for
   // ensuring the writes match a state that the corresponding rules could
   // legally have produced (i.e. don't write something that would later
   // confuse legal_actions).
   //
   // Underscore prefix marks this as not part of the AI Pipeline contract
-  // — production code (selfplay, web, AI API, training) must not call it.
-  // Tests / external-judge adapters only.
+  // — production code (selfplay, web, training) must not call it.
   void _force_write_field(const std::string& name,
                           const std::vector<int>& idx,
                           py::object value) {
@@ -3618,7 +3614,7 @@ class GameSessionWrapper {
     const int cp = bundle_->state->current_player();
 
     // Select the search state / evaluator / tracker.
-    // External-obs mode (AI API): bundle_->state IS the AI view.
+    // External-obs mode: bundle_->state IS the AI view.
     // GameSession mode: route through perspective-specific ai_views_[cp].
     const IGameState* search_state = nullptr;
     const search::IPolicyValueEvaluator* eval_ptr = nullptr;
@@ -3777,7 +3773,7 @@ class GameSessionWrapper {
       // GameSession's heuristic call routes through the acting player's
       // truth-free ai_view (same view MCTS reads from). Mask once more
       // before dispatch so viz=0 reads land on placeholder.
-      // External-obs mode (AI API): bundle_->state IS the AI view, as in
+      // External-obs mode: bundle_->state IS the AI view, as in
       // get_ai_action; ai_views_ stopped advancing when observations began.
       const int cp = bundle_->state->current_player();
       IGameState* base = bundle_->state.get();
@@ -4429,8 +4425,8 @@ PYBIND11_MODULE(dinoboard_engine, m) {
     out["action_space"] = action_space;
     out["feature_dim"] = feature_dim;
     // Capability flag: snapshot-path games register a public_state_applier;
-    // fully-public games (tictactoe, quoridor) don't. The REST AI API uses
-    // this to dispatch between the action_id-only path and the full
+    // fully-public games (tictactoe, quoridor) don't. An external caller uses
+    // this to choose between the action_id-only path and the full
     // apply_observation path. extract_initial_observation /
     // apply_initial_observation are walker-driven and available for every
     // game, so no separate has_initial_observation_applier flag is needed.
@@ -4826,9 +4822,8 @@ PYBIND11_MODULE(dinoboard_engine, m) {
            "Test hook: encoder features + legal mask of the session state.")
       .def("_force_write_field", &GameSessionWrapper::_force_write_field,
            py::arg("name"), py::arg("idx"), py::arg("value"),
-           "Adapter-only escape hatch: write a single schema slot directly. "
-           "Used by tests and external-judge adapters; not for production AI "
-           "pipeline code.")
+           "Test-only escape hatch: write a single schema slot directly. "
+           "Not for production AI pipeline code.")
       .def("_debug_do_undo_roundtrip",
            &GameSessionWrapper::_debug_do_undo_roundtrip,
            py::arg("nested") = 2)

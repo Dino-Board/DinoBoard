@@ -18,7 +18,6 @@ from game_service.sessions import (  # noqa: E402
     start_session_reaper,
     stop_session_reaper,
 )
-from ai_service.routes import router as ai_router  # noqa: E402
 
 
 @asynccontextmanager
@@ -54,7 +53,6 @@ async def no_cache(request: Request, call_next):
 
 app.include_router(game_router)
 app.include_router(replay_router)
-app.include_router(ai_router)
 
 # --- Static file serving ---
 

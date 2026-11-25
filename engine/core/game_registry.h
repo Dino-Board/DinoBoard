@@ -77,7 +77,7 @@ using TrainingActionFilter = std::function<std::vector<ActionId>(
 
 using TailSolveTrigger = std::function<bool(const IGameState& state, int ply)>;
 
-// Public-event protocol for the AI API (platform/ai_service):
+// Public-event protocol for observation sessions (GameSession::apply_observation):
 //
 // When the AI session is driven from observations, ground-truth's random
 // outcomes (deck flips, hidden draws, revealed cards during challenges)
@@ -235,8 +235,8 @@ struct GameBundle {
   AuxiliaryScorer auxiliary_scorer;
   TrainingActionFilter training_action_filter;
   // Public-event protocol (see above). Optional — only needed for games
-  // that register a belief_tracker AND want to be driveable through the
-  // AI API with independent seeds.
+  // that register a belief_tracker AND want to be driveable through
+  // observation sessions with independent seeds.
   PublicEventExtractor public_event_extractor;
   // Sim-only events extractor (see EventsOnlyExtractor above). Optional;
   // when empty the sim falls back to public_event_extractor.

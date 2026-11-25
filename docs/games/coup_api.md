@@ -1,4 +1,4 @@
-# Coup — AI API 接入文档
+# Coup — AI 接入文档
 
 ## 概览
 
@@ -38,7 +38,7 @@
 | 27–31 | Return 角色 | Ambassador exchange 最后把某角色牌还回 deck。27=Duke, 28=Assassin, 29=Captain, 30=Ambassador, 31=Contessa。**只有换牌者自己知道**——见下 |
 | 32 | （观察值）Hidden Return | 不是合法动作、不在策略头里。还牌动作在观察流里的替身：`CoupRules::public_action` 把 27–31 一律投影成 32，`apply_action_with_trace(...)["action"]`、selfplay 的 `observation_trace`、各座位 tracker、网页轮询拿到的都是 32。还的是哪个角色不出现在任何发给别人的字段里 |
 
-**`/observe` 要传投影后的 id**：GT 端用 `trace["action"]`（而不是自己手里的真实 action_id）回灌 `/observe`，这样 AI session 永远收不到对手还了哪张牌。对绝大多数动作两者相等。
+**`apply_observation` 要传投影后的 id**：GT 端用 `trace["action"]`（而不是自己手里的真实 action_id）回灌 `apply_observation`，这样 AI session 永远收不到对手还了哪张牌。对绝大多数动作两者相等。
 
 **多阶段回合**：Coup 的一个"回合"可能产生多个 action_id（出招 → 被挑战 → 揭示 → 丢牌 等）。AI 每收到一个 action_id 就更新一步内部 state，直到 `current_player` 走到下一真正的决策者。
 
@@ -95,47 +95,6 @@ Coup 的 `events` 由 `extract_events_only`（`games/coup/coup_register.cpp::cou
 私有：自己的两张未揭示 `influences[my_seat][s].character`、Ambassador 阶段的 `exchange_drawn`、自己的 `deck_known` / `deck_known_taint` 行。对手的暗牌不可见，AI 靠 sampler 采样；采样出的世界保证满足 `deck_known[observer] ⊆ 牌堆 ⊎ 被标记槽位`（不会把观察者自己还回牌堆的牌发给对手），其余座位的知识行在采样世界里清零。
 
 **snapshot 新增字段**：`deck_known`、`deck_known_taint`（owner-only，只含接收者自己那一行）以及可选的 `__viz_all_viewers__["influence"]`（`influence` 的整张 viz 张量，含所有观察者列——"谁能看到哪张牌"在 Coup 里是公开信息，接收者的搜索需要它来正确模拟对手视角）。`exchange_drawn` 的 viz 不整张同步：哪个抽牌槽先被还掉是换牌者的私有信息。手工构造 snapshot 的外部客户端可以不带 `__viz_all_viewers__`（退回只同步自己那一列的旧行为），但必须带齐所有 schema 字段的 `__viz__` 切片（含上面两个新字段）。
-
----
-
-## 完整示例（Python）
-
-```python
-import requests
-BASE = "http://localhost:8000"
-
-initial_observation = gt_session.extract_initial_observation(3)
-sess = requests.post(f"{BASE}/ai/sessions", json={
-    "game_id": "coup_4p", "seed": 555, "my_seat": 3,
-    "initial_observation": initial_observation,
-}).json()
-sid = sess["session_id"]
-
-# AI 需要所有玩家的 claim / challenge / reveal 事件才能正确建模
-while True:
-    status = requests.get(f"{BASE}/ai/sessions/{sid}").json()
-    if status["is_terminal"]: break
-
-    if status["current_player"] == 3:
-        r = requests.post(f"{BASE}/ai/sessions/{sid}/decide").json()
-        action_id = r["action_id"]
-    else:
-        action_id = opp_pick()
-
-    # Ground truth 端:`apply_action_with_trace(action, perspective)` 一行
-    # 包揽——内部 do_action_fast 推进 GT、然后调 framework 自动派生的
-    # `public_event_extractor`(由 `install_event_protocol(extract_events_only, ...)`
-    # 装好)diff 出 events 并算 public_snapshot,返回 {events, public_snapshot}。
-    trace = gt_session.apply_action_with_trace(action_id, perspective=3)
-    requests.post(f"{BASE}/ai/sessions/{sid}/observe", json={
-        "action_id": trace["action"],   # 公开投影：还牌动作在这里是 32
-
-        "events": trace["events"],
-        "public_snapshot": trace["public_snapshot"],
-    })
-
-requests.delete(f"{BASE}/ai/sessions/{sid}")
-```
 
 ---
 

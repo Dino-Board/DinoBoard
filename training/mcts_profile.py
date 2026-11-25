@@ -11,7 +11,7 @@ Three config files per game, one shared baseline plus two profile sets:
                                      a pair-wise tournament for win-rate.
   - `games/<g>/config/web.json`    — `<web_expert|web_casual|analysis>`: profile
                                      deltas applied on top of the baseline. The
-                                     web/REST AI never injects noise.
+                                     web never injects noise.
 
 `resolve_profile(game_id, profile_name)` dispatches: `{selfplay, eval}` →
 train.json's `mcts` block; `{web_expert, web_casual, analysis}` → web.json. All

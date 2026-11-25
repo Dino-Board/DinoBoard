@@ -1,4 +1,4 @@
-# Splendor — AI API 接入文档
+# Splendor — AI 接入文档
 
 ## 概览
 
@@ -119,48 +119,6 @@ tracker 用它把这张卡从"未见牌池"里移除。漏发的话，被买走�
 | `players[i].reserved` | `[{visible, tier, bonus, points, cost[5]}]` | 已预订的卡。`visible=false` 的 deck-reserved 对手看到的 viz=0（card 元数据 placeholder），自己始终看到完整牌面 |
 
 玩家私有：自己的 `players[my_seat].reserved` 里 `visible=false` 的卡。`self_reserve_deck` 事件用来让 AI 追踪 deck-reserved 的具体卡 id；其他玩家的 deck-reserved 是隐藏信息，由 `randomize_unseen` 在 sim 入口采样占位。
-
----
-
-## 完整示例（Python）
-
-```python
-import requests
-BASE = "http://localhost:8000"
-
-initial_observation = gt_session.extract_initial_observation(0)
-sess = requests.post(f"{BASE}/ai/sessions", json={
-    "game_id": "splendor_2p", "seed": 777, "my_seat": 0,
-    "initial_observation": initial_observation,
-}).json()
-sid = sess["session_id"]
-
-# 假设 ground truth 从 splendor_rules 自己维护。它在每一步计算 observation 事件。
-# 这里用伪代码表示。
-def apply_on_ground_truth(action_id):
-    """返回 (events, public_snapshot) — 由 ground truth 端计算。
-    具体实现见 games/splendor/splendor_register.cpp::splendor_events::extract_events_only 的翻译版,或直接调 `gt_session.apply_action_with_trace(action_id, perspective)` 拿 framework 算好的 `{events, public_snapshot}`。
-    events: 这次 transition 里 observer 能看到的公开事实序列（按 producer 顺序）。
-    public_snapshot: 动作之后 GT 端所有公开 slot 的值（按 schema field name 索引）。"""
-    ...
-
-while True:
-    status = requests.get(f"{BASE}/ai/sessions/{sid}").json()
-    if status["is_terminal"]: break
-
-    if status["current_player"] == 0:
-        r = requests.post(f"{BASE}/ai/sessions/{sid}/decide").json()
-        action_id = r["action_id"]
-    else:
-        action_id = opp_pick_action()  # 你的对手逻辑
-
-    events, snapshot = apply_on_ground_truth(action_id)  # 你的 ground truth 算事件 + snapshot
-    requests.post(f"{BASE}/ai/sessions/{sid}/observe", json={
-        "action_id": action_id, "events": events, "public_snapshot": snapshot,
-    })
-
-requests.delete(f"{BASE}/ai/sessions/{sid}")
-```
 
 ---
 

@@ -13,6 +13,6 @@ Read the sub-document matching your current task:
 - **GameBundle + GameRegistrar** (wire components, install_event_protocol): read [registration.md](registration.md)
 - **Learned belief network** (bluff games — Coup/LiarsDice): read [belief-net.md](belief-net.md)
 - **Optional training features** (heuristic, tail solver, filter, adjudicator, stats, opponent pool): read [training.md](training.md)
-- **REST AI API** (observation-only session lifecycle, endpoints): read [api.md](api.md)
+- **External AI integration** (observation-mode `GameSession`: initial observation, observe, decide): read [api.md](api.md)
 
 Only read the file relevant to the current task.

@@ -1,4 +1,4 @@
-"""Model path resolution shared by game_service and ai_service.
+"""Model path resolution for game_service and the tests.
 
 Convention: games/<base>/model/<variant>.onnx, where <variant> is the
 game_id (e.g. azul_2p.onnx, azul_3p.onnx, splendor_tok_2p.onnx). All

@@ -298,8 +298,8 @@ class TestBeliefTracker:
 
 
 # ---------------------------------------------------------------------------
-# 9. AI API belief / public state / legal actions equivalence
-# (independent-seed API session must match self-play tracker step-by-step)
+# 9. Observation-session belief / public state / legal actions equivalence
+# (independent-seed observation session must match self-play tracker step-by-step)
 # ---------------------------------------------------------------------------
 
 class TestApiBeliefEquivalence:

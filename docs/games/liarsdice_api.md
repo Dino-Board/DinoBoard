@@ -1,4 +1,4 @@
-# Liar's Dice — AI API 接入文档
+# Liar's Dice — AI 接入文档
 
 ## 概览
 
@@ -65,48 +65,6 @@
 | `players[p].dice` | `int[]` | 平铺的骰子面值列表（按面值升序）；`dice_count` 的 expand-form |
 
 私有：自己的 `dice_count[my_seat]` / `dice[my_seat]` 始终可见；对手的在非终局期间是不可见的。
-
----
-
-## 完整示例（Python）
-
-```python
-import requests
-BASE = "http://localhost:8000"
-
-# AI 扮演 2 人局的 1 号玩家
-initial_observation = gt_session.extract_initial_observation(my_seat=1)
-sess = requests.post(f"{BASE}/ai/sessions", json={
-    "game_id": "liarsdice_2p",
-    "seed": 42,
-    "my_seat": 1,
-    "initial_observation": initial_observation,
-}).json()
-sid = sess["session_id"]
-
-while True:
-    status = requests.get(f"{BASE}/ai/sessions/{sid}").json()
-    if status["is_terminal"]:
-        break
-
-    if status["current_player"] == 1:
-        r = requests.post(f"{BASE}/ai/sessions/{sid}/decide").json()
-        action_id = r["action_id"]
-    else:
-        action_id = opp_pick()  # 对手选 bid 或 challenge
-
-    # GT 端:`apply_action_with_trace` 推进 GT 并取 perspective=1 的 trace。
-    # LiarsDice 注册了 `no_events_extractor`,events 永远是 [],信息全靠
-    # public_snapshot。
-    trace = gt_session.apply_action_with_trace(action_id, perspective=1)
-    requests.post(f"{BASE}/ai/sessions/{sid}/observe", json={
-        "action_id": action_id,
-        "events": trace["events"],  # 总是 []
-        "public_snapshot": trace["public_snapshot"],
-    })
-
-requests.delete(f"{BASE}/ai/sessions/{sid}")
-```
 
 ---
 

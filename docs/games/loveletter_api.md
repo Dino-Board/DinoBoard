@@ -1,4 +1,4 @@
-# Love Letter — AI API 接入文档
+# Love Letter — AI 接入文档
 
 ## 概览
 
@@ -90,54 +90,6 @@ LL 协议下 `events` 始终是 `[]`——所有 perspective-private 的 reveal 
 **胜负与平局**：单轮制。只剩一人或牌堆抽完时终局；摊牌比手牌点数，再比弃牌点数和。两者都相同的玩家**并列第一**：`winner` 为 `-1`，`winners` 返回所有并列者，`losers` 返回其余所有人（含已淘汰者），终局价值为并列者各 `+1/nw`、其余各 `-1/nl`；所有玩家全部并列才是和局（全 0）。
 
 **特征编码（维度 70 / 99 / 128 不变）**：两个曾经失效的输入现在是真实值——牌堆张数（下标 `13N`，`deck_size/16`；以前恒为 -64）和"我的手牌已被别人看到"（下标 3；以前在搜索根节点恒为 0）。后者只在 2 人局有意义：3–4 人局里别人是否看过我不是公开信息，该位恒为 0，其余座位的同名位表示"我看过他的手牌"。**在修复前训练的网络**这两个输入上的权重从未被训练过，直接喂真实值会扰动输出；用 `python games/loveletter/migrate_model_features.py <model.onnx | checkpoint.pt>` 迁移（把牌堆列乘 -64 折进首层偏置后清零该列，并清零下标 3 的列；带标记，重复运行无副作用）。仓库自带的三个模型已迁移。
-
----
-
-## 完整示例（Python）
-
-```python
-import requests
-BASE = "http://localhost:8000"
-
-# AI 扮演 3 人局的第 1 号玩家。
-# initial_observation 必须由 GT 端通过
-# `gt_session.extract_initial_observation(my_seat=1)` 提供——
-# 它两节式 `{public_snapshot, tracker_init}` 携带初始 viz=1 槽位
-# (公共牌堆大小、discard 等) 加 perspective-private bootstrap (自己的初始手牌)。
-initial_observation = gt_session.extract_initial_observation(1)
-sess = requests.post(f"{BASE}/ai/sessions", json={
-    "game_id": "loveletter_3p", "seed": 99, "my_seat": 1,
-    "initial_observation": initial_observation,
-}).json()
-sid = sess["session_id"]
-
-# Ground truth 端:每个动作 apply 之后,framework 自动算 perspective 视角的
-# events + public_snapshot。LL register 用 `viz::no_events_extractor`,所以
-# events 永远是空,信息全靠 public_snapshot 走 viz=1 → walker 同传。
-
-while True:
-    status = requests.get(f"{BASE}/ai/sessions/{sid}").json()
-    if status["is_terminal"]: break
-
-    if status["current_player"] == 1:
-        r = requests.post(f"{BASE}/ai/sessions/{sid}/decide").json()
-        action_id = r["action_id"]
-    else:
-        action_id = opp_pick()
-
-    # GT 端 apply 动作并提取 perspective=1 的 trace。
-    # `apply_action_with_trace(action, perspective)` 内部会 do_action_fast
-    # 推进 GT,然后调 `public_event_extractor` 算这一步的 events +
-    # public_snapshot;返回 {events, public_snapshot}。
-    trace = gt_session.apply_action_with_trace(action_id, perspective=1)
-    requests.post(f"{BASE}/ai/sessions/{sid}/observe", json={
-        "action_id": action_id,
-        "events": trace["events"],
-        "public_snapshot": trace["public_snapshot"],
-    })
-
-requests.delete(f"{BASE}/ai/sessions/{sid}")
-```
 
 ---
 

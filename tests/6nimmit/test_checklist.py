@@ -244,7 +244,7 @@ class TestComponents:
                                         node_budget=10000)
 
 
-# 10. AI API: a session fed only observations follows a whole game
+# 10. A session fed only observations follows a whole game
 PUBLIC_KEYS = ["table", "used", "current_round", "small_phase_active",
                "small_player", "is_terminal", "winner", "current_player"]
 

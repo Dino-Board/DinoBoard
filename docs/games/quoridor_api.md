@@ -1,4 +1,4 @@
-# Quoridor — AI API 接入文档
+# Quoridor — AI 接入文档
 
 ## 概览
 
@@ -82,51 +82,9 @@ wall_col = v_wall_id % 8
 
 ---
 
-## 完整示例（Python）
-
-```python
-import requests
-BASE = "http://localhost:8000"
-
-# AI 扮演玩家 1（先让对手走）
-sess = requests.post(f"{BASE}/ai/sessions", json={
-    "game_id": "quoridor", "seed": 123, "my_seat": 1,
-    # 注:body 里的 simulations/temperature 会被 pydantic 丢弃,
-    # 强度由服务端从 web.json::web_expert 解析(见 AI_API.md)
-}).json()
-sid = sess["session_id"]
-
-while True:
-    status = requests.get(f"{BASE}/ai/sessions/{sid}").json()
-    if status["is_terminal"]:
-        print(f"Game over. Winner: {status.get('winner')}")
-        break
-
-    if status["current_player"] == 1:
-        # AI 回合
-        r = requests.post(f"{BASE}/ai/sessions/{sid}/decide").json()
-        action_id = r["action_id"]
-        info = r["action_info"]
-        if info["type"] == "move":
-            print(f"AI 移到 ({info['row']},{info['col']})")
-        else:
-            print(f"AI 放{'水平' if info['type']=='hwall' else '垂直'}墙 at ({info['row']},{info['col']})")
-    else:
-        # 对手输入
-        action_id = int(input("Your move (0-208): "))
-
-    requests.post(f"{BASE}/ai/sessions/{sid}/observe", json={
-        "action_id": action_id, "events": [], "public_snapshot": {},
-    })
-
-requests.delete(f"{BASE}/ai/sessions/{sid}")
-```
-
----
-
 ## 可选特性：Tail Solver
 
-Quoridor 注册了 `tail_solver`（α-β 残局求解）。AI 在局末（通常 ply ≥ 30）会尝试精确求解必胜路线。接入方不需要额外操作——`decide` 返回的 `stats.tail_solved=true` 表示本步是 tail solve 的结果（已证明胜/负，而非 MCTS 估计）。
+Quoridor 注册了 `tail_solver`（α-β 残局求解）。AI 在局末（通常 ply ≥ 30）会尝试精确求解必胜路线。接入方不需要额外操作——`get_ai_action` 返回的 `stats.tail_solved=true` 表示本步是 tail solve 的结果（已证明胜/负，而非 MCTS 估计）。
 
 ---
 

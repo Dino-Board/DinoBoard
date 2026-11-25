@@ -1,4 +1,4 @@
-# TicTacToe — AI API 接入文档
+# TicTacToe — AI 接入文档
 
 ## 概览
 
@@ -39,7 +39,7 @@ col = action_id % 3
 
 ---
 
-## state_dict（`GET /ai/sessions/{id}` 不直接返回 state，但 session 内部维护的 state 字段如下）
+## state_dict 字段
 
 所有字段都是公开的：
 
@@ -51,57 +51,6 @@ col = action_id % 3
 | `winner` | 0 / 1 = 玩家赢，-1 = 平局或未结束 |
 | `scores` | `[scores_p0, scores_p1]`，胜者 +1 败者 -1；平局 / 未结束都是 `[0, 0]` |
 | `move_count` | 已下棋子数 |
-
----
-
-## 完整示例（Python）
-
-```python
-import requests
-
-BASE = "http://localhost:8000"
-sess = requests.post(f"{BASE}/ai/sessions", json={
-    "game_id": "tictactoe", "seed": 42, "my_seat": 0,
-    # 强度由服务端从 web.json::web_expert 解析,客户端不可指定
-}).json()
-sid = sess["session_id"]
-
-def apply(ground_truth_board, action_id, acting_player):
-    """第三方的 ground truth: 简单起见，这里直接模拟在 Python 里跑。"""
-    r = action_id // 3
-    c = action_id % 3
-    ground_truth_board[r][c] = acting_player
-
-board = [[-1]*3 for _ in range(3)]
-current_player = 0
-
-while True:
-    # AI 回合（我们设 my_seat=0）
-    if current_player == 0:
-        r = requests.post(f"{BASE}/ai/sessions/{sid}/decide").json()
-        action_id = r["action_id"]
-        print(f"AI plays cell {action_id} ({r['action_info']})")
-    else:
-        # 真实对手逻辑（这里假设人工输入）
-        action_id = int(input(f"Your move (0-8): "))
-
-    apply(board, action_id, current_player)
-
-    # 回喂 AI
-    r = requests.post(f"{BASE}/ai/sessions/{sid}/observe", json={
-        "action_id": action_id,
-        "events": [],
-        "public_snapshot": {},
-    }).json()
-
-    if r["is_terminal"]:
-        status = requests.get(f"{BASE}/ai/sessions/{sid}").json()
-        print(f"Game over. Winner: player {status.get('winner')}")
-        break
-    current_player = r["current_player"]
-
-requests.delete(f"{BASE}/ai/sessions/{sid}")
-```
 
 ---
 

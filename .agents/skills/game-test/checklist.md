@@ -21,7 +21,7 @@
 | 7    | test_training_tensor_validation                | Training tensors (features, policy, value) have correct shapes, no NaN, policy sums to ~1 |
 | 8    | test_optional_components                       | If game registers heuristics/tail_solver/adjudicator/stats_extractor, each runs without crash |
 | 9    | test_multiplayer_variants                      | For games with N>2 variants: each variant creates, plays, terminates correctly |
-| 10   | test_ai_api_separation                         | API session driven by observations only produces same belief/public-state/legal-actions as selfplay (uses assert_api_belief_matches_selfplay) |
+| 10   | TestApiBeliefEquivalence                       | A session driven by observations only produces same belief/public-state/legal-actions as selfplay (uses assert_api_belief_matches_selfplay) |
 | 11   | test_rule_invariants                           | Game-specific invariants hold at every ply of random episodes (uses run_random_episode_states) |
 
 ## Step details
@@ -72,7 +72,7 @@ Parametrize over variant ids (e.g. base `"azul"` for 2p, plus `"azul_3p"` and `"
 Each variant creates, runs random actions to termination, checks winner
 is in range [0, num_players).
 
-### Step 10: AI API separation
+### Step 10: Observation-session separation
 For hidden-info games with public_event_extractor. Uses the conftest helper:
 ```python
 assert_api_belief_matches_selfplay(

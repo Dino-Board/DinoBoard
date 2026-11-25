@@ -107,17 +107,6 @@ python scripts/arknova_board.py --ref ~/ark-nova-fork   # [--model m.onnx] [--pr
 # 页面：cd ~/ark-nova-fork/web && pnpm install && pnpm build，然后打开 http://127.0.0.1:8765
 ```
 
-### AI API
-
-```
-POST /ai/sessions                  → 创建 session
-POST /ai/sessions/{id}/observe     → 喂公开事件
-POST /ai/sessions/{id}/decide      → 获取 AI 动作
-DELETE /ai/sessions/{id}           → 结束 session
-```
-
-调用方只需 action ID + 公开事件。
-
 ---
 
 ## 加新游戏

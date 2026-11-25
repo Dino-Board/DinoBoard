@@ -148,7 +148,7 @@ board_ai::GameRegistrar reg_3p("loveletter_3p", [](std::uint64_t seed) {
 Hidden-info games that register a tracker MUST also install the event
 protocol — `GameRegistry::create_game` throws at session creation if a
 `belief_tracker` is present without a `public_state_applier` (and matching
-`public_event_extractor`). This is not only for the public AI API: selfplay
+`public_event_extractor`). This is not only for external observation sessions: selfplay
 per-seat states use the public snapshot/applier path, and MCTS sim descent
 uses the events-only path to keep the sim-local tracker synchronized with the
 simulated action sequence. Without the applier the session falls back to

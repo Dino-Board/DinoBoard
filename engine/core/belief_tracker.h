@@ -224,7 +224,7 @@ class IBeliefTracker {
       const IBeliefEvaluator* /*evaluator*/) {}
 
   // Serialize the tracker's internal belief to a canonical, comparable form.
-  // Used by the AI API belief-equivalence tests: a self-play session and an
+  // Used by the observation-session belief-equivalence tests: a self-play session and an
   // API session with different seeds must agree on belief after the same
   // action + event sequence. The returned map must be deterministic across
   // identical internal states — sort sets, use stable keys. The default

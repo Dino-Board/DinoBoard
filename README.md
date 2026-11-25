@@ -137,18 +137,6 @@ python scripts/arknova_board.py --ref ~/ark-nova-fork   # [--model m.onnx] [--pr
 # the page: cd ~/ark-nova-fork/web && pnpm install && pnpm build, then open http://127.0.0.1:8765
 ```
 
-### AI API
-
-```
-POST /ai/sessions                  → create session
-POST /ai/sessions/{id}/observe     → feed public events
-POST /ai/sessions/{id}/decide      → get AI action
-DELETE /ai/sessions/{id}           → end session
-```
-
-Callers only need action IDs and public events — no shared state code
-or embedded C++ engine.
-
 ---
 
 ## Adding a new game

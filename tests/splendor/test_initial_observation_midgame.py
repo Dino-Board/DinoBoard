@@ -1,7 +1,7 @@
 """`initial_observation` must be a complete bootstrap at ANY ply.
 
-External clients that only see the current position (a BGA/table adapter, a
-judge adapter, a replay viewer) cannot stream the full action history. They
+External clients that only see the current position (a BGA/table bridge, a
+replay viewer) cannot stream the full action history. They
 bootstrap a fresh AI session from a mid-game `extract_initial_observation`.
 
 The framework contract (see `engine/core/belief_tracker.h`) is that the
