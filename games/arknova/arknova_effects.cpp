@@ -83,25 +83,51 @@ std::vector<int> cards_in_range(const State& s, int p) {
   return out;
 }
 
+// Mark (glossary): a marked card that leaves the display other than discarded gives its marker 2 money.
 CardIdx take_from_display(State& s, int index) {
   CardIdx c = s.display[index];
   if (c == kNoCard) engine_error("take_from_display: empty folder");
   s.display[index] = kNoCard;
+  if (const int q = s.display_mark[index]; q >= 0) {
+    s.display_mark[index] = -1;
+    gain(s, q, EffectKind::kEffMoney, kMarkMoney);
+  }
   return c;
+}
+
+// A marked card discarded from the display goes to its marker's hand instead.
+void discard_from_display(State& s, int index) {
+  const int q = s.display_mark[index];
+  CardIdx c = s.display[index];
+  if (c == kNoCard) engine_error("discard_from_display: empty folder");
+  s.display[index] = kNoCard;
+  s.display_mark[index] = -1;
+  if (q >= 0) {
+    to_hand(s, q, c, true);
+  } else {
+    s.discard.push_back(c);
+  }
 }
 
 void refill_display(State& s, Chance& ch) {
   CardIdx kept[kDisplaySize];
+  std::int8_t marks[kDisplaySize];
   int n = 0;
-  for (CardIdx c : s.display) {
-    if (c != kNoCard) kept[n++] = c;
+  for (int i = 0; i < kDisplaySize; ++i) {
+    if (s.display[i] == kNoCard) continue;
+    marks[n] = s.display_mark[i];
+    kept[n++] = s.display[i];
   }
+  const int old = n;
   while (n < kDisplaySize) {
     CardIdx c = draw_from_deck(s, ch);
     if (c == kNoCard) break;
     kept[n++] = c;
   }
-  for (int i = 0; i < kDisplaySize; ++i) s.display[i] = i < n ? kept[i] : kNoCard;
+  for (int i = 0; i < kDisplaySize; ++i) {
+    s.display[i] = i < n ? kept[i] : kNoCard;
+    s.display_mark[i] = i < old ? marks[i] : std::int8_t{-1};
+  }
 }
 
 void advance_break(State& s, int p, int steps) {

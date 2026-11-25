@@ -174,7 +174,9 @@ void to_hand(State& s, int p, CardIdx c, bool is_public);
 void remove_from_hand(State& s, int p, CardIdx c);
 std::vector<int> cards_in_range(const State& s, int p);
 CardIdx take_from_display(State& s, int index);
+void discard_from_display(State& s, int index);  // to the discard pile, or to the hand of its marker
 void refill_display(State& s, Chance& ch);
+constexpr int kMarkMoney = 2;
 void advance_break(State& s, int p, int steps);
 bool is_upgraded(const State& s, int p, int action);
 

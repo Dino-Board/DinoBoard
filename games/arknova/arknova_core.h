@@ -31,6 +31,7 @@ constexpr int kMaxHousing = 48;
 constexpr int kMaxActionTokens = 4;
 constexpr int kMaxCardTokens = 12;
 constexpr int kMaxTucked = 24;
+constexpr int kMapPackSlots = 3;  // Rescue Station's slots under the map; Caves' storage slots
 constexpr int kMaxStack = 48;
 // A frame's card list (Hunter reveal) starts at d[1]: room for every predator icon of the game
 // (the Spotted Hyena Compound reveals one card per predator icon in the zoo); checked at startup.
@@ -152,6 +153,15 @@ struct Player {
   CardIdx tucked[kMaxTucked] = {};
   bool full_cover_scored = false;
   std::int8_t last_action = -1;  // ActionCard, kLastActionXtoken, or -1
+  // Zoo Map Packs (maps 9-14, T1).
+  std::uint8_t continent_markers = 0;  // Geographical Zoo: bit per Continent while its area keeps the marker
+  std::int8_t n_rescued = 0;           // Rescue Station: animals under the map (they count as in the zoo)
+  CardIdx rescued[kMapPackSlots] = {};
+  std::int8_t n_stored = 0;            // Caves: stored cards (hidden from the others)
+  CardIdx stored[kMapPackSlots] = {};
+  std::int8_t concealed = 0;           // Artificial Intelligence: card slots concealed (1, 2, 4, 5 in turn)
+  std::uint8_t quarters = 0;           // Drawing Board: bit per area completely covered now
+  bool hand_boost_used = false;        // Tournament 1: a hand card discarded for +1 strength this turn
 
   int strength(int action) const;
   bool is_upgraded(int action) const { return upgraded >> action & 1; }
@@ -190,6 +200,8 @@ struct State {
   std::vector<CardIdx> deck;  // hidden; drawn from the back
   std::vector<CardIdx> discard;
   CardIdx display[kDisplaySize] = {kNoCard, kNoCard, kNoCard, kNoCard, kNoCard, kNoCard};  // kNoCard = taken
+  // Mark: the player whose token is on the display card, -1 for none (it moves with the card).
+  std::int8_t display_mark[kDisplaySize] = {-1, -1, -1, -1, -1, -1};
   std::vector<CardIdx> final_deck;  // hidden; drawn from the back
   std::int8_t break_pos = 0;
   std::int8_t break_by = -1;

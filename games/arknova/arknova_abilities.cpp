@@ -156,9 +156,8 @@ void dig_apply(State& s, int fi, const Option& o, Chance& ch) {
   --f.d[fd::left];
   if (o.head == Head::done || f.d[fd::left] <= 0) pop(s, fi);
   if (o.head == Head::discard_display) {
-    CardIdx gone = take_from_display(s, o.a[0]);
+    discard_from_display(s, o.a[0]);
     refill_display(s, ch);
-    s.discard.push_back(gone);
   } else if (o.head == Head::discard_hand) {
     CardIdx drawn = draw_from_deck(s, ch);
     remove_from_hand(s, p, o.a[0]);

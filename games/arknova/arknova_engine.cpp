@@ -584,10 +584,7 @@ void break_auto(State& s, int fi, Chance& ch) {
     s.partner_zoos_available = (1u << kNumContinents) - 1;
     s.universities_available = (1u << kNumUniversities) - 1;
     for (int index = 0; index < 2; ++index) {
-      if (s.display[index] != kNoCard) {
-        s.discard.push_back(s.display[index]);
-        s.display[index] = kNoCard;
-      }
+      if (s.display[index] != kNoCard) discard_from_display(s, index);
     }
     refill_display(s, ch);
     if (g_feed) feed_note(f.player, "break_reset");
