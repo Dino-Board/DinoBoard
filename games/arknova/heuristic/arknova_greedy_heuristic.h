@@ -74,4 +74,42 @@ class ArknovaLookaheadHeuristic final : public IHeuristic {
   GreedyWeights w_;
 };
 
+struct MonteCarloConfig {
+  LookaheadConfig beam;       // ranks the options and plays the decisions without rollouts
+  int candidates = 8;         // best options by the beam compared by rollouts
+  int rollouts = 16;          // sampled worlds, each played once from every candidate
+  int replies = 2;            // opponent turns in a rollout; it stops at the mover's next turn after the last
+  double prior_weight = 0.5;  // weight of a candidate's beam value, added to its rollout mean
+};
+
+// The beam refined by Monte Carlo rollouts at every decision of the mover's own turn. The beam
+// values the options; the ones it keeps to its last depth (at most `candidates`, best first) are
+// compared when there are two or more. Each rollout samples a world from the masked state
+// (tracker), plays every candidate in it, then everyone's decisions by greedy until the mover's
+// turn after the opponent's `replies`-th (to the end once the game end is triggered), and scores
+// greedy_evaluate(mover) - greedy_evaluate(opponent) there, or the final score difference with a
+// win bonus. All candidates of a rollout share its world and random stream. A candidate's value
+// is its rollout mean plus prior_weight times its beam value. Other players' turns are greedy's.
+//
+// Measured with seats swapped on each deal: beats beam_3x8 64% over 400 games on deals not used
+// to choose the settings (66% over the 200 that were), and the same rollouts at the turn decision
+// only 60% over 200. Over 200 games each vs beam_3x8: rollouts at the turn decision only 57-59%
+// (16 or 32 rollouts alike), a wider beam alone (3x16, 3x24) 49%, candidates the beam dropped
+// (ranked by their value after the own turn) 48-50%, deeper rollouts (3 replies) 53%, beam_2x3
+// turns inside rollouts 55%. On one core a turn takes about 1.5 s on average, up to ~9 s late in
+// the game when rollouts run to the end.
+class ArknovaMonteCarloHeuristic final : public IHeuristic {
+ public:
+  ArknovaMonteCarloHeuristic(std::string name, MonteCarloConfig cfg) : name_(std::move(name)), cfg_(cfg) {}
+
+  std::string name() const override { return name_; }
+  HeuristicResult pick(IGameState& masked_state, const IBeliefTracker* tracker, const IGameRules& rules,
+                       std::uint64_t rng_seed) const override;
+
+ private:
+  std::string name_;
+  MonteCarloConfig cfg_;
+  GreedyWeights w_;
+};
+
 }  // namespace board_ai::arknova

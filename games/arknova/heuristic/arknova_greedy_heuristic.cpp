@@ -531,6 +531,83 @@ class Lookahead {
   Chance& ch_;
 };
 
+// ---- Monte Carlo rollouts -----------------------------------------------------------------
+
+constexpr int kRolloutLimit = 5000;  // decisions in one rollout
+constexpr double kWinBonus = 5.0;
+
+double outcome(const State& s, int p, const GreedyWeights& w) {
+  const int o = 1 - p;
+  if (s.over) {
+    const int d = s.scores[p] - s.scores[o];
+    return d + (d > 0 ? kWinBonus : d < 0 ? -kWinBonus : 0.0);
+  }
+  return greedy_evaluate(s, p, w) - greedy_evaluate(s, o, w);
+}
+
+// Plays `first` for p, then everyone's decisions by greedy until p's turn after `replies` opponent
+// turns, or to the end once the game end is triggered.
+double rollout(State& s, const Option& first, int p, int replies, const GreedyWeights& w, std::mt19937_64& rng) {
+  SearchChance chance(rng);
+  step(s, first, chance);
+  int turns_left = 2 * replies - 1;
+  for (int n = 0; !s.over; ++n) {
+    if (n == kRolloutLimit) throw std::logic_error("arknova monte carlo: rollout exceeded the decision limit");
+    if (s.top().kind == FrameKind::turn && s.end_by < 0) {
+      if (turns_left == 0) break;
+      --turns_left;
+    }
+    std::vector<Option> options = legal_options(s);
+    if (options.size() == 1) {
+      step(s, options.front(), chance);
+      continue;
+    }
+    std::vector<double> v = greedy_values(s, s.top().player, options, w, rng);
+    step(s, options[std::max_element(v.begin(), v.end()) - v.begin()], chance);
+  }
+  return outcome(s, p, w);
+}
+
+// Rollout mean plus prior_weight times the beam value of the best options the beam kept; the rest
+// keep -inf. The beam's values unchanged when it kept fewer than two.
+std::vector<double> rollout_values(const State& s, const IGameState& masked_state, const IBeliefTracker& tracker,
+                                   int p, const std::vector<Option>& options, const std::vector<double>& beam,
+                                   const MonteCarloConfig& cfg, const GreedyWeights& w, std::mt19937_64& rng) {
+  std::vector<int> order;
+  for (int i = 0; i < static_cast<int>(options.size()); ++i) {
+    if (std::isfinite(beam[i])) order.push_back(i);
+  }
+  std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return beam[a] > beam[b]; });
+  if (static_cast<int>(order.size()) > cfg.candidates) order.resize(cfg.candidates);
+  if (order.size() < 2) return beam;
+
+  std::vector<std::string> keys;
+  for (int i : order) keys.push_back(option_to_json(s, options[i]));
+  std::vector<double> total(order.size(), 0.0);
+  for (int r = 0; r < cfg.rollouts; ++r) {
+    const std::uint64_t seed = rng();
+    std::mt19937_64 world_rng(seed);
+    auto world_ptr = masked_state.clone_state();
+    tracker.randomize_unseen(*world_ptr, p, world_rng);
+    const State& world = checked_cast<ArknovaState>(*world_ptr).synced_core();
+    State probe = world;
+    std::map<std::string, Option> legal;
+    for (const Option& o : legal_options(probe)) legal.emplace(option_to_json(world, o), o);
+    for (std::size_t c = 0; c < order.size(); ++c) {
+      auto it = legal.find(keys[c]);
+      if (it == legal.end()) throw std::logic_error("arknova monte carlo: a candidate is not legal in a sampled world");
+      State line = world;
+      std::mt19937_64 line_rng(seed);
+      total[c] += rollout(line, it->second, p, cfg.replies, w, line_rng);
+    }
+  }
+  std::vector<double> out(options.size(), -std::numeric_limits<double>::infinity());
+  for (std::size_t c = 0; c < order.size(); ++c) {
+    out[order[c]] = total[c] / cfg.rollouts + cfg.prior_weight * beam[order[c]];
+  }
+  return out;
+}
+
 // Samples one world for the mover, values the options under the current atom prefix with
 // `values(state, mover, options, rng)`, and scores each legal atom by its best option.
 template <class Values>
@@ -595,6 +672,19 @@ HeuristicResult ArknovaLookaheadHeuristic::pick(IGameState& masked_state, const 
                        if (f.kind == FrameKind::setup_keep || !own_turn) return greedy_values(s, p, options, w_, rng);
                        SearchChance chance(rng);
                        return Lookahead(cfg_, w_, chance).plan_candidates(s, p, options);
+                     });
+}
+
+HeuristicResult ArknovaMonteCarloHeuristic::pick(IGameState& masked_state, const IBeliefTracker* tracker,
+                                                 const IGameRules& rules, std::uint64_t rng_seed) const {
+  return score_atoms(masked_state, tracker, rules, rng_seed, "arknova monte carlo",
+                     [&](const State& s, int p, const std::vector<Option>& options, std::mt19937_64& rng) {
+                       const Frame& f = s.top();
+                       bool own_turn = f.kind == FrameKind::turn || (s.current == p && f.player == p);
+                       if (f.kind == FrameKind::setup_keep || !own_turn) return greedy_values(s, p, options, w_, rng);
+                       SearchChance chance(rng);
+                       std::vector<double> beam = Lookahead(cfg_.beam, w_, chance).plan_candidates(s, p, options);
+                       return rollout_values(s, masked_state, *tracker, p, options, beam, cfg_, w_, rng);
                      });
 }
 
