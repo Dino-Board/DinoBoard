@@ -36,6 +36,12 @@ BONUSES = {None: "kPBNone", "money5": "kPBMoney5", "money10": "kPBMoney10", "xto
            "worker1": "kPBWorker1", "partner_zoo": "kPBPartnerZoo", "university": "kPBUniversity",
            "multiplier": "kPBMultiplier", "sponsor_for_money": "kPBSponsorForMoney"}
 KINDS = {"enclosure": "kEnclosure", "kiosk": "kKiosk"}
+# Left-edge tokens whose reward is an animal ability, as Board Game Arena's MAPS_DATA has them:
+# the first token of every map is Snapping 1 (take any display card), Silver Lake's fourth is
+# Determination and Ice Cream Parlors' fourth is Pouch 2 (ark-nova-ai: a card from the deck or
+# within reputation range, an upgrade, nothing). The token's effect stays what the encoder reads.
+TOKEN_ABILITIES = {0: ["SNAPPING_1", -1]}
+MAP_TOKEN_ABILITIES = {"plan3": {3: ["DETERMINATION", -1]}, "plan7": {3: ["POUCH", 2]}}
 
 
 def need(cond, msg):
@@ -54,6 +60,11 @@ def one_effect(effects, where):
 
 def cpp_effect(e):
     return "{EffectKind::kEffMoney, 0}" if e is None else f"{{EffectKind::{EFFECTS[e[0]]}, {e[1]}}}"
+
+
+def cpp_token(e, rep, ability):
+    head = f"{cpp_effect(e)}, {'true' if rep else 'false'}"
+    return f"{{{head}}}" if ability is None else f"{{{head}, Keyword::k{ability[0]}, {ability[1]}}}"
 
 
 def mask(cells, index):
@@ -93,6 +104,7 @@ def main():
             "university_slots": [one_effect(e, f"{key} university") for e in board["university_slots"]],
             "last_worker": one_effect(board["last_worker"], f"{key} last worker"),
             "tokens": [[one_effect(e, f"{key} token"), bool(rep)] for e, rep in board["tokens"]],
+            "token_abilities": {str(i): ab for i, ab in {**TOKEN_ABILITIES, **MAP_TOKEN_ABILITIES.get(key, {})}.items()},
             "prebuilt": [[kind, size, sorted(list(c) for c in cs)] for kind, size, cs in board.get("prebuilt", []) if cs],
             "_cpp": dict(rule=rule, rule_mask=mask(rule_cells, index)),
         })
@@ -120,7 +132,8 @@ def write(maps, index, source="ark-nova-ai (hexmap.MAP0, data/maps)"):
             "     {" + ", ".join(cpp_effect(e) for e in m["partner_zoo_slots"]) + "},",
             "     {" + ", ".join(cpp_effect(e) for e in m["university_slots"]) + "},",
             f"     {cpp_effect(m['last_worker'])},",
-            "     {" + ", ".join(f"{{{cpp_effect(e)}, {'true' if rep else 'false'}}}" for e, rep in m["tokens"]) + "},",
+            "     {" + ", ".join(cpp_token(e, rep, m["token_abilities"].get(str(i)))
+                                for i, (e, rep) in enumerate(m["tokens"])) + "},",
             f"     {len(prebuilt)}, {{{', '.join(prebuilt)}}}}},",
         ]
     lines.append("};")

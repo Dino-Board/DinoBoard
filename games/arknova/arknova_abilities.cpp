@@ -339,6 +339,8 @@ int action_of(Keyword k) {
   }
 }
 
+}  // namespace
+
 void resolve_keyword(State& s, int p, Keyword k, int value, Chance& ch) {
   Player& me = s.players[p];
   switch (k) {
@@ -504,8 +506,6 @@ void resolve_keyword(State& s, int p, Keyword k, int value, Chance& ch) {
   }
   engine_error(std::string("unknown ability ") + keyword_name(k));
 }
-
-}  // namespace
 
 void offer_pick(State& s, int p, const std::vector<CardIdx>& drawn, int keep) {
   std::vector<CardIdx> revealed;

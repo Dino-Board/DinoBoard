@@ -332,17 +332,37 @@ void push_final_card_discards(State& s) {
   }
 }
 
+namespace {
+
+// The token abilities (Snapping, Determination, Pouch) draw nothing at random.
+class NoChance final : public Chance {
+ public:
+  void shuffle(std::vector<CardIdx>&) override { engine_error("map token ability: unexpected shuffle"); }
+  CardIdx pick(const std::vector<CardIdx>&) override { engine_error("map token ability: unexpected pick"); }
+};
+
+void token_reward(State& s, int p, const MapToken& t) {
+  if (t.ability == Keyword::kNone) {
+    apply_effect(s, p, t.effect);
+    return;
+  }
+  NoChance none;
+  resolve_keyword(s, p, t.ability, t.ability_value, none);
+}
+
+}  // namespace
+
 void take_map_token(State& s, int p, int index) {
   Player& pl = s.players[p];
   if (!pl.tokens[index]) engine_error("take_map_token: token already taken");
   pl.tokens[index] = false;
-  apply_effect(s, p, pl.zoo.def().tokens[index].effect);
+  token_reward(s, p, pl.zoo.def().tokens[index]);
 }
 
 void token_income(State& s, int p) {
   for (int i = 0; i < kNumMapTokens; ++i) {
     const MapToken& t = s.players[p].zoo.def().tokens[i];
-    if (t.repeats && !s.players[p].tokens[i]) apply_effect(s, p, t.effect);
+    if (t.repeats && !s.players[p].tokens[i]) token_reward(s, p, t);
   }
 }
 

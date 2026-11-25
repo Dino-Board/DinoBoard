@@ -67,6 +67,10 @@ struct MapTerrain {
 struct MapToken {
   Effect effect;  // amount 0: nothing
   bool repeats;   // paid again in every break once taken
+  // A token whose reward is an animal ability (Snapping, Determination, Pouch) resolves that instead;
+  // `effect` then only describes it to the encoder.
+  Keyword ability = Keyword::kNone;
+  std::int8_t ability_value = -1;
 };
 struct Prebuilt {
   BuildingKind kind;

@@ -122,6 +122,8 @@ HousingEntry* find_housing(Player& pl, CardIdx c);
 void vacate_standard_enclosure(Player& pl, int h);
 // abilities.resolve: the abilities of an animal that was just played, in printed order.
 void resolve_abilities(State& s, int p, CardIdx c, Chance& ch);
+// One ability keyword with its number (-1: none) for p, as an animal's would resolve.
+void resolve_keyword(State& s, int p, Keyword k, int value, Chance& ch);
 // Removes a card from the zoo_cards list (keeping the order of the others).
 void remove_zoo_card(Player& pl, CardIdx c);
 void add_zoo_card(Player& pl, CardIdx c);
