@@ -957,6 +957,10 @@ std::string option_to_json(const State& s, const Option& o) {
       card_args(o.n);
       break;
     case Head::tile: w_str(w, kBonusTileNames[o.a[0]]); break;
+    case Head::bonus:  // the space, then its bonus
+      w_num(w, o.a[0]);
+      w_str(w, kPlacementBonusNames[s.players[s.top().player].zoo.cell(o.a[0]).bonus]);
+      break;
     case Head::display: case Head::snap: case Head::take_small: case Head::discard_display: case Head::target:
     case Head::boost:
       w_num(w, o.a[0]);
@@ -1340,6 +1344,9 @@ std::string option_label(const State& s, const Option& o) {
     case Head::sell: return "sell " + name_of(o.a[0]);
     case Head::tuck: return "tuck " + name_of(o.a[0]);
     case Head::harbor: return "Harbour: discard " + name_of(o.a[0]) + " for " + num(kHarborMoney) + " money";
+    case Head::bonus:
+      return std::string("Archaeologist: take the ") + kPlacementBonusNames[s.players[p].zoo.cell(o.a[0]).bonus] +
+             " placement bonus (space " + num(o.a[0]) + ")";
     default: engine_error(std::string("no text for option head ") + head_name(o.head));
   }
 }

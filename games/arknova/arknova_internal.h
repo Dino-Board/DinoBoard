@@ -326,6 +326,8 @@ std::pair<int, int> endgame_yield(State& scratch, CardIdx c, int p);
 // The money p's next break would pay now (appeal, kiosks, map tokens, income cards, the map rule).
 int break_income(const State& s, int p);
 void after_build_hooks(State& s, int p, int building, Chance& ch);  // AFTER_BUILD_HOOKS, applied in reverse
+// Archaeologist's choices: one uncovered space per kind of placement bonus in the zoo.
+std::vector<int> archaeologist_spaces(const Zoo& zoo);
 void after_special_built(State& s, int p, int building);  // relocate.py hook
 
 }  // namespace board_ai::arknova

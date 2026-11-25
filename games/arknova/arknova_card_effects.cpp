@@ -600,14 +600,29 @@ void after_build_hooks(State& s, int p, int building, Chance& ch) {
     gain(s, p, EffectKind::kEffMoney, n);
   }
   after_special_built(s, p, building);
-  if (sr::has(pl, 221)) {
+  // Archaeologist (glossary 221): each border placement bonus covered brings another free placement
+  // bonus of the player's choice, from the bonus spaces of the zoo not yet covered.
+  if (sr::has(pl, 221) && !archaeologist_spaces(pl.zoo).empty()) {
     CellMask cells = pl.zoo.buildings[building].cells;
     for (int c = 0; c < kMapCells; ++c) {
       if ((cells >> c & 1) && pl.zoo.cell(c).bonus != kPBNone && map_cell(c).border) {
-        gain(s, p, placement_bonus_effect(pl.zoo.cell(c).bonus));
+        push(s, FrameKind::ab_archaeologist, p);
       }
     }
   }
+}
+
+std::vector<int> archaeologist_spaces(const Zoo& zoo) {
+  std::vector<int> out;
+  bool seen[kNumPlacementBonuses] = {};
+  const CellMask covered = zoo.covered();
+  for (int c = 0; c < kMapCells; ++c) {
+    const PlacementBonus b = zoo.cell(c).bonus;
+    if (b == kPBNone || (covered >> c & 1) || seen[b]) continue;
+    seen[b] = true;  // spaces with the same bonus are the same choice
+    out.push_back(c);
+  }
+  return out;
 }
 
 // ---- endgame -----------------------------------------------------------------------------------
@@ -806,7 +821,23 @@ void okapi_apply(State& s, int fi, const Option& o, Chance&) {
 
 }  // namespace
 
+namespace {
+
+void archaeologist_options(State& s, int fi, std::vector<Option>& out) {
+  for (int c : archaeologist_spaces(s.players[frame(s, fi).player].zoo)) out.push_back(opt(Head::bonus, c));
+  if (out.empty()) out.push_back(opt_skip());  // the last bonus space was covered meanwhile
+}
+
+void archaeologist_apply(State& s, int fi, const Option& o, Chance&) {
+  const int p = frame(s, fi).player;
+  pop(s, fi);
+  if (o.head == Head::bonus) gain(s, p, placement_bonus_effect(s.players[p].zoo.cell(o.a[0]).bonus));
+}
+
+}  // namespace
+
 void register_sponsor_effect_frames() {
+  register_choice(FrameKind::ab_archaeologist, archaeologist_options, archaeologist_apply);
   register_choice(FrameKind::waza_kind, waza_options, waza_apply);
   register_choice(FrameKind::okapi_stable, okapi_options, okapi_apply);
 }

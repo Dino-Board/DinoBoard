@@ -61,6 +61,7 @@ class Mapper {
       case Head::clever: return {atom::kClever + o.a[0]};
       case Head::multiplier: return {atom::kMultiplier + o.a[0]};
       case Head::boost: return {atom::kBoost + (o.a[0] == 1 ? 0 : 1)};
+      case Head::bonus: return {atom::kCell + o.a[0] * atom::kCellHeads};  // the bonus space
       case Head::partner_zoo: return {atom::kPartnerZoo + o.a[0]};
       case Head::university: return {atom::kUniversity + o.a[0]};
       case Head::tile: return {atom::kTile + o.a[0]};

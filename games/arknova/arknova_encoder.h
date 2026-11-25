@@ -69,7 +69,7 @@ namespace board_ai::arknova {
   X(break_pos, 1) X(break_by, 2) X(deck, 1) X(discard, 1) X(final_deck, 1) X(donations, 1)         \
   X(donation_cost, 1) X(end_by, 2) X(final_turns, 1) X(final_card_discarded, 1) X(my_turn, 1)      \
   X(partner_zoo_available, 5) X(university_available, 3) X(bonus_tiles, 18) X(base_pile, 1)        \
-  X(stack_depth, 1) X(pending, 42) X(pending_opponent, 1) X(after_clever, 1) X(after_boost, 1)     \
+  X(stack_depth, 1) X(pending, 43) X(pending_opponent, 1) X(after_clever, 1) X(after_boost, 1)     \
   X(after_extra_action, 1) ARKNOVA_POOL_FEATURES(X, discard) ARKNOVA_POOL_FEATURES(X, unseen)      \
   X(unseen_final, 11) X(trade_used, 1)
 
@@ -78,7 +78,7 @@ namespace board_ai::arknova {
 #define ARKNOVA_EFFECT_WIDTH 16
 
 #define ARKNOVA_DECISION_FEATURES(X)                                                               \
-  X(frame, 42) X(to_move, 1) X(prefix_len, 1) X(turn_action, 5) X(turn_strength, 1)                \
+  X(frame, 43) X(to_move, 1) X(prefix_len, 1) X(turn_action, 5) X(turn_strength, 1)                \
   X(turn_xtoken, 1) X(turn_depth, 1) X(turn_borrowed, 1) X(budget, 1) X(remaining, 1)              \
   X(done_count, 1) X(side2, 1) X(discard_after, 1) X(may_snap, 1) X(normal_done, 1)                \
   X(engineer_used, 1) X(animals_phase, 3) X(all_small, 1) X(tasks_used, 4) X(donated, 1)           \

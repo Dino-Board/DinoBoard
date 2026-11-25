@@ -18,7 +18,12 @@ struct GreedyWeights {
   double money = 0.28;        // per money, for the first kMoneyWorking
   double spare_money = 0.08;  // per money for the next kMoneySpare; beyond is worth nothing
   double conservation = 2.6;  // per conservation point on a card, when estimating a play
-  double income = 0.15;       // per money of break income, per break left
+  double income = 0.15;  // per money of appeal income at a break, per break left
+  // Per money of kiosk income at a break, per break left. At the appeal weight (0.15) the beam
+  // fills the map with kiosks and pavilions; 0.10 builds about a quarter fewer pavilions and a fifth
+  // fewer kiosks, the same number of animals, and plays even with 0.15 (beam_3x8, 200 games: 52%;
+  // 0.06 and 0.03: 49%).
+  double kiosk_income = 0.10;
   double hold = 0.35;         // share of a playable card's net gain credited while in hand
   double xtoken = 0.8;
   double upgrade = 5.0;  // per upgraded action card, scaled by time left

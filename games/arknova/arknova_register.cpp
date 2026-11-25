@@ -154,15 +154,6 @@ board_ai::GameBundle make_arknova(const std::string& game_id, std::uint64_t seed
                                              "mc_beam", MonteCarloConfig{{3, 8, 10, 8}, 8, 16, 2, 0.5}));
   b.heuristics.register_named("mc_beam_5s", std::make_unique<ArknovaMonteCarloHeuristic>(
                                                 "mc_beam_5s", MonteCarloConfig{{3, 8, 10, 8}, 8, 64, 2, 0.5, 5.0}));
-  // Weight variants of beam_3x8 for tuning the evaluation (the break-income weight, conservation).
-  for (auto [name, income, conservation] : {std::tuple<const char*, double, double>{"beam_3x8_inc10", 0.10, 2.6},
-                                            {"beam_3x8_inc06", 0.06, 2.6},
-                                            {"beam_3x8_inc10_cp", 0.10, 3.2}}) {
-    GreedyWeights w;
-    w.income = income;
-    w.conservation = conservation;
-    b.heuristics.register_named(name, std::make_unique<ArknovaLookaheadHeuristic>(name, LookaheadConfig{3, 8, 10, 8}, w));
-  }
   b.heuristics.register_named("random", std::make_unique<board_ai::heuristic::RandomHeuristic>("random"));
   b.final_score_extractor = [](const IGameState& state) -> std::vector<float> {
     const State& core = board_ai::checked_cast<ArknovaState>(state).synced_core();

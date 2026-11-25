@@ -397,68 +397,68 @@ in the pools (only their composition).
 | 21-38 | 18 | `bonus_tiles` | bonus tiles left at conservation 5 (first 9) and 8 (last 9), by tile (money10, xtoken3, reputation2, university, partner_zoo, enclosure3, cards3, multiplier, sponsor) |
 | 39 | 1 | `base_pile` | unused base projects (Assertion / Dominance) / 10 |
 | 40 | 1 | `stack_depth` | frames on the stack, min(n, 10) / 10 |
-| 41-82 | 42 | `pending` | frames below the pending decision, by frame kind (same order as `decision.frame`): min(count, 4) / 4 |
-| 83 | 1 | `pending_opponent` | a decision of the opponent waits below mine |
-| 84 | 1 | `after_clever` | queued "after finishing" Clever effects, min(n, 4) / 4 |
-| 85 | 1 | `after_boost` | queued "after finishing" Boost effects, min(n, 4) / 4 |
-| 86 | 1 | `after_extra_action` | queued "after finishing" extra actions (Action, Determination, Hypnosis), min(n, 4) / 4 |
-| 87-89 | 3 | `discard_type` | discard pile (see Card pools; every pool column is count in the pool / count among all regular cards): animals / 128, sponsors / 64, projects / 32 |
-| 90-94 | 5 | `discard_animal_size` | animals of size 1..5 |
-| 95-109 | 15 | `discard_icons` | icons the cards add to a zoo (tags plus rock / water requirement icons, as `player.icons`), by icon (same order as `card.tags`), summed |
-| 110-113 | 4 | `discard_sponsor_level` | sponsors of level ≤3, 4, 5, ≥6 |
-| 114-117 | 4 | `discard_project_category` | projects by category (base, release, breed, normal) |
-| 118 | 1 | `discard_appeal` | animals' appeal, summed |
-| 119 | 1 | `discard_conservation` | animals' conservation points, summed |
-| 120-122 | 3 | `unseen_type` | unseen regular cards (deck, the opponent's hidden hand / tucked / private draws), same columns as `discard_type` |
-| 123-127 | 5 | `unseen_animal_size` | as `discard_animal_size` |
-| 128-142 | 15 | `unseen_icons` | as `discard_icons` |
-| 143-146 | 4 | `unseen_sponsor_level` | as `discard_sponsor_level` |
-| 147-150 | 4 | `unseen_project_category` | as `discard_project_category` |
-| 151 | 1 | `unseen_appeal` | as `discard_appeal` |
-| 152 | 1 | `unseen_conservation` | as `discard_conservation` |
-| 153-163 | 11 | `unseen_final` | final scoring cards 1..11 I have not seen (final deck, the opponent's final cards and Resistance draws) |
-| 164 | 1 | `trade_used` | the harbour (map rule) was used this turn |
+| 41-83 | 43 | `pending` | frames below the pending decision, by frame kind (same order as `decision.frame`): min(count, 4) / 4 |
+| 84 | 1 | `pending_opponent` | a decision of the opponent waits below mine |
+| 85 | 1 | `after_clever` | queued "after finishing" Clever effects, min(n, 4) / 4 |
+| 86 | 1 | `after_boost` | queued "after finishing" Boost effects, min(n, 4) / 4 |
+| 87 | 1 | `after_extra_action` | queued "after finishing" extra actions (Action, Determination, Hypnosis), min(n, 4) / 4 |
+| 88-90 | 3 | `discard_type` | discard pile (see Card pools; every pool column is count in the pool / count among all regular cards): animals / 128, sponsors / 64, projects / 32 |
+| 91-95 | 5 | `discard_animal_size` | animals of size 1..5 |
+| 96-110 | 15 | `discard_icons` | icons the cards add to a zoo (tags plus rock / water requirement icons, as `player.icons`), by icon (same order as `card.tags`), summed |
+| 111-114 | 4 | `discard_sponsor_level` | sponsors of level ≤3, 4, 5, ≥6 |
+| 115-118 | 4 | `discard_project_category` | projects by category (base, release, breed, normal) |
+| 119 | 1 | `discard_appeal` | animals' appeal, summed |
+| 120 | 1 | `discard_conservation` | animals' conservation points, summed |
+| 121-123 | 3 | `unseen_type` | unseen regular cards (deck, the opponent's hidden hand / tucked / private draws), same columns as `discard_type` |
+| 124-128 | 5 | `unseen_animal_size` | as `discard_animal_size` |
+| 129-143 | 15 | `unseen_icons` | as `discard_icons` |
+| 144-147 | 4 | `unseen_sponsor_level` | as `discard_sponsor_level` |
+| 148-151 | 4 | `unseen_project_category` | as `discard_project_category` |
+| 152 | 1 | `unseen_appeal` | as `discard_appeal` |
+| 153 | 1 | `unseen_conservation` | as `discard_conservation` |
+| 154-164 | 11 | `unseen_final` | final scoring cards 1..11 I have not seen (final deck, the opponent's final cards and Resistance draws) |
+| 165 | 1 | `trade_used` | the harbour (map rule) was used this turn |
 
 ### `decision` token
 
 | offset | width | feature | meaning |
 |---|---|---|---|
-| 0-41 | 42 | `frame` | kind of the pending decision frame, one-hot in the order of `ARKNOVA_FRAME_KINDS` (arknova_core.h) |
-| 42 | 1 | `to_move` | the perspective is the player to decide (always 1 when the policy is queried) |
-| 43 | 1 | `prefix_len` | atoms already chosen for this decision / 6 |
-| 44-48 | 5 | `turn_action` | action card of the (innermost) action in progress: animals, build, cards, association, sponsors |
-| 49 | 1 | `turn_strength` | its strength including X-tokens / 10 (0 for an X-token turn) |
-| 50 | 1 | `turn_xtoken` | the turn is an X-token action |
-| 51 | 1 | `turn_depth` | nesting of actions in progress (extra actions) / 4 |
-| 52 | 1 | `turn_borrowed` | the action uses the opponent's action card (Hypnosis) |
-| 53 | 1 | `budget` | act_build: size left / 10; act_association: task value left / 10; act_sponsors: level budget left / 10 |
-| 54 | 1 | `remaining` | picks left / 5: act_animals animals, act_cards draws, ab_sun / ab_dig / ab_pouch / ab_snap uses, ab_pick cards to keep, discard_hand cards to discard |
-| 55 | 1 | `done_count` | done so far / 5: animals played, sponsors played, cards drawn, buildings built |
-| 56 | 1 | `side2` | the action is performed on side II of its card (the card in use, also when borrowed) |
-| 57 | 1 | `discard_after` | act_cards: cards to discard after drawing (0 or 1) |
-| 58 | 1 | `may_snap` | act_cards: snapping is still allowed |
-| 59 | 1 | `normal_done` | act_build: the regular builds are over (only the Engineer's extra build remains) |
-| 60 | 1 | `engineer_used` | act_build: the Engineer's extra build was used |
-| 61-63 | 3 | `animals_phase` | act_animals: play, bonus play (Waza Small Animals Program), take a small animal |
-| 64 | 1 | `all_small` | act_animals: every animal played so far was small |
-| 65-68 | 4 | `tasks_used` | act_association: tasks already done this action (reputation, partner zoo, university, project) |
-| 69 | 1 | `donated` | act_association: the donation was made |
-| 70 | 1 | `optional` | extra_action: it may be skipped |
-| 71-75 | 5 | `extra_actions` | extra_action: the action cards it may use |
-| 76 | 1 | `extra_from_opponent` | extra_action: it would use the opponent's cards (Hypnosis) |
-| 77-81 | 5 | `boost_action` | ab_boost: the action card to move |
-| 82-83 | 2 | `tile_space` | conservation_tile: the space reached, [5, 8] |
-| 84 | 1 | `can_replenish` | ab_snap: the display may be replenished now |
-| 85 | 1 | `replenish_between` | ab_snap: a replenish between the two snaps is still available |
-| 86 | 1 | `only_one` | ab_project: only one of the listed base projects may be taken (Dominance) |
-| 87-97 | 11 | `built` | act_build: building types already built this action (same order as `chosen_type`) |
-| 98-108 | 11 | `offered` | free_build: building types on offer |
-| 109 | 1 | `list_len` | cards in the frame's list / 10: Hunter reveal, Perception / Scavenging / Resistance draw, base project pile |
-| 110-112 | 3 | `chosen_verb` | prefix: build, engineer, place |
-| 113-123 | 11 | `chosen_type` | prefix: building type (enclosure 1-5, kiosk, pavilion, petting zoo, reptile house, aviary, unique) |
-| 124-126 | 3 | `chosen_position` | prefix: project level 1-3 |
-| 127-133 | 7 | `chosen_map_token` | prefix: map token 0-6 |
-| 134 | 1 | `chosen_harbor` | prefix: the harbour trade (`harbor`, then the hand card) |
+| 0-42 | 43 | `frame` | kind of the pending decision frame, one-hot in the order of `ARKNOVA_FRAME_KINDS` (arknova_core.h) |
+| 43 | 1 | `to_move` | the perspective is the player to decide (always 1 when the policy is queried) |
+| 44 | 1 | `prefix_len` | atoms already chosen for this decision / 6 |
+| 45-49 | 5 | `turn_action` | action card of the (innermost) action in progress: animals, build, cards, association, sponsors |
+| 50 | 1 | `turn_strength` | its strength including X-tokens / 10 (0 for an X-token turn) |
+| 51 | 1 | `turn_xtoken` | the turn is an X-token action |
+| 52 | 1 | `turn_depth` | nesting of actions in progress (extra actions) / 4 |
+| 53 | 1 | `turn_borrowed` | the action uses the opponent's action card (Hypnosis) |
+| 54 | 1 | `budget` | act_build: size left / 10; act_association: task value left / 10; act_sponsors: level budget left / 10 |
+| 55 | 1 | `remaining` | picks left / 5: act_animals animals, act_cards draws, ab_sun / ab_dig / ab_pouch / ab_snap uses, ab_pick cards to keep, discard_hand cards to discard |
+| 56 | 1 | `done_count` | done so far / 5: animals played, sponsors played, cards drawn, buildings built |
+| 57 | 1 | `side2` | the action is performed on side II of its card (the card in use, also when borrowed) |
+| 58 | 1 | `discard_after` | act_cards: cards to discard after drawing (0 or 1) |
+| 59 | 1 | `may_snap` | act_cards: snapping is still allowed |
+| 60 | 1 | `normal_done` | act_build: the regular builds are over (only the Engineer's extra build remains) |
+| 61 | 1 | `engineer_used` | act_build: the Engineer's extra build was used |
+| 62-64 | 3 | `animals_phase` | act_animals: play, bonus play (Waza Small Animals Program), take a small animal |
+| 65 | 1 | `all_small` | act_animals: every animal played so far was small |
+| 66-69 | 4 | `tasks_used` | act_association: tasks already done this action (reputation, partner zoo, university, project) |
+| 70 | 1 | `donated` | act_association: the donation was made |
+| 71 | 1 | `optional` | extra_action: it may be skipped |
+| 72-76 | 5 | `extra_actions` | extra_action: the action cards it may use |
+| 77 | 1 | `extra_from_opponent` | extra_action: it would use the opponent's cards (Hypnosis) |
+| 78-82 | 5 | `boost_action` | ab_boost: the action card to move |
+| 83-84 | 2 | `tile_space` | conservation_tile: the space reached, [5, 8] |
+| 85 | 1 | `can_replenish` | ab_snap: the display may be replenished now |
+| 86 | 1 | `replenish_between` | ab_snap: a replenish between the two snaps is still available |
+| 87 | 1 | `only_one` | ab_project: only one of the listed base projects may be taken (Dominance) |
+| 88-98 | 11 | `built` | act_build: building types already built this action (same order as `chosen_type`) |
+| 99-109 | 11 | `offered` | free_build: building types on offer |
+| 110 | 1 | `list_len` | cards in the frame's list / 10: Hunter reveal, Perception / Scavenging / Resistance draw, base project pile |
+| 111-113 | 3 | `chosen_verb` | prefix: build, engineer, place |
+| 114-124 | 11 | `chosen_type` | prefix: building type (enclosure 1-5, kiosk, pavilion, petting zoo, reptile house, aviary, unique) |
+| 125-127 | 3 | `chosen_position` | prefix: project level 1-3 |
+| 128-134 | 7 | `chosen_map_token` | prefix: map token 0-6 |
+| 135 | 1 | `chosen_harbor` | prefix: the harbour trade (`harbor`, then the hand card) |
 
 ### `player` token
 

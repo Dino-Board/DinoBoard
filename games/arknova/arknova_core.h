@@ -46,7 +46,8 @@ constexpr std::int8_t kLastActionXtoken = kNumActions;  // Player::last_action v
 // ---- frames -------------------------------------------------------------------
 
 #define ARKNOVA_FRAME_KINDS(X)                                                                     \
-  X(ab_boost) X(ab_dig) X(ab_hunter) X(ab_hypnosis_pick) X(ab_pick) X(ab_pilfer) X(ab_pilfer_pick)  \
+  X(ab_archaeologist) X(ab_boost) X(ab_dig) X(ab_hunter) X(ab_hypnosis_pick) X(ab_pick) X(ab_pilfer) \
+  X(ab_pilfer_pick)                                                                                 \
   X(ab_pouch) X(ab_project) X(ab_resist) X(ab_snap) X(ab_sun) X(act_animals) X(act_association)    \
   X(act_build) X(act_cards) X(act_sponsors) X(clever) X(conservation_tile) X(discard_final)         \
   X(discard_hand) X(extra_action) X(free_build) X(gain_partner_zoo) X(gain_university)             \
@@ -83,7 +84,7 @@ struct Frame {
   X(reputation) X(donate) X(support) X(play_project) X(play_project_display) X(release)            \
   X(play_release) X(play_release_display) X(break_) X(pick) X(take) X(target) X(move) X(boost)     \
   X(yes) X(no) X(replenish) X(kind) X(card) X(discard_display) X(discard_hand) X(tuck) X(sponsor)  \
-  X(project) X(stable) X(return_) X(sell) X(harbor)
+  X(project) X(stable) X(return_) X(sell) X(harbor) X(bonus)
 
 enum class Head : std::uint8_t {
 #define ARKNOVA_ENUM(k) k,

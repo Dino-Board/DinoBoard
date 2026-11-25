@@ -240,7 +240,7 @@ double greedy_evaluate(const State& s, int p, const GreedyWeights& w) {
   double value = track_value(pl);
   auto [appeal, conservation] = endgame_points(s, p);
   value += (appeal + w.conservation * conservation) * (1.0 - 0.5 * left);
-  value += (appeal_income(pl.appeal) + pl.zoo.kiosk_income()) * kBreaksPerGame * left * w.income;
+  value += (appeal_income(pl.appeal) * w.income + pl.zoo.kiosk_income() * w.kiosk_income) * kBreaksPerGame * left;
 
   value += hand_value(pl, left, w) + w.money * std::min<int>(pl.money, kMoneyWorking);
   value += w.spare_money * std::min(std::max(pl.money - kMoneyWorking, 0), kMoneySpare);

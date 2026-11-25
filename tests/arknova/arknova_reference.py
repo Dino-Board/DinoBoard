@@ -58,7 +58,7 @@ def enums() -> dict:
     out["bonus_tiles"] = [t.strip() for t in out["bonus_tiles"]]
     out["building_kinds"] = [t.strip() for t in out["building_kinds"]]
     out["reqs"] = out["icons"] + out["req_extra"]
-    assert len(out["icons"]) == 15 and len(out["frames"]) == 42 and len(out["keywords"]) == 44
+    assert len(out["icons"]) == 15 and len(out["frames"]) == 43 and len(out["keywords"]) == 44
     return out
 
 

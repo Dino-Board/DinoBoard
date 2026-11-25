@@ -207,7 +207,7 @@ def check_state(ck: Checker, toks, me, core, own, state_dict, tracker, legal):
     # ---- decision ----
     d = by_type["decision"][0]
     kind, data, mover = top["kind"], top["data"], top["player"]
-    ck.eq(d, "frame", onehot(42, e["frames"].index(kind)))
+    ck.eq(d, "frame", onehot(len(e["frames"]), e["frames"].index(kind)))
     ck.eq(d, "to_move", state_dict["current_player"] == me)
     ck.eq(d, "prefix_len", len(prefix) / 6)
     turn = core["turn"]
