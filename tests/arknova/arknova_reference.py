@@ -452,11 +452,11 @@ def sponsor_immediate(pl, c, key: str) -> dict:
         out["appeal"] = icons[CATEGORY_SPONSORS[cid]]
     elif cid in (201, 254):
         out["cards"] = 1
-    elif cid == 216 and pl["workers"] < 4:  # the 4th worker brings what the map prints next to it
+    elif cid == 216 and pl["workers"] < 4:  # the new worker brings what the map prints next to it
         out["workers"] = 1
-        last = zoo_map(key)["last_worker"]
-        assert last is None or last[0] == "conservation"
-        out["conservation"] = last[1] if last and pl["workers"] == 3 else 0
+        slot = zoo_map(key)["worker_slots"][pl["workers"]]
+        assert slot is None or slot[0] == "conservation"
+        out["conservation"] = slot[1] if slot else 0
     elif cid == 207:
         out["conservation"] = _distinct(icons) // 2
     elif cid == 222:

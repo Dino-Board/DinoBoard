@@ -297,7 +297,7 @@ void gain(State& s, int p, EffectKind kind, int amount) {
       for (int i = 0; i < amount; ++i) {
         if (pl.workers < kMaxWorkers) {
           ++pl.workers;
-          if (pl.workers == kMaxWorkers) apply_effect(s, p, pl.zoo.def().last_worker);
+          apply_effect(s, p, pl.zoo.def().worker_slots[pl.workers - 1]);
         }
       }
       break;
@@ -321,6 +321,12 @@ void gain(State& s, int p, EffectKind kind, int amount) {
     case EffectKind::kEffSpecialEnclosure:  // Map 5: a free reptile house or aviary, even with Build not upgraded
       push_free_build(s, p, {{BuildingKind::kReptileHouse, 5}, {BuildingKind::kAviary, 5}});
       break;
+    case EffectKind::kEffRescue: case EffectKind::kEffStore: case EffectKind::kEffExtraShift:
+    case EffectKind::kEffStrength: case EffectKind::kEffMark: case EffectKind::kEffWave:
+    case EffectKind::kEffSharkAttack: case EffectKind::kEffAdapt: case EffectKind::kEffCutDown:
+    case EffectKind::kEffAnimalMagnet: case EffectKind::kEffContinentMarker: case EffectKind::kEffFindPerson:
+    case EffectKind::kEffPersonSponsor:
+      engine_error(std::string("gain: ") + kEffectKindNames[static_cast<int>(kind)] + " is not implemented yet");
     case EffectKind::kNumEffectKinds: engine_error("gain: bad effect kind");
   }
 }
@@ -373,9 +379,21 @@ bool can_take_partner_zoo(const State& s, int p, int continent) {
          (slot < 2 || pl.is_upgraded(kAssociation));
 }
 
+namespace {
+
+// Zoo Map Pack 2: the linked reward once a player holds both k partner zoos and k universities.
+void linked_reward(State& s, int p, int pairs_before) {
+  const Player& pl = s.players[p];
+  const int pairs = std::min<int>(pl.n_partner_zoos, pl.n_universities);
+  if (pairs > pairs_before && pairs <= kMaxLinkedSlots) apply_effect(s, p, pl.zoo.def().linked_slots[pairs - 1]);
+}
+
+}  // namespace
+
 void take_partner_zoo(State& s, int p, int continent, Chance& ch) {
   Player& pl = s.players[p];
   int slot = pl.n_partner_zoos;
+  const int pairs = std::min<int>(pl.n_partner_zoos, pl.n_universities);
   IconCounts before = icons(pl);
   pl.partner_zoos[pl.n_partner_zoos++] = static_cast<std::int8_t>(continent);
   s.partner_zoos_available &= static_cast<std::uint8_t>(~(1u << continent));
@@ -383,6 +401,7 @@ void take_partner_zoo(State& s, int p, int continent, Chance& ch) {
   added[kContinentIcon0 + continent] = 1;
   icons_played(s, p, added, before, ch);
   apply_effect(s, p, pl.zoo.def().partner_zoo_slots[slot]);
+  linked_reward(s, p, pairs);
 }
 
 bool can_take_university(const State& s, int p, int university) {
@@ -394,6 +413,7 @@ bool can_take_university(const State& s, int p, int university) {
 void take_university(State& s, int p, int university, Chance& ch) {
   Player& pl = s.players[p];
   int slot = pl.n_universities;
+  const int pairs = std::min<int>(pl.n_partner_zoos, pl.n_universities);
   IconCounts before = icons(pl);
   pl.universities[pl.n_universities++] = static_cast<std::int8_t>(university);
   s.universities_available &= static_cast<std::uint8_t>(~(1u << university));
@@ -403,6 +423,7 @@ void take_university(State& s, int p, int university, Chance& ch) {
   icons_played(s, p, added, before, ch);
   apply_effect(s, p, pl.zoo.def().university_slots[slot]);
   gain(s, p, EffectKind::kEffReputation, university == kUniHand ? 1 : university == kUniScienceRep ? 2 : 0);
+  linked_reward(s, p, pairs);
 }
 
 // ---- buildings --------------------------------------------------------------------

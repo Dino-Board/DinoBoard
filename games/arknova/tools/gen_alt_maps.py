@@ -20,7 +20,8 @@ import gen_maps as G  # noqa: E402
 ALT = Path(__file__).resolve().parent.parent / "bga_alt_maps.json"
 RULE_CPP = {"none": "kNone", "observationtower": "kObservationTower", "outdoorarea": "kOutdoorArea",
             "harbor": "kHarbor", "parkrestaurant": "kParkRestaurant", "researchinstitute": "kResearchInstitute",
-            "icecream": "kIceCream", "hollywood": "kHollywood"}
+            "icecream": "kIceCream", "hollywood": "kHollywood", "geographical": "kGeographical",
+            "rescue": "kRescue", "caves": "kCaves", "ai": "kAI", "drawingboard": "kDrawingBoard", "lagoon": "kLagoon"}
 # BGA placement bonus -> DinoBoard's name.
 BONUS = {("xtoken", 1): "xtoken", ("money", 5): "money5", ("money", 10): "money10", ("money", 2): "money2",
          ("take-in-range-or-deck", 1): "card", ("Clever", 1): "clever", ("reputation", 1): "rep1",

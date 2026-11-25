@@ -297,7 +297,7 @@ the opponent's cards (`decision.extra_from_opponent`).
 what it does, in the same columns on every map, so that what is learnt on one
 map carries over to the others: a placement bonus is an effect vector
 (`cell.bonus`, one column per `EffectKind` holding the amount), as are the side
-panels (`player.next_partner_zoo`, `next_university`, `last_worker`) and the
+panels (`player.next_partner_zoo`, `next_university`, `next_worker`) and the
 left-edge tokens (`reward` tokens, which also say whether they pay again at
 every break and who has taken them). A map's special rule is told through
 its effect on the cells: `landmark` marks its special spaces, and per cell
@@ -492,26 +492,26 @@ in the pools (only their composition).
 | 60 | 1 | `appeal_income` | money the appeal earns at a break / 40 |
 | 61 | 1 | `display_range` | display folders within reputation range / 6 |
 | 62-72 | 11 | `placeable` | per building type (enclosure 1-5, kiosk, pavilion, petting zoo, reptile house, aviary, unique): this player's own Build card offers it and its map has a legal spot for it now, money and strength aside (unique: always 0) |
-| 73-88 | 16 | `next_partner_zoo` | what the next partner zoo gives (the map's side panel; 0 when all 4 are taken): per effect kind (money, appeal, xtoken, conservation, reputation, worker, upgrade, card, clever, enclosure, kiosk, multiplier, partner_zoo, university, sponsor_for_money, special_enclosure) its amount: money / 10, an enclosure's size / 5, anything else / 3 |
-| 89-104 | 16 | `next_university` | what the next university gives (side panel; 0 when all 3 are taken), as `next_partner_zoo` |
-| 105-120 | 16 | `last_worker` | what the 4th association worker gives (side panel; 0 once taken), as `next_partner_zoo` |
-| 121 | 1 | `map_income` | break money from the map rule now / 5: covered spaces next to the park restaurant, or the kiosk count once all ice cream parlour spaces are covered |
-| 122 | 1 | `can_trade` | the harbour is open to this player: once per turn, discard a hand card for 3 money |
-| 123 | 1 | `ignore_conditions` | animal conditions this player may leave unmet thanks to the map (research institute) |
-| 124 | 1 | `sponsor_discount` | levels the map takes off this player's sponsors (Hollywood, all H spaces covered) |
-| 125 | 1 | `group_left` | spaces of the map's group rule still uncovered / 3 (ice cream parlours, Hollywood H) |
-| 126 | 1 | `endgame_final` | conservation the Final Scoring cards would score now / 4: mine, the worst of two left out while no one has discarded; the opponent's (hidden): the expectation over the final cards I have not seen, the best of two kept while no one has discarded |
-| 127 | 1 | `endgame_cards` | conservation the end-of-game effects of the zoo cards would score now / 4 |
-| 128 | 1 | `endgame_appeal` | appeal the end-of-game effects of the zoo cards would score now / 10 |
-| 129 | 1 | `projected_vp` | `victory_points` with the three above added / 30 |
-| 130 | 1 | `best_project` | conservation of the best project level one Association action could support now (the most victory points net of a release) / 5: one supportable project level (in play, in the hand as far as I know it, on the display within range with Association II), a worker free for it, the strength reachable with X-tokens |
-| 131 | 1 | `best_project_release` | appeal that level takes (the animal a release project lets go, the least of those it could release) / 10 |
-| 132 | 1 | `best_animals` | the most appeal one Animals action could bring now / 15: as many animals as the strength with X-tokens plays, from the hand as far as I know it and the display within range with Animals II, each playable and paid for, housed together: each in its own empty standard enclosure (a flock animal may join an occupied one) or within a special enclosure's free spaces |
-| 133 | 1 | `best_turn_vp` | victory points the better of those two would add / 15 (a release's appeal counted off) |
-| 134 | 1 | `conservation_to_bonus` | conservation still needed for the next Conservation track space with an effect (2, 5, 8, 10) / 5; 0 past 10 |
-| 135 | 1 | `reputation_to_bonus` | reputation still needed for the next Reputation track bonus within reach (9 at most before Cards II) / 5 |
-| 136 | 1 | `reputation_capped` | reputation stands at 9 without Cards II: more is lost |
-| 137 | 1 | `break_income` | money the next break would pay now (appeal, kiosks, map tokens, income cards, the map rule) / 40 |
+| 73-101 | 29 | `next_partner_zoo` | what the next partner zoo gives (the map's side panel; 0 when all 4 are taken): per effect kind (money, appeal, xtoken, conservation, reputation, worker, upgrade, card, clever, enclosure, kiosk, multiplier, partner_zoo, university, sponsor_for_money, special_enclosure, rescue, store, extra_shift, strength, mark, wave, shark_attack, adapt, cut_down, animal_magnet, continent_marker, find_person, person_sponsor) its amount: money / 10, an enclosure's size / 5, anything else / 3 |
+| 102-130 | 29 | `next_university` | what the next university gives (side panel; 0 when all 3 are taken), as `next_partner_zoo` |
+| 131-159 | 29 | `next_worker` | what the next association worker gives (side panel; 0 once all 4 are hired), as `next_partner_zoo` |
+| 160 | 1 | `map_income` | break money from the map rule now / 5: covered spaces next to the park restaurant, or the kiosk count once all ice cream parlour spaces are covered |
+| 161 | 1 | `can_trade` | the harbour is open to this player: once per turn, discard a hand card for 3 money |
+| 162 | 1 | `ignore_conditions` | animal conditions this player may leave unmet thanks to the map (research institute) |
+| 163 | 1 | `sponsor_discount` | levels the map takes off this player's sponsors (Hollywood, all H spaces covered) |
+| 164 | 1 | `group_left` | spaces of the map's group rule still uncovered / 3 (ice cream parlours, Hollywood H) |
+| 165 | 1 | `endgame_final` | conservation the Final Scoring cards would score now / 4: mine, the worst of two left out while no one has discarded; the opponent's (hidden): the expectation over the final cards I have not seen, the best of two kept while no one has discarded |
+| 166 | 1 | `endgame_cards` | conservation the end-of-game effects of the zoo cards would score now / 4 |
+| 167 | 1 | `endgame_appeal` | appeal the end-of-game effects of the zoo cards would score now / 10 |
+| 168 | 1 | `projected_vp` | `victory_points` with the three above added / 30 |
+| 169 | 1 | `best_project` | conservation of the best project level one Association action could support now (the most victory points net of a release) / 5: one supportable project level (in play, in the hand as far as I know it, on the display within range with Association II), a worker free for it, the strength reachable with X-tokens |
+| 170 | 1 | `best_project_release` | appeal that level takes (the animal a release project lets go, the least of those it could release) / 10 |
+| 171 | 1 | `best_animals` | the most appeal one Animals action could bring now / 15: as many animals as the strength with X-tokens plays, from the hand as far as I know it and the display within range with Animals II, each playable and paid for, housed together: each in its own empty standard enclosure (a flock animal may join an occupied one) or within a special enclosure's free spaces |
+| 172 | 1 | `best_turn_vp` | victory points the better of those two would add / 15 (a release's appeal counted off) |
+| 173 | 1 | `conservation_to_bonus` | conservation still needed for the next Conservation track space with an effect (2, 5, 8, 10) / 5; 0 past 10 |
+| 174 | 1 | `reputation_to_bonus` | reputation still needed for the next Reputation track bonus within reach (9 at most before Cards II) / 5 |
+| 175 | 1 | `reputation_capped` | reputation stands at 9 without Cards II: more is lost |
+| 176 | 1 | `break_income` | money the next break would pay now (appeal, kiosks, map tokens, income cards, the map rule) / 40 |
 
 ### `action_card` token
 
@@ -627,30 +627,30 @@ in the pools (only their composition).
 | 0-2 | 3 | `terrain` | plain, water, rock |
 | 3 | 1 | `build2_only` | needs Build II |
 | 4 | 1 | `border` | on the border |
-| 5-20 | 16 | `bonus` | placement bonus, as an effect: per effect kind (money, appeal, xtoken, conservation, reputation, worker, upgrade, card, clever, enclosure, kiosk, multiplier, partner_zoo, university, sponsor_for_money, special_enclosure) its amount: money / 10, an enclosure's size / 5, anything else / 3 |
-| 21 | 1 | `covered` | covered by a building |
-| 22 | 1 | `adjacent` | next to a covered cell |
-| 23 | 1 | `buildable` | free and allowed for me now (terrain, Build II) |
-| 24-30 | 7 | `kind` | kind of the building on it: enclosure, kiosk, pavilion, petting zoo, reptile house, aviary, unique |
-| 31 | 1 | `anchor` | the lowest cell of its building (where an enclosure's token sits) |
-| 32 | 1 | `anchor_dq` | q offset to that cell / 4 |
-| 33 | 1 | `anchor_dr` | r offset to that cell / 4 |
-| 34 | 1 | `rock_neighbors` | rock cells next to it / 6 |
-| 35 | 1 | `water_neighbors` | water cells next to it / 6 |
-| 36 | 1 | `kiosk_income` | a kiosk: money it earns at a break / 6 |
-| 37 | 1 | `kiosks_adjacent` | my kiosks next to it / 3 |
-| 38 | 1 | `landmark` | one of the map's special spaces (its rule names it) |
-| 39 | 1 | `fill_appeal` | an animal placed into an empty standard enclosure covering this cell brings 2 more appeal / 2 (next to the observation tower) |
-| 40 | 1 | `extra_capacity` | a standard enclosure covering this cell holds 2 spaces more / 2 (next to the outdoor area) |
-| 41 | 1 | `break_money` | covering it pays this much money at every break (park restaurants next to it) |
-| 42 | 1 | `unlocks_trade` | covering it opens the harbour trade |
-| 43 | 1 | `unlocks_condition` | covering it lets one animal condition go unmet (research institute) |
-| 44 | 1 | `cover_draw_sponsor` | covering it reveals deck cards until a sponsor, which goes to the hand (Hollywood H) |
-| 45 | 1 | `group` | part of a group of spaces whose full cover counts (the rule's group) |
-| 46 | 1 | `group_kiosk_income` | the group, once covered, pays 1 money per kiosk at every break (ice cream parlours) |
-| 47 | 1 | `group_sponsor_discount` | the group, once covered, lowers sponsor levels by 1 (Hollywood) |
-| 48-54 | 7 | `opp_kind` | kind of the opponent's building on this space of its map (same order as `kind`) |
-| 55 | 1 | `opp_adjacent` | next to a space the opponent has covered |
+| 5-33 | 29 | `bonus` | placement bonus, as an effect: per effect kind (money, appeal, xtoken, conservation, reputation, worker, upgrade, card, clever, enclosure, kiosk, multiplier, partner_zoo, university, sponsor_for_money, special_enclosure, rescue, store, extra_shift, strength, mark, wave, shark_attack, adapt, cut_down, animal_magnet, continent_marker, find_person, person_sponsor) its amount: money / 10, an enclosure's size / 5, anything else / 3 |
+| 34 | 1 | `covered` | covered by a building |
+| 35 | 1 | `adjacent` | next to a covered cell |
+| 36 | 1 | `buildable` | free and allowed for me now (terrain, Build II) |
+| 37-43 | 7 | `kind` | kind of the building on it: enclosure, kiosk, pavilion, petting zoo, reptile house, aviary, unique |
+| 44 | 1 | `anchor` | the lowest cell of its building (where an enclosure's token sits) |
+| 45 | 1 | `anchor_dq` | q offset to that cell / 4 |
+| 46 | 1 | `anchor_dr` | r offset to that cell / 4 |
+| 47 | 1 | `rock_neighbors` | rock cells next to it / 6 |
+| 48 | 1 | `water_neighbors` | water cells next to it / 6 |
+| 49 | 1 | `kiosk_income` | a kiosk: money it earns at a break / 6 |
+| 50 | 1 | `kiosks_adjacent` | my kiosks next to it / 3 |
+| 51 | 1 | `landmark` | one of the map's special spaces (its rule names it) |
+| 52 | 1 | `fill_appeal` | an animal placed into an empty standard enclosure covering this cell brings 2 more appeal / 2 (next to the observation tower) |
+| 53 | 1 | `extra_capacity` | a standard enclosure covering this cell holds 2 spaces more / 2 (next to the outdoor area) |
+| 54 | 1 | `break_money` | covering it pays this much money at every break (park restaurants next to it) |
+| 55 | 1 | `unlocks_trade` | covering it opens the harbour trade |
+| 56 | 1 | `unlocks_condition` | covering it lets one animal condition go unmet (research institute) |
+| 57 | 1 | `cover_draw_sponsor` | covering it reveals deck cards until a sponsor, which goes to the hand (Hollywood H) |
+| 58 | 1 | `group` | part of a group of spaces whose full cover counts (the rule's group) |
+| 59 | 1 | `group_kiosk_income` | the group, once covered, pays 1 money per kiosk at every break (ice cream parlours) |
+| 60 | 1 | `group_sponsor_discount` | the group, once covered, lowers sponsor levels by 1 (Hollywood) |
+| 61-67 | 7 | `opp_kind` | kind of the opponent's building on this space of its map (same order as `kind`) |
+| 68 | 1 | `opp_adjacent` | next to a space the opponent has covered |
 
 ### `enclosure` token
 
@@ -675,11 +675,11 @@ in the pools (only their composition).
 | offset | width | feature | meaning |
 |---|---|---|---|
 | 0-6 | 7 | `index` | which of the 7 tokens (left edge, top to bottom; the `map_token:t` atoms) |
-| 7-22 | 16 | `effect` | what it gives when taken: per effect kind (money, appeal, xtoken, conservation, reputation, worker, upgrade, card, clever, enclosure, kiosk, multiplier, partner_zoo, university, sponsor_for_money, special_enclosure) its amount: money / 10, an enclosure's size / 5, anything else / 3 |
-| 23 | 1 | `repeats` | it gives it again at every break once taken (the upper tokens) |
-| 24 | 1 | `taken_me` | I have taken it |
-| 25 | 1 | `taken_opp` | the opponent has taken it |
-| 26 | 1 | `chosen` | named by the prefix (`map_token:t`) |
+| 7-35 | 29 | `effect` | what it gives when taken: per effect kind (money, appeal, xtoken, conservation, reputation, worker, upgrade, card, clever, enclosure, kiosk, multiplier, partner_zoo, university, sponsor_for_money, special_enclosure, rescue, store, extra_shift, strength, mark, wave, shark_attack, adapt, cut_down, animal_magnet, continent_marker, find_person, person_sponsor) its amount: money / 10, an enclosure's size / 5, anything else / 3 |
+| 36 | 1 | `repeats` | it gives it again at every break once taken (the upper tokens) |
+| 37 | 1 | `taken_me` | I have taken it |
+| 38 | 1 | `taken_opp` | the opponent has taken it |
+| 39 | 1 | `chosen` | named by the prefix (`map_token:t`) |
 
 ### anchors
 

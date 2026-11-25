@@ -332,7 +332,7 @@ def check_state(ck: Checker, toks, me, core, own, state_dict, tracker, legal):
         n_pz, n_uni = len(pl["partner_zoos"]), len(pl["universities"])
         ck.eq(tok, "next_partner_zoo", effect_vector(zm["partner_zoo_slots"][n_pz] if n_pz < 4 else None))
         ck.eq(tok, "next_university", effect_vector(zm["university_slots"][n_uni] if n_uni < 3 else None))
-        ck.eq(tok, "last_worker", effect_vector(zm["last_worker"] if pl["workers"] < 4 else None))
+        ck.eq(tok, "next_worker", effect_vector(zm["worker_slots"][pl["workers"]] if pl["workers"] < 4 else None))
         rs = map_rule_state(pl, core["map"])
         ck.eq(tok, "map_income", rs["map_income"] / 5)
         ck.eq(tok, "can_trade", rs["can_trade"])

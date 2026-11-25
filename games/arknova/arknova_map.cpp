@@ -61,10 +61,14 @@ struct MapSource {
   CellMask rule_cells;
   Effect partner_zoo_slots[kMaxPartnerZoos];
   Effect university_slots[kNumUniversities];
-  Effect last_worker;
+  Effect worker_slots[kMaxWorkers];
+  Effect linked_slots[kMaxLinkedSlots];
   MapToken tokens[kNumMapTokens];
   std::int8_t n_prebuilt;
   Prebuilt prebuilt[2];
+  std::int8_t n_areas;
+  CellMask areas[kMaxMapAreas];
+  std::int8_t selfplay;  // dealt by new_game
 };
 
 #include "arknova_maps_data.inc"
@@ -87,10 +91,13 @@ std::vector<MapDef> build_maps() {
     m.rule_cells = src.rule_cells;
     std::copy(std::begin(src.partner_zoo_slots), std::end(src.partner_zoo_slots), m.partner_zoo_slots);
     std::copy(std::begin(src.university_slots), std::end(src.university_slots), m.university_slots);
-    m.last_worker = src.last_worker;
+    std::copy(std::begin(src.worker_slots), std::end(src.worker_slots), m.worker_slots);
+    std::copy(std::begin(src.linked_slots), std::end(src.linked_slots), m.linked_slots);
     std::copy(std::begin(src.tokens), std::end(src.tokens), m.tokens);
     m.n_prebuilt = src.n_prebuilt;
     std::copy(src.prebuilt, src.prebuilt + src.n_prebuilt, m.prebuilt);
+    m.n_areas = src.n_areas;
+    std::copy(src.areas, src.areas + src.n_areas, m.areas);
     out.push_back(m);
   }
   return out;
@@ -99,6 +106,15 @@ std::vector<MapDef> build_maps() {
 const std::vector<MapDef>& all_maps() {
   static const std::vector<MapDef> maps = build_maps();
   return maps;
+}
+
+int count_selfplay_maps() {
+  int n = 0;
+  while (n < kNumMaps && kMapSources[n].selfplay) ++n;
+  for (int m = n; m < kNumMaps; ++m) {
+    if (kMapSources[m].selfplay) throw std::logic_error("arknova maps: the self-play maps must come first");
+  }
+  return n;
 }
 
 using ShapeKey = std::vector<std::pair<int, int>>;
@@ -215,6 +231,11 @@ const ShapeTables& shape_tables() {
 const MapCell& map_cell(int i) { return map_data().cells.at(i); }
 
 int num_maps() { return static_cast<int>(all_maps().size()); }
+
+int num_selfplay_maps() {
+  static const int n = count_selfplay_maps();
+  return n;
+}
 
 const MapDef& map_def(int m) { return all_maps().at(m); }
 

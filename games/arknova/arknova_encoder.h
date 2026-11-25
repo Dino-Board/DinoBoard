@@ -75,7 +75,7 @@ namespace board_ai::arknova {
 
 // What a map reward gives (a placement bonus, a left-edge token, a side-panel slot): per
 // EffectKind its amount, money / 10, an enclosure's size / 5, anything else / 3.
-#define ARKNOVA_EFFECT_WIDTH 16
+#define ARKNOVA_EFFECT_WIDTH 29
 
 #define ARKNOVA_DECISION_FEATURES(X)                                                               \
   X(frame, 43) X(to_move, 1) X(prefix_len, 1) X(turn_action, 5) X(turn_strength, 1)                \
@@ -94,7 +94,7 @@ namespace board_ai::arknova {
   X(partner_zoos, 5) X(universities, 3) X(map_tokens, 7) X(icons, 15) X(victory_points, 1)         \
   X(poisoned, 1) X(covered_cells, 1) X(buildings, 7) X(kiosk_income, 1) X(appeal_income, 1)       \
   X(display_range, 1) X(placeable, 11) X(next_partner_zoo, ARKNOVA_EFFECT_WIDTH)                    \
-  X(next_university, ARKNOVA_EFFECT_WIDTH) X(last_worker, ARKNOVA_EFFECT_WIDTH) X(map_income, 1)    \
+  X(next_university, ARKNOVA_EFFECT_WIDTH) X(next_worker, ARKNOVA_EFFECT_WIDTH) X(map_income, 1)    \
   X(can_trade, 1) X(ignore_conditions, 1) X(sponsor_discount, 1) X(group_left, 1)                 \
   X(endgame_final, 1) X(endgame_cards, 1) X(endgame_appeal, 1) X(projected_vp, 1)                 \
   X(best_project, 1) X(best_project_release, 1) X(best_animals, 1) X(best_turn_vp, 1)            \

@@ -30,12 +30,19 @@ EFFECTS = {"money": "kEffMoney", "appeal": "kEffAppeal", "xtoken": "kEffXtoken",
            "reputation": "kEffReputation", "worker": "kEffWorker", "upgrade": "kEffUpgrade", "card": "kEffCard",
            "clever": "kEffClever", "enclosure": "kEffEnclosure", "kiosk": "kEffKiosk",
            "multiplier": "kEffMultiplier", "partner_zoo": "kEffPartnerZoo", "university": "kEffUniversity",
-           "sponsor_for_money": "kEffSponsorForMoney", "special_enclosure": "kEffSpecialEnclosure"}
+           "sponsor_for_money": "kEffSponsorForMoney", "special_enclosure": "kEffSpecialEnclosure",
+           "rescue": "kEffRescue", "store": "kEffStore", "extra_shift": "kEffExtraShift", "strength": "kEffStrength",
+           "mark": "kEffMark", "wave": "kEffWave", "shark_attack": "kEffSharkAttack", "adapt": "kEffAdapt",
+           "cut_down": "kEffCutDown", "animal_magnet": "kEffAnimalMagnet", "continent_marker": "kEffContinentMarker",
+           "find_person": "kEffFindPerson", "person_sponsor": "kEffPersonSponsor"}
 BONUSES = {None: "kPBNone", "money5": "kPBMoney5", "money10": "kPBMoney10", "xtoken": "kPBXtoken", "rep2": "kPBRep2",
            "card": "kPBCard", "clever": "kPBClever", "money2": "kPBMoney2", "rep1": "kPBRep1", "kiosk": "kPBKiosk",
            "worker1": "kPBWorker1", "partner_zoo": "kPBPartnerZoo", "university": "kPBUniversity",
-           "multiplier": "kPBMultiplier", "sponsor_for_money": "kPBSponsorForMoney"}
+           "multiplier": "kPBMultiplier", "sponsor_for_money": "kPBSponsorForMoney", "rescue": "kPBRescue",
+           "store": "kPBStore", "extra_shift": "kPBExtraShift", "strength": "kPBStrength", "mark": "kPBMark",
+           "appeal1": "kPBAppeal1", "wave": "kPBWave", "shark_attack": "kPBSharkAttack", "adapt": "kPBAdapt"}
 KINDS = {"enclosure": "kEnclosure", "kiosk": "kKiosk"}
+MAX_AREAS = 5
 # Left-edge tokens whose reward is an animal ability, as Board Game Arena's MAPS_DATA has them:
 # the first token of every map is Snapping 1 (take any display card), Silver Lake's fourth is
 # Determination and Ice Cream Parlors' fourth is Pouch 2 (ark-nova-ai: a card from the deck or
@@ -102,7 +109,7 @@ def main():
             "rule_cells": [list(c) for c in rule_cells],
             "partner_zoo_slots": [one_effect(e, f"{key} partner zoo") for e in board["partner_zoo_slots"]],
             "university_slots": [one_effect(e, f"{key} university") for e in board["university_slots"]],
-            "last_worker": one_effect(board["last_worker"], f"{key} last worker"),
+            "worker_slots": [None, None, None, one_effect(board["last_worker"], f"{key} last worker")],
             "tokens": [[one_effect(e, f"{key} token"), bool(rep)] for e, rep in board["tokens"]],
             "token_abilities": {str(i): ab for i, ab in {**TOKEN_ABILITIES, **MAP_TOKEN_ABILITIES.get(key, {})}.items()},
             "prebuilt": [[kind, size, sorted(list(c) for c in cs)] for kind, size, cs in board.get("prebuilt", []) if cs],
@@ -119,6 +126,15 @@ def write(maps, index, source="ark-nova-ai (hexmap.MAP0, data/maps)"):
              f"constexpr int kNumMaps = {len(maps)};",
              "const MapSource kMapSources[kNumMaps] = {"]
     for m in maps:
+        if "worker_slots" not in m:  # written before worker and linked slots
+            m["worker_slots"] = [None, None, None, m.pop("last_worker")]
+        m.setdefault("linked_slots", [None, None, None])
+        m.setdefault("areas", [])
+        m.setdefault("selfplay", True)
+        need(len(m["worker_slots"]) == 4 and len(m["linked_slots"]) == 3 and len(m["areas"]) <= MAX_AREAS,
+             f"{m['key']}: panel sizes")
+        areas = [f"0x{mask([tuple(c) for c in cells], index):x}ull" for cells in m["areas"]]
+        areas += ["0"] * (MAX_AREAS - len(areas))
         terrain = "".join({"plain": ".", "water": "W", "rock": "R"}[c[2]] for c in m["cells"])
         bonus = ", ".join(BONUSES[c[3]] for c in m["cells"])
         build2 = mask([(c[0], c[1]) for c in m["cells"] if c[4]], index)
@@ -131,10 +147,12 @@ def write(maps, index, source="ark-nova-ai (hexmap.MAP0, data/maps)"):
             f"     0x{build2:x}ull, 0x{m['_cpp']['rule_mask']:x}ull,",
             "     {" + ", ".join(cpp_effect(e) for e in m["partner_zoo_slots"]) + "},",
             "     {" + ", ".join(cpp_effect(e) for e in m["university_slots"]) + "},",
-            f"     {cpp_effect(m['last_worker'])},",
+            "     {" + ", ".join(cpp_effect(e) for e in m["worker_slots"]) + "},",
+            "     {" + ", ".join(cpp_effect(e) for e in m["linked_slots"]) + "},",
             "     {" + ", ".join(cpp_token(e, rep, m["token_abilities"].get(str(i)))
                                 for i, (e, rep) in enumerate(m["tokens"])) + "},",
-            f"     {len(prebuilt)}, {{{', '.join(prebuilt)}}}}},",
+            f"     {len(prebuilt)}, {{{', '.join(prebuilt)}}},",
+            f"     {len(m['areas'])}, {{{', '.join(areas)}}}, {1 if m['selfplay'] else 0}}},",
         ]
     lines.append("};")
     OUT_INC.write_text("\n".join(lines) + "\n")

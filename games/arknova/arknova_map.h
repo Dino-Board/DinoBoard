@@ -54,6 +54,13 @@ enum class MapRule : std::uint8_t {
   kIceCream,           // all rule cells covered: break income of 1 money per kiosk
   kHollywood,          // covering a rule cell reveals cards until a sponsor (to the hand); all covered:
                        // sponsors cost 1 level less
+  // The Zoo Map Packs (maps 9-14); `areas` holds the cells their rules read.
+  kGeographical,   // a matching animal housed in a continent area takes that area's marker for a bonus
+  kRescue,         // the rescue placement bonus may slide a discarded animal under the map (3 slots)
+  kCaves,          // up to 3 stored cards, 2 money each at a break
+  kAI,             // strength bonuses conceal the action card slots 1, 2, 4, 5
+  kDrawingBoard,   // each of the 4 areas, once covered: its bonus now and at every break; no full-cover appeal
+  kLagoon,         // every new association worker (the first one too) finds a person sponsor
 };
 constexpr int kObservationAppeal = 2;
 constexpr int kOutdoorExtraSize = 2;
@@ -77,9 +84,13 @@ struct Prebuilt {
   std::int8_t size;
   CellMask cells;
 };
+constexpr int kMaxMapAreas = 5;   // Geographical Zoo: one per continent; Drawing Board: 4 quarters
+constexpr int kMaxLinkedSlots = 3;
 // Slot bonuses are indexed by the slot being filled (0-based); an entry with amount 0 is "nothing".
+// worker_slots[i]: hiring the (i+1)-th association worker (the first one is there from the start).
+// linked_slots[i]: once a player has both i+1 partner zoos and i+1 universities (Zoo Map Pack 2).
 struct MapDef {
-  const char* key = "";   // the Python map name: "map0", "plan1" ... "plan8", "plana"
+  const char* key = "";   // the Python map name: "map0", "plan1" ... "plan8", "plana", "plan9" ...
   const char* name = "";
   std::array<MapTerrain, kMapCells> cells{};
   CellMask buildable = 0;  // plain cells
@@ -87,12 +98,18 @@ struct MapDef {
   CellMask rule_cells = 0;
   Effect partner_zoo_slots[kMaxPartnerZoos];
   Effect university_slots[kNumUniversities];
-  Effect last_worker;
+  Effect worker_slots[kMaxWorkers];
+  Effect linked_slots[kMaxLinkedSlots];
   MapToken tokens[kNumMapTokens];
-  std::int8_t n_prebuilt = 0;  // printed buildings every zoo starts with (Map A)
+  std::int8_t n_prebuilt = 0;  // printed buildings every zoo starts with (Map A, Drawing Board)
   Prebuilt prebuilt[2];
+  std::int8_t n_areas = 0;
+  CellMask areas[kMaxMapAreas] = {};
 };
 int num_maps();
+// Maps dealt in self-play (new_game without a map): the first ones; the Zoo Map Packs' join once
+// their rules are complete.
+int num_selfplay_maps();
 const MapDef& map_def(int m);
 int map_by_key(const std::string& key);  // -1 when unknown
 

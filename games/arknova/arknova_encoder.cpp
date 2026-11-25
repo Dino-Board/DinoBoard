@@ -420,7 +420,7 @@ class Writer {
     const MapDef& md = pl.zoo.def();
     if (pl.n_partner_zoos < kMaxPartnerZoos) put_effect(f + pf::next_partner_zoo, md.partner_zoo_slots[pl.n_partner_zoos]);
     if (pl.n_universities < kNumUniversities) put_effect(f + pf::next_university, md.university_slots[pl.n_universities]);
-    if (pl.workers < kMaxWorkers) put_effect(f + pf::last_worker, md.last_worker);
+    if (pl.workers < kMaxWorkers) put_effect(f + pf::next_worker, md.worker_slots[pl.workers]);
     // Where the map's special rule stands for this zoo.
     f[pf::map_income] = map_break_money(pl) / 5.0f;
     f[pf::can_trade] = harbor_active(pl) ? 1.0f : 0.0f;

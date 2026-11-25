@@ -123,7 +123,7 @@ void ArknovaState::reset_with_seed(std::uint64_t seed) {
   *this = ArknovaState();
   std::mt19937_64 rng(seed);
   // Both zoos use one map, drawn uniformly per game.
-  const int map = static_cast<int>(rng() % static_cast<std::uint64_t>(num_maps()));
+  const int map = static_cast<int>(rng() % static_cast<std::uint64_t>(num_selfplay_maps()));
   new_game(core, rng, map);
   viz::init_viz(*this, schema());
   absorb_step(*this);
