@@ -33,8 +33,8 @@ LOCATIONS = ["my_hand", "opp_hand", "display", "my_zoo", "opp_zoo", "public_list
 TYPE_LOCATIONS = {"card": [loc for loc in LOCATIONS if loc != "in_play"],
                   "project": [loc for loc in LOCATIONS if loc not in ("my_zoo", "opp_zoo", "my_final")]}
 # Effect flags (immediate, icon trigger, income, endgame) of a few sponsors, from their card texts.
-EFFECT_SPOT = {201: (1, 0, 1, 1), 220: (0, 0, 1, 0), 243: (0, 1, 0, 1), 227: (1, 0, 0, 0), 253: (1, 1, 0, 0),
-               203: (0, 0, 0, 0), 257: (0, 0, 1, 1), 236: (0, 1, 0, 0)}
+EFFECT_SPOT = {201: (1, 0, 1, 1), 220: (1, 0, 1, 1), 243: (0, 1, 0, 1), 227: (1, 0, 0, 0), 253: (1, 1, 0, 0),
+               203: (1, 0, 0, 1), 257: (0, 0, 1, 1), 236: (0, 1, 0, 0)}
 
 
 def onehot(n, i):

@@ -2,8 +2,9 @@
 the Final Scoring card, conservation and appeal from the other end-of-game cards.
 
 * The categories rebuild each seat's final score: (appeal) minus the target appeal of (conservation).
-* One Final Scoring card is scored per seat, so its part is 0-4; the end-of-game parts are never
-  negative, and greedy games reach non-zero values in each of them.
+* Each Final Scoring card a seat holds scores 0-4 (Resistance can add cards to the one kept at 10
+  conservation points); the end-of-game parts are never negative, and greedy games reach non-zero
+  values in each of them.
 * The Ark Nova training config enables the breakdown head.
 """
 from __future__ import annotations
@@ -17,6 +18,8 @@ import dinoboard_engine as engine
 sys.path.insert(0, str(Path(__file__).parent))
 from arknova_reference import GAME, ROOT, target_appeal  # noqa: E402
 
+MAX_FINAL_CARDS = 6  # kMaxFinalCards
+
 
 def test_breakdown_rebuilds_the_final_scores():
     assert engine.game_metadata(GAME)["score_breakdown_categories"] == 5
@@ -28,7 +31,8 @@ def test_breakdown_rebuilds_the_final_scores():
         assert len(bd) == 10
         for p in range(2):
             appeal, conservation, final_cp, card_cp, card_appeal = bd[5 * p:5 * p + 5]
-            assert 0 <= final_cp <= 4 and card_cp >= 0 and card_appeal >= 0, f"seed {seed} seat {p}: {bd}"
+            # Resistance can add final scoring cards: each scores at most 4.
+            assert 0 <= final_cp <= 4 * MAX_FINAL_CARDS and card_cp >= 0 and card_appeal >= 0, f"seed {seed} seat {p}: {bd}"
             vp = appeal + card_appeal - target_appeal(int(conservation + final_cp + card_cp))
             assert vp == final[p], f"seed {seed} seat {p}: breakdown {bd[5 * p:5 * p + 5]} gives {vp}, score {final[p]}"
             seen = [s + bool(v) for s, v in zip(seen, bd[5 * p:5 * p + 5])]

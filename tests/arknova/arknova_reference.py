@@ -376,6 +376,7 @@ def map_facts(pl, key: str) -> dict:
 
     empty = [qr for qr, c in cells.items() if c["terrain"] == "plain" and qr not in covered]
     out = dict(empty=len(empty), fully_covered=not empty,
+               border_empty=sum(bool(cells[qr]["border"]) for qr in empty),
                border_connected=sum(cells[qr]["border"] and near(qr) for qr in empty),
                all_border_connected=all(near(qr) for qr in empty if cells[qr]["border"]))
     for t in ("water", "rock"):
@@ -474,7 +475,31 @@ def sponsor_immediate(pl, c, key: str) -> dict:
         out["money"] = 2 * (icons["water"] + icons["rock"])
     elif cid == 263:
         out["buildings"] = 1
+    elif cid == 203:  # Veterinarian: 2 / 5 / 10 money for 1 / 2 / 3 universities
+        out["money"] = {0: 0, 1: 2, 2: 5}.get(len(pl["universities"]), 10)
+    elif cid == 204:
+        out["money"] = 2 * icons["science"]
+    elif cid == 206:
+        out["appeal"] = 2 * sum(not t for t in pl["tokens"])
+    elif cid in EXPERT_CONTINENTS:
+        out["appeal"] = icons[EXPERT_CONTINENTS[cid]]
+    elif cid == 220:
+        out["money"] = 3
+    elif cid in (228, 229, 230):
+        table, idx = cards(), card_index()
+        zoo = [table[idx[z]] for z in pl["zoo_cards"]]
+        small, large = sum(is_small(z) for z in zoo), sum(is_large(z) for z in zoo)
+        if cid == 228:
+            out["money"] = 2 * small
+        else:
+            out["appeal"] = small if cid == 229 else 2 * large
+    elif cid == 261:
+        out["conservation"], out["appeal"] = 1, 1
     return out
+
+
+# Experts on a continent: 1 appeal per icon of it when played.
+EXPERT_CONTINENTS = {210: "americas", 211: "europe", 212: "australia", 213: "asia", 214: "africa"}
 
 
 def sponsor_income(pl, c, in_zoo: bool) -> dict:
@@ -523,8 +548,23 @@ def sponsor_endgame(pl, c, key: str, in_zoo: bool = True) -> tuple:
         return int(sum(not t for t in pl["tokens"]) >= 5), 0
     if cid in (241, 242):
         return int(facts[("water" if cid == 241 else "rock") + "_unconnected"] == 0), 0
-    if cid == 257:
+    if cid in (217, 257):
         return 0, 5 * facts["fully_covered"]
+    if cid in (203, 209):
+        return int(len(pl["universities"]) >= 3), 0
+    if cid in (210, 211):
+        kiosk = cid == 210
+        n = sum(b["kind"] == "kiosk" if kiosk else b["kind"] == "enclosure" and b["size"] == 1 and b["occupied"]
+                for b in pl["buildings"])
+        return int(n >= 5), 0
+    if cid == 214:
+        return 0, pl["xtokens"]
+    if cid in (216, 220):
+        return int(pl["reputation"] >= 9), 0
+    if cid == 219:
+        return 0, 2 * min(3, icons["water"], icons["rock"])
+    if cid == 221:
+        return int(facts["border_empty"] == 0), 0
     if cid in (258, 259, 264):
         return facts[{258: "water", 259: "rock", 264: "bonus"}[cid] + "_unconnected"] // 2, 0
     if cid == 260:

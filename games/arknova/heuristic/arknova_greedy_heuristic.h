@@ -62,7 +62,8 @@ struct LookaheadConfig {
 // from the current position (completing this turn first). Other decisions are GreedyBot's.
 class ArknovaLookaheadHeuristic final : public IHeuristic {
  public:
-  ArknovaLookaheadHeuristic(std::string name, LookaheadConfig cfg) : name_(std::move(name)), cfg_(cfg) {}
+  ArknovaLookaheadHeuristic(std::string name, LookaheadConfig cfg, GreedyWeights w = {})
+      : name_(std::move(name)), cfg_(cfg), w_(w) {}
 
   std::string name() const override { return name_; }
   HeuristicResult pick(IGameState& masked_state, const IBeliefTracker* tracker, const IGameRules& rules,
@@ -101,7 +102,8 @@ struct MonteCarloConfig {
 // the game when rollouts run to the end.
 class ArknovaMonteCarloHeuristic final : public IHeuristic {
  public:
-  ArknovaMonteCarloHeuristic(std::string name, MonteCarloConfig cfg) : name_(std::move(name)), cfg_(cfg) {}
+  ArknovaMonteCarloHeuristic(std::string name, MonteCarloConfig cfg, GreedyWeights w = {})
+      : name_(std::move(name)), cfg_(cfg), w_(w) {}
 
   std::string name() const override { return name_; }
   HeuristicResult pick(IGameState& masked_state, const IBeliefTracker* tracker, const IGameRules& rules,

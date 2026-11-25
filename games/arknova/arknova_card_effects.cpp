@@ -452,9 +452,10 @@ IconTriggerSpec icon_trigger_spec(CardIdx c) {
 
 bool has_immediate(CardIdx c) {
   switch (pid(c)) {
-    case 201: case 207: case 208: case 215: case 216: case 218: case 219: case 222: case 227: case 231: case 232:
-    case 233: case 234: case 235: case 241: case 242: case 253: case 254: case 258: case 259: case 260: case 262:
-    case 263: case 264:
+    case 201: case 203: case 204: case 206: case 207: case 208: case 209: case 210: case 211: case 212: case 213:
+    case 214: case 215: case 216: case 218: case 219: case 220: case 222: case 224: case 225: case 227: case 228:
+    case 229: case 230: case 231: case 232: case 233: case 234: case 235: case 241: case 242: case 253: case 254:
+    case 258: case 259: case 260: case 261: case 262: case 263: case 264:
       return true;
     default:
       return false;
@@ -468,9 +469,35 @@ void immediate_effect(State& s, CardIdx c, int p) {
     gain(s, p, EffectKind::kEffAppeal, icons(pl)[icon]);
     return;
   }
+  auto animals = [&](bool (*test)(CardIdx)) {
+    int n = 0;
+    for (int i = 0; i < pl.n_zoo_cards; ++i) n += test(pl.zoo_cards[i]);
+    return n;
+  };
   switch (id) {
     case 201: case 254: gain(s, p, EffectKind::kEffCard, 1); return;
     case 216: gain(s, p, EffectKind::kEffWorker, 1); return;
+    case 203: {
+      const int u = pl.n_universities;
+      gain(s, p, EffectKind::kEffMoney, u >= 3 ? 10 : u == 2 ? 5 : u == 1 ? 2 : 0);
+      return;
+    }
+    case 204: gain(s, p, EffectKind::kEffMoney, 2 * icons(pl)[kIcon_science]); return;
+    case 206: gain(s, p, EffectKind::kEffAppeal, 2 * pl.projects_supported()); return;
+    case 209: case 224: case 225: gain(s, p, EffectKind::kEffXtoken, 1); return;
+    case 210: gain(s, p, EffectKind::kEffAppeal, icons(pl)[kIcon_americas]); return;
+    case 211: gain(s, p, EffectKind::kEffAppeal, icons(pl)[kIcon_europe]); return;
+    case 212: gain(s, p, EffectKind::kEffAppeal, icons(pl)[kIcon_australia]); return;
+    case 213: gain(s, p, EffectKind::kEffAppeal, icons(pl)[kIcon_asia]); return;
+    case 214: gain(s, p, EffectKind::kEffAppeal, icons(pl)[kIcon_africa]); return;
+    case 220: gain(s, p, EffectKind::kEffMoney, 3); return;
+    case 228: gain(s, p, EffectKind::kEffMoney, 2 * animals(is_small)); return;
+    case 229: gain(s, p, EffectKind::kEffAppeal, animals(is_small)); return;
+    case 230: gain(s, p, EffectKind::kEffAppeal, 2 * animals(is_large)); return;
+    case 261:
+      gain(s, p, EffectKind::kEffConservation, 1);
+      gain(s, p, EffectKind::kEffAppeal, 1);
+      return;
     case 207: {
       int n = distinct(s, p, true, true) / 2;
       give_others_money(s, p, n);
@@ -617,8 +644,9 @@ bool has_endgame(CardIdx c) {
   int id = pid(c);
   if (id >= 1 && id <= 11) return true;
   switch (id) {
-    case 201: case 208: case 215: case 218: case 225: case 226: case 241: case 242: case 243: case 244: case 245:
-    case 246: case 247: case 251: case 257: case 258: case 259: case 260: case 261: case 264: case 274: case 281:
+    case 201: case 203: case 208: case 209: case 210: case 211: case 214: case 215: case 216: case 217: case 218:
+    case 219: case 220: case 221: case 225: case 226: case 241: case 242: case 243: case 244: case 245: case 246:
+    case 247: case 251: case 257: case 258: case 259: case 260: case 261: case 264: case 274: case 281:
       return true;
     default:
       return false;
@@ -679,9 +707,33 @@ void endgame_effect(State& s, CardIdx c, int p) {
     case 242:
       if (connected_terrain(pl.zoo, Terrain::kRock).second == 0) score(s, p, EffectKind::kEffConservation, 1);
       return;
-    case 257:
+    case 217: case 257:
       if (pl.zoo.is_fully_covered()) score(s, p, EffectKind::kEffAppeal, 5);
       return;
+    case 203: case 209:
+      if (pl.n_universities >= 3) score(s, p, EffectKind::kEffConservation, 1);
+      return;
+    case 210: case 211: {
+      int n = 0;
+      for (int b = 0; b < pl.zoo.n_buildings; ++b) {
+        const Building& o = pl.zoo.buildings[b];
+        n += id == 210 ? o.kind == BuildingKind::kKiosk
+                       : o.kind == BuildingKind::kEnclosure && o.size == 1 && o.occupied;
+      }
+      if (n >= 5) score(s, p, EffectKind::kEffConservation, 1);
+      return;
+    }
+    case 214: score(s, p, EffectKind::kEffAppeal, pl.xtokens); return;
+    case 216: case 220:
+      if (pl.reputation >= 9) score(s, p, EffectKind::kEffConservation, 1);
+      return;
+    case 219: score(s, p, EffectKind::kEffAppeal, 2 * std::min({3, int{have[kIcon_water]}, int{have[kIcon_rock]}})); return;
+    case 221: {
+      bool covered = true;
+      for (int c : empty_spaces(pl.zoo)) covered &= !map_cell(c).border;
+      if (covered) score(s, p, EffectKind::kEffConservation, 1);
+      return;
+    }
     case 258: score(s, p, EffectKind::kEffConservation, connected_terrain(pl.zoo, Terrain::kWater).second / 2); return;
     case 259: score(s, p, EffectKind::kEffConservation, connected_terrain(pl.zoo, Terrain::kRock).second / 2); return;
     case 260: score(s, p, EffectKind::kEffConservation, static_cast<int>(empty_spaces(pl.zoo).size()) / 6); return;
