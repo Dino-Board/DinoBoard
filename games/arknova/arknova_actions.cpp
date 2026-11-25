@@ -48,7 +48,9 @@ class Mapper {
       case Head::deck: return {atom::kDeck};
       case Head::donate: return {atom::kDonate};
       case Head::reputation: return {atom::kReputation};
-      case Head::repeat: return {atom::kRepeat};
+      case Head::repeat:  // a regular action's repeat names its strength like the turn's choice
+        if (o.n) return {atom::kAct + o.a[0] * atom::kMaxX + o.a[1]};
+        return {atom::kRepeat};
       case Head::worker: return {atom::kWorker};
       case Head::replenish: return {atom::kReplenish};
       case Head::card: return {atom::kGiveCard};

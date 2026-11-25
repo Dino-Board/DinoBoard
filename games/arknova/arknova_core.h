@@ -174,6 +174,7 @@ struct TurnCtx {
   std::int8_t action = -1;
   bool xtoken = false;
   std::int8_t strength = 0;
+  std::int8_t base_strength = 0;  // the card's strength before X-tokens; a Multiplier repeat starts from it
   bool has_strength = false;  // unset for an X-token turn
   std::int8_t n_after = 0;
   Frame after[kMaxAfter];

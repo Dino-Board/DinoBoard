@@ -372,6 +372,7 @@ void turn_apply(State& s, int fi, const Option& o, Chance&) {
     gain(s, p, EffectKind::kEffXtoken, 1);
     return;
   }
+  s.turns[0].base_strength = static_cast<std::int8_t>(strength);
   strength += o.a[1];
   pl.xtokens -= o.a[1];
   s.turns[0].strength = static_cast<std::int8_t>(strength);
@@ -379,11 +380,20 @@ void turn_apply(State& s, int fi, const Option& o, Chance&) {
   registry().start[action](s, p, strength);
 }
 
+// Glossary, Multiplier: each execution has the same strength X; an X-token strengthens only one of
+// them. A repeat starts again from the card's strength and may spend X-tokens of its own.
 void repeat_options(State& s, int fi, std::vector<Option>& out) {
   int p = frame(s, fi).player;
   const TurnCtx& t = s.turn();
-  bool can = t.xtoken ? s.players[p].xtokens < kMaxXtokens : registry().feasible[t.action](s, p, t.strength);
-  if (can) out.push_back(opt(Head::repeat));
+  if (t.xtoken) {
+    if (s.players[p].xtokens < kMaxXtokens) out.push_back(opt(Head::repeat));
+  } else {
+    for (int x = 0; x <= s.players[p].xtokens; ++x) {
+      if (t.base_strength + x >= 1 && registry().feasible[t.action](s, p, t.base_strength + x)) {
+        out.push_back(opt(Head::repeat, t.action, x));
+      }
+    }
+  }
   out.push_back(opt_skip());
 }
 
@@ -391,10 +401,12 @@ void repeat_apply(State& s, int fi, const Option& o, Chance&) {
   int p = frame(s, fi).player;
   pop(s, fi);
   if (o.head != Head::repeat) return;
-  const TurnCtx& t = s.turn();
+  TurnCtx& t = s.turn();
   if (t.xtoken) {
     gain(s, p, EffectKind::kEffXtoken, 1);
   } else {
+    s.players[p].xtokens -= o.a[1];
+    t.strength = static_cast<std::int8_t>(t.base_strength + o.a[1]);
     registry().start[t.action](s, p, t.strength);
   }
 }

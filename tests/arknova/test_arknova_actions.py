@@ -27,7 +27,7 @@ MEANING = {
     "setup_keep": {"hand_discard": GIVE},
     "turn": {"act": PICK, "xtoken": PICK},
     "extra_action": {"act": PICK, "xtoken": PICK, "skip": PICK},  # xtoken: Determination's any action
-    "multiplier_repeat": {"repeat": PICK, "skip": PICK},
+    "multiplier_repeat": {"act": PICK, "repeat": PICK, "skip": PICK},  # act: the strength of the repeat
     "act_cards": {"deck": TAKE, "display": TAKE, "snap": TAKE},
     "take_card": {"deck": TAKE, "display": TAKE},
     "discard_hand": {"hand_discard": GIVE},
@@ -84,7 +84,8 @@ def test_no_atom_means_both_taking_and_giving():
 
     names = atom_names()
     seen, harbor = set(), set()
-    for seed in [*range(75), 106]:  # 106: a unique building placed with the "place" atom
+    # 106: a unique building placed with the "place" atom; 477: a partner zoo gain that may be skipped
+    for seed in [*range(75), 106, 477]:
         gs = engine.GameSession(GAME, seed=seed)
         rng = random.Random(seed)
         while not gs.is_terminal:
@@ -294,7 +295,7 @@ def test_public_list_longer_than_twelve_cards():
 
     obs = truth.extract_initial_observation(p)
     pack = obs["public_snapshot"]["public"][1]
-    assert pack[0] == 0xA46, "the packed public state changed: update _pack_deck_index"
+    assert pack[0] == 0xA47, "the packed public state changed: update _pack_deck_index"
     deck_at = _pack_deck_index(pack)
     assert pack[deck_at] == len(core["deck"])
     n_prefix = len(truth.get_state_dict()["prefix"].split())

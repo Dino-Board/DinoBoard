@@ -502,6 +502,8 @@ void write_turn(Writer& w, const State& s, int depth) {
     if (t.has_strength) {
       w.key("strength");
       w_num(w, t.strength);
+      w.key("base_strength");
+      w_num(w, t.base_strength);
     }
     if (depth > 1) {
       w.key("outer");
@@ -518,6 +520,8 @@ void read_turn(State& s, const J& v, int depth_from_top, std::vector<TurnCtx>& o
   t.xtoken = v.at("xtoken").boolean();
   if (const J* st = v.find("strength")) {
     t.strength = static_cast<std::int8_t>(st->i());
+    const J* base = v.find("base_strength");
+    t.base_strength = static_cast<std::int8_t>(base ? base->i() : t.strength);
     t.has_strength = true;
   }
   for (const J& a : v.at("after").list()) {
@@ -939,6 +943,12 @@ std::string option_to_json(const State& s, const Option& o) {
       w_str(w, kActionNames[o.a[0]]);
       w_num(w, o.a[1]);
       break;
+    case Head::repeat:
+      if (o.n) {
+        w_str(w, kActionNames[o.a[0]]);
+        w_num(w, o.a[1]);
+      }
+      break;
     case Head::xtoken: case Head::upgrade: case Head::clever: case Head::multiplier:
       w_str(w, kActionNames[o.a[0]]);
       break;
@@ -1247,7 +1257,12 @@ std::string option_label(const State& s, const Option& o) {
     case Head::act:
       return act_label(s, top == FrameKind::extra_action ? f.d[fd::extra_owner] : p, o.a[0], o.a[1]);
     case Head::xtoken: return std::string("Take an X-token with ") + kActionNames[o.a[0]];
-    case Head::repeat: return std::string("Use the x2 token: ") + kActionNames[s.turn().action] + " again";
+    case Head::repeat:
+      if (o.n) {
+        return std::string("Use the x2 token: ") + kActionNames[o.a[0]] + " again at strength " +
+               num(s.turn().base_strength + o.a[1]) + (o.a[1] ? " (" + num(o.a[1]) + " X-token)" : "");
+      }
+      return std::string("Use the x2 token: ") + kActionNames[s.turn().action] + " again";
     case Head::skip: return "Skip";
     case Head::done: return done_label(top);
     case Head::upgrade: return std::string("Upgrade ") + kActionNames[o.a[0]];

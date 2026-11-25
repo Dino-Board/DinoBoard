@@ -14,7 +14,7 @@ namespace board_ai::arknova {
 
 namespace {
 
-constexpr int kPackVersion = 0xA46;
+constexpr int kPackVersion = 0xA47;
 
 void fill_slots(std::int16_t* first, int n, std::int16_t v) { std::fill(first, first + n, v); }
 
@@ -307,7 +307,7 @@ void ArknovaState::pack_public(std::vector<int>& out) const {
   out.push_back(s.turn_depth);
   for (int d = 0; d < s.turn_depth; ++d) {
     const TurnCtx& t = s.turns[d];
-    out.insert(out.end(), {t.action, t.xtoken, t.strength, t.has_strength, t.n_after});
+    out.insert(out.end(), {t.action, t.xtoken, t.strength, t.base_strength, t.has_strength, t.n_after});
     for (int i = 0; i < t.n_after; ++i) {
       if (is_private_frame(t.after[i].kind)) throw std::logic_error("arknova: a private frame was deferred");
       pack_frame(out, t.after[i], false);
@@ -428,6 +428,7 @@ void ArknovaState::unpack_public(const std::vector<int>& in) {
     t.action = r.as<std::int8_t>();
     t.xtoken = r.next() != 0;
     t.strength = r.as<std::int8_t>();
+    t.base_strength = r.as<std::int8_t>();
     t.has_strength = r.next() != 0;
     t.n_after = static_cast<std::int8_t>(r.count(kMaxAfter, "deferred frames"));
     for (int i = 0; i < t.n_after; ++i) t.after[i] = unpack_frame(r);
