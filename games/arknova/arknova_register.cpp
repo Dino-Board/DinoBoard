@@ -190,6 +190,7 @@ board_ai::GameBundle make_arknova(const std::string& game_id, std::uint64_t seed
   b.external_state_loader = load_ark_nova_ai_state;
   b.external_option_lister = ark_nova_ai_options;
   b.external_rules_switch = [](bool enabled) { g_upstream_rules = enabled; };
+  b.forced_hold_switch = [](bool enabled) { g_hold_forced = enabled; };
   b.external_host_factory = [](std::uint64_t seed, const std::string& map_key) -> std::unique_ptr<board_ai::IExternalHost> {
     return std::make_unique<ArknovaHost>(seed, map_key);
   };

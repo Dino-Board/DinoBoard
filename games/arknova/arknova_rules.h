@@ -48,4 +48,7 @@ void advance_forced(ArknovaState& st, std::mt19937_64& rng);
 // Appends atom `a` to the prefix and applies the option once it is complete.
 void apply_atom(ArknovaState& st, ActionId a, std::mt19937_64& rng);
 
+// When set, advance_forced stops at a decision with a single option (GameBundle::forced_hold_switch).
+extern thread_local bool g_hold_forced;
+
 }  // namespace board_ai::arknova

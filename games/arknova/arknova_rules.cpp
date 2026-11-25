@@ -19,12 +19,15 @@ CardIdx RngChance::pick(const std::vector<CardIdx>& candidates) {
   return candidates[std::uniform_int_distribution<std::size_t>(0, candidates.size() - 1)(rng_)];
 }
 
+thread_local bool g_hold_forced = false;
+
 namespace {
 
 // Extends the prefix through forced atoms; applies the option when complete. Returns whether an
 // option was applied.
 bool settle_prefix(ArknovaState& st, std::mt19937_64& rng) {
   Decision d = current_decision(st);
+  if (g_hold_forced && st.prefix.empty() && d.options.size() == 1) return false;
   int done = factored_extend_forced(d.atoms, st.prefix);
   if (done < 0) {
     canonicalize_prefix(st);

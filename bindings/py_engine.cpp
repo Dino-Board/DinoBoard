@@ -4640,6 +4640,15 @@ PYBIND11_MODULE(dinoboard_engine, m) {
     bundle.external_rules_switch(enabled);
   }, py::arg("game_id"), py::arg("enabled"));
 
+  // GameBundle::forced_hold_switch: stop at single-option decisions, in the calling thread.
+  m.def("set_forced_hold", [](const std::string& game_id, bool enabled) {
+    GameBundle bundle = GameRegistry::instance().create_game(game_id, 0);
+    if (!bundle.forced_hold_switch) {
+      throw std::runtime_error("set_forced_hold: game '" + game_id + "' registers no forced_hold_switch");
+    }
+    bundle.forced_hold_switch(enabled);
+  }, py::arg("game_id"), py::arg("enabled"));
+
   // Autoregressive belief (engine/core/belief_sequence.h): the training rows
   // of a batch of positions. pool [B, classes] and hands [B, segments,
   // classes] are the label extractor's `remaining` and `hand_counts`. Every

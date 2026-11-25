@@ -164,10 +164,13 @@ using PublicStateApplier = std::function<void(
 //     chosen, as (that engine's option key, full atom sequence). An option may be listed once per
 //     atom sequence.
 //   ExternalRulesSwitch: follow that engine where it departs from the rulebook. Process-wide.
+//   ForcedHoldSwitch: stop at decisions with a single option instead of playing them, for the
+//     calling thread only (an external client that must answer each one itself).
 using ExternalStateLoader = std::function<void(IGameState& state, const std::string& json)>;
 using ExternalOptionLister =
     std::function<std::vector<std::pair<std::string, std::vector<ActionId>>>(const IGameState& state)>;
 using ExternalRulesSwitch = std::function<void(bool enabled)>;
+using ForcedHoldSwitch = std::function<void(bool enabled)>;
 
 // Hosting a game on that engine's board with this engine as the referee: the game advances here,
 // one decision at a time as that engine lists them (single-option decisions included), and the board
@@ -249,6 +252,7 @@ struct GameBundle {
   ExternalStateLoader external_state_loader;
   ExternalOptionLister external_option_lister;
   ExternalRulesSwitch external_rules_switch;
+  ForcedHoldSwitch forced_hold_switch;
   ExternalHostFactory external_host_factory;
   ExternalRulesQuery external_rules_query;
 
