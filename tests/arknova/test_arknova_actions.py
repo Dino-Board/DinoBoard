@@ -40,8 +40,8 @@ MEANING = {
     "act_association": {"reputation": PICK, "partner_zoo": TAKE, "university": TAKE, "project": PICK, "hand": TAKE,
                         "display": TAKE, "position": PICK, "map_token": PICK, "zoo_give": GIVE, "donate": PICK,
                         "done": PICK},
-    "gain_partner_zoo": {"partner_zoo": TAKE},
-    "gain_university": {"university": TAKE},
+    "gain_partner_zoo": {"partner_zoo": TAKE, "skip": PICK},  # skip: none can be taken
+    "gain_university": {"university": TAKE, "skip": PICK},
     "upgrade": {"upgrade": PICK},
     "upgrade_or_worker": {"upgrade": PICK, "worker": PICK},
     "conservation_tile": {"money": TAKE, "tile": TAKE},
@@ -84,7 +84,7 @@ def test_no_atom_means_both_taking_and_giving():
 
     names = atom_names()
     seen, harbor = set(), set()
-    for seed in range(75):
+    for seed in [*range(75), 106]:  # 106: a unique building placed with the "place" atom
         gs = engine.GameSession(GAME, seed=seed)
         rng = random.Random(seed)
         while not gs.is_terminal:

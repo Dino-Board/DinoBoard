@@ -39,11 +39,12 @@ def test_every_token_decodes_to_the_state():
     the ground-truth state bit for bit, and the other player's view of the same state passes the
     same checks and mirrors this one."""
     ck = checks.Checker()
-    # The seed picks the map: these games are on maps 4, 8, 7, 1, 6, 5 (random) and 8, 2 (greedy),
-    # so that every map rule feature is reached.
-    for seed in (0, 1, 3, 13, 15, 32):
+    # The seed picks the map: these games are on maps 4, 8, 7, 1, 6, 5 (random) and 8, 2, 6, 8a
+    # (greedy), so that every map rule feature is reached; greedy 49 and 50 reach a project in a
+    # private list, a chosen reward and end-of-game appeal.
+    for seed in (19, 12, 9, 31, 0, 36):
         checks.check_episode(ck, seed, "random", stride=5, perspective_every=6)
-    for seed in (2, 5):
+    for seed in (21, 25, 49, 50):
         checks.check_episode(ck, seed, "greedy", stride=3, perspective_every=8)
     assert ck.decisions > 600
     assert not ck.unchecked(), f"features never compared: {ck.unchecked()}"
@@ -53,13 +54,13 @@ def test_every_token_decodes_to_the_state():
 
 def test_dominance_offers_only_the_primates_project():
     """decision.only_one. A Dominance animal played while base project 108 (primates) is still in the
-    base project pile lets its owner take only that project (abilities: kDOMINANCE). Greedy game 72
+    base project pile lets its owner take only that project (abilities: kDOMINANCE). Greedy game 120
     reaches it: there the flag is set, the legal atoms are that project's list atom and skip, and the
     whole encoding passes the full check; in every other decision of the game the flag is 0."""
     table, idx = cards(), card_index()
     dominance = next(c["id_str"] for c in table if "DOMINANCE" in c["abilities"])
     ck = checks.Checker()
-    episode = checks.Episode(72, "greedy")
+    episode = checks.Episode(120, "greedy")
     found = 0
     for n, sample, me, state, core, legal in episode.steps():
         toks = decode(sample["features"])

@@ -655,8 +655,8 @@ def _pool_sum(indices) -> dict:
 
 def pool_composition(indices) -> dict:
     """Pool column -> its values for a set of regular cards: each count (or sum) over the same
-    count among all regular cards of the game."""
-    total = _pool_sum(regular_cards())
+    count among all regular cards of the base game (the BGA promos left out)."""
+    total = _pool_sum([i for i in regular_cards() if cards()[i]["id"] not in BGA_PROMOS])
     out = {name: np.divide(v, total[name], out=np.zeros_like(v), where=total[name] > 0)
            for name, v in _pool_sum(indices).items()}
     return {name: float(v[0]) if len(v) == 1 else v for name, v in out.items()}
@@ -674,5 +674,7 @@ def known_to(me: int, core, own, shown_opp) -> set:
         if f["kind"] == "ab_hunter":
             public += f["data"]["cards"]
     mine = own[me]
+    # The BGA promos are known to be out of a game that does not deal them.
+    absent = set() if core.get("promos") else {i for i, c in enumerate(cards()) if c["id"] in BGA_PROMOS}
     return ({idx[c] for c in public} | mine["hand"] | set(mine["final"]) | set(mine["tucked"]) |
-            {c for frame in mine["private"] for c in frame} | set(mine["final_known"]) | set(shown_opp))
+            {c for frame in mine["private"] for c in frame} | set(mine["final_known"]) | set(shown_opp) | absent)
