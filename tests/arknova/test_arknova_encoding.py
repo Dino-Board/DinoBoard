@@ -17,8 +17,8 @@ from conftest import get_test_model
 
 sys.path.insert(0, str(Path(__file__).parent))
 import arknova_checks as checks  # noqa: E402
-from arknova_reference import (GAME, ROOT, atom_index, atom_names, card_index, cards, decode, known_to, layout,  # noqa: E402
-                               own_slots, sponsor_endgame, target_appeal)
+from arknova_reference import (GAME, ROOT, BGA_PROMOS, atom_index, atom_names, card_index, cards, decode, known_to,  # noqa: E402
+                               layout, own_slots, sponsor_endgame, target_appeal)
 
 # Features that need a rare situation (Hypnosis, Snapping 2, Dominance, the Engineer, an extra
 # action offered as a decision, a donation followed by another decision, ...). The games below do
@@ -90,8 +90,9 @@ def test_discard_and_unseen_pools_account_for_every_card():
     every one of those is unseen."""
     table, idx = cards(), card_index()
     types = ("animal", "sponsor", "project")
-    totals = np.array([sum(c["type"] == t for c in table) for t in types])
-    regular = {i for i, c in enumerate(table) if c["type"] != "endgame"}
+    in_game = [c["id"] not in BGA_PROMOS for c in table]
+    totals = np.array([sum(c["type"] == t for c, used in zip(table, in_game) if used) for t in types])
+    regular = {i for i, c in enumerate(table) if c["type"] != "endgame" and in_game[i]}
     episode = checks.Episode(6, "greedy")
     previous, grew = None, 0
     for n, sample, me, state, core, legal in episode.steps():

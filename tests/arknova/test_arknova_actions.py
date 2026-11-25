@@ -18,7 +18,7 @@ from conftest import get_test_model
 
 sys.path.insert(0, str(Path(__file__).parent))
 from arknova_checks import binding  # noqa: E402
-from arknova_reference import GAME, atom_index, atom_names, card_index, cards, decode, own_slots  # noqa: E402
+from arknova_reference import GAME, BGA_PROMOS, atom_index, atom_names, card_index, cards, decode, own_slots  # noqa: E402
 
 TAKE, GIVE, PICK = "take", "give", "pick"  # gain / play / keep it; give it up; a choice of neither kind
 # Every atom class (the part of the atom's name before ':') that can be legal in each decision
@@ -232,7 +232,7 @@ def test_setup_discards_can_be_named_in_any_order():
 
 def _pack_deck_index(pack):
     """Index of the deck size in the packed public vector (the layout of ArknovaState::pack_public)."""
-    i = 3                       # after the version, the map and the harbour flag
+    i = 4                       # after the version, the map, the harbour flag and the promos flag
     for _ in range(2):
         i += 7 + 5 + 4          # track values, action card slots, workers per task
         i += 1 + pack[i]        # partner zoos
@@ -283,7 +283,8 @@ def test_public_list_longer_than_twelve_cards():
         own = own_slots(truth, q)
         located |= own["hand"] | set(own["final"]) | set(own["tucked"]) | {c for f in own["private"] for c in f}
         located |= {idx[c] for c in core["players"][q]["zoo_cards"]}
-    in_deck = [c for c in range(len(table)) if c not in located and table[c]["type"] != "endgame"]
+    in_deck = [c for c in range(len(table)) if c not in located and table[c]["type"] != "endgame"
+               and table[c]["id"] not in BGA_PROMOS]
     assert len(in_deck) == len(core["deck"])
     animals = [c for c in in_deck if table[c]["type"] == "animal"]
     others = [c for c in in_deck if table[c]["type"] != "animal"]
@@ -293,7 +294,7 @@ def test_public_list_longer_than_twelve_cards():
 
     obs = truth.extract_initial_observation(p)
     pack = obs["public_snapshot"]["public"][1]
-    assert pack[0] == 0xA45, "the packed public state changed: update _pack_deck_index"
+    assert pack[0] == 0xA46, "the packed public state changed: update _pack_deck_index"
     deck_at = _pack_deck_index(pack)
     assert pack[deck_at] == len(core["deck"])
     n_prefix = len(truth.get_state_dict()["prefix"].split())

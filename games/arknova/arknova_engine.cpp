@@ -232,7 +232,7 @@ void new_game(State& s, std::mt19937_64& rng, int map) {
       endgame.push_back(static_cast<CardIdx>(c));
     } else if (d.type == CardType::kProject && d.proj_category == ProjCategory::kProjBase) {
       base.push_back(static_cast<CardIdx>(c));
-    } else {
+    } else if (!is_bga_promo(static_cast<CardIdx>(c))) {
       s.deck.push_back(static_cast<CardIdx>(c));
     }
   }
@@ -627,14 +627,20 @@ void final_scoring(State& s, int fi, Chance&) {
     return;
   }
   pop(s, fi);
-  for (int p = 0; p < kPlayers; ++p) {
-    const Player& pl = s.players[p];
-    std::vector<CardIdx> cards(pl.zoo_cards, pl.zoo_cards + pl.n_zoo_cards);
-    cards.insert(cards.end(), pl.final_cards, pl.final_cards + pl.n_final);
-    for (CardIdx c : cards) {
-      if (has_endgame(c)) endgame_effect(s, c, p);
+  // Arcade (281) compares appeal before any other end-game effect, Victory Column (274) after all.
+  auto score_where = [&s](auto take) {
+    for (int p = 0; p < kPlayers; ++p) {
+      const Player& pl = s.players[p];
+      std::vector<CardIdx> cards(pl.zoo_cards, pl.zoo_cards + pl.n_zoo_cards);
+      cards.insert(cards.end(), pl.final_cards, pl.final_cards + pl.n_final);
+      for (CardIdx c : cards) {
+        if (has_endgame(c) && take(card(c).id)) endgame_effect(s, c, p);
+      }
     }
-  }
+  };
+  score_where([](int id) { return id == 281; });
+  score_where([](int id) { return id != 281 && id != 274; });
+  score_where([](int id) { return id == 274; });
   for (int p = 0; p < kPlayers; ++p) s.scores[p] = static_cast<std::int16_t>(s.players[p].victory_points());
   s.stack_n = 0;
   s.over = true;

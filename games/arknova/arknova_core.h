@@ -181,6 +181,7 @@ struct TurnCtx {
 
 struct State {
   std::int8_t map = 0;  // map_def index; every zoo is on this map (Zoo::map)
+  bool promos = false;  // BGA's promo sponsors (is_bga_promo) are in this game's cards; new_game leaves them out
   Player players[kPlayers];
   std::int8_t current = 0;
   bool harbor_used = false;  // turn_flags["harbor"]: the Map 4 harbour was used this turn

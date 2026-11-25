@@ -41,7 +41,8 @@ class SlotView {
 
 }  // namespace
 
-// Cards whose location the observer knows: public zones and visible hidden-field slots.
+// Cards whose location the observer knows: public zones and visible hidden-field slots, and the
+// BGA promos when they are not in the game.
 std::vector<std::uint8_t> known_cards(const ArknovaState& st, int observer, bool by_viz) {
   const SlotView view(st, observer, by_viz);
   const State& s = st.core;
@@ -49,6 +50,9 @@ std::vector<std::uint8_t> known_cards(const ArknovaState& st, int observer, bool
   auto mark = [&](int c) {
     if (valid_card(c)) known[static_cast<std::size_t>(c)] = 1;
   };
+  for (int c = 0; c < num_cards(); ++c) {
+    if (!s.promos && is_bga_promo(static_cast<CardIdx>(c))) mark(c);
+  }
   for (CardIdx c : s.discard) mark(c);
   for (CardIdx c : s.display) mark(c);
   for (int i = 0; i < s.n_base_projects; ++i) mark(s.base_projects[i]);

@@ -822,6 +822,9 @@ std::string state_to_json(const State& s) {
   w.key("end_by"); w_opt_int(w, s.end_by);
   w.key("final_turns"); w_opt_int(w, s.final_turns);
   w.key("over"); w_bool(w, s.over);
+  if (s.promos) {
+    w.key("promos"); w_bool(w, true);
+  }
   w.key("scores");
   if (!s.over) {
     w_null(w);
@@ -904,6 +907,7 @@ void state_from_json(State& s, const std::string& json) {
   s.end_by = v.at("end_by").is_null() ? -1 : static_cast<std::int8_t>(v.at("end_by").i());
   s.final_turns = v.at("final_turns").is_null() ? -1 : static_cast<std::int8_t>(v.at("final_turns").i());
   s.over = v.at("over").boolean();
+  if (v.find("promos")) s.promos = v.at("promos").boolean();
   if (!v.at("scores").is_null()) {
     for (int p = 0; p < kPlayers; ++p) s.scores[p] = static_cast<std::int16_t>(v.at("scores").list().at(p).i());
   }

@@ -159,6 +159,8 @@ inline bool is_sponsor(CardIdx c) { return card(c).type == CardType::kSponsor; }
 inline bool is_project(CardIdx c) { return card(c).type == CardType::kProject; }
 inline bool is_small(CardIdx c) { return is_animal(c) && card(c).size <= 2; }
 inline bool is_large(CardIdx c) { return is_animal(c) && card(c).size >= 4; }
+// Victory Column and Arcade: promo sponsors Board Game Arena deals in its base game (State::promos).
+inline bool is_bga_promo(CardIdx c) { return card(c).id == 274 || card(c).id == 281; }
 bool has_keyword(CardIdx c, Keyword k);
 // Icons one card adds to a zoo: tags plus rock/water requirement icons (cards.icons_of).
 const std::array<std::int8_t, kNumIcons>& card_icons(CardIdx c);

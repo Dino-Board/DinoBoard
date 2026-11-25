@@ -113,6 +113,7 @@ const std::vector<PoolRow>& pool_shares() {
           continue;
       }
       for (int k = 0; k < kNumIcons; ++k) r[at(gf::discard_icons) + k] = card_icons(c)[k];
+      if (is_bga_promo(c)) continue;  // shares stay those of the base game's cards
       for (int k = 0; k < kPoolWidth; ++k) total[k] += r[k];
     }
     for (PoolRow& r : rows) {

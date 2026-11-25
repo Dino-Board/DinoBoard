@@ -72,6 +72,9 @@ def building_type(kind: str, size: int) -> int:
 
 # ---- the card table, parsed from the generated data ---------------------------------------------
 
+# Printed ids of the promo sponsors only BGA games deal (State::promos); new_game leaves them out.
+BGA_PROMOS = frozenset({274, 281})
+
 @lru_cache(maxsize=1)
 def cards() -> list[dict]:
     text = (SRC / "arknova_cards_data.inc").read_text()

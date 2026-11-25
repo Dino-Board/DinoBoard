@@ -511,6 +511,7 @@ void immediate_effect(State& s, CardIdx c, int p) {
 bool has_income(CardIdx c) {
   switch (pid(c)) {
     case 201: case 206: case 209: case 220: case 231: case 232: case 233: case 234: case 235: case 257:
+    case 274: case 281:
       return true;
     default:
       return false;
@@ -530,6 +531,8 @@ void income_effect(State& s, CardIdx c, int p) {
     case 206: gain(s, p, EffectKind::kEffConservation, 1); return;
     case 209: gain(s, p, EffectKind::kEffXtoken, 1); return;
     case 220: gain(s, p, EffectKind::kEffMoney, 3); return;
+    case 274: gain(s, p, EffectKind::kEffAppeal, 1); return;
+    case 281: gain(s, p, EffectKind::kEffMoney, pl.appeal / 10); return;
     case 257: {
       const Zoo& zoo = pl.zoo;
       int entrance = -1;
@@ -615,7 +618,7 @@ bool has_endgame(CardIdx c) {
   if (id >= 1 && id <= 11) return true;
   switch (id) {
     case 201: case 208: case 215: case 218: case 225: case 226: case 241: case 242: case 243: case 244: case 245:
-    case 246: case 247: case 251: case 257: case 258: case 259: case 260: case 261: case 264:
+    case 246: case 247: case 251: case 257: case 258: case 259: case 260: case 261: case 264: case 274: case 281:
       return true;
     default:
       return false;
@@ -683,6 +686,14 @@ void endgame_effect(State& s, CardIdx c, int p) {
     case 259: score(s, p, EffectKind::kEffConservation, connected_terrain(pl.zoo, Terrain::kRock).second / 2); return;
     case 260: score(s, p, EffectKind::kEffConservation, static_cast<int>(empty_spaces(pl.zoo).size()) / 6); return;
     case 264: score(s, p, EffectKind::kEffConservation, bonus_spaces(pl.zoo).second / 2); return;
+    case 274: case 281: {  // Victory Column: 2 per zoo with more appeal; Arcade: 2 per zoo with less, at most 4
+      int n = 0;
+      for (int q = 0; q < kPlayers; ++q) {
+        if (q != p) n += id == 274 ? s.players[q].appeal > pl.appeal : s.players[q].appeal < pl.appeal;
+      }
+      score(s, p, EffectKind::kEffAppeal, id == 274 ? 2 * n : std::min(2 * n, 4));
+      return;
+    }
     default: engine_error("endgame effect not implemented");
   }
 }
