@@ -297,6 +297,7 @@ void animals_apply(State& s, int fi, const Option& o, Chance& ch) {
     advance(s, fi);
   }
   const CardDef& c = card(m.card);
+  const int gains_from = s.stack_n;
   gain(s, p, EffectKind::kEffAppeal, c.appeal);
   gain(s, p, EffectKind::kEffConservation, c.conservation);
   gain(s, p, EffectKind::kEffReputation, c.reputation);
@@ -304,7 +305,13 @@ void animals_apply(State& s, int fi, const Option& o, Chance& ch) {
   if (filled) map_enclosure_filled(s, p, m.building);
   // A Flock Animal joining an occupied standard enclosure has no enclosure of its own.
   if (filled || pl.zoo.buildings[m.building].kind != BuildingKind::kEnclosure) map_animal_housed(s, p, m.card, m.building);
+  const int abilities_from = s.stack_n;
   resolve_abilities(s, p, m.card, ch);
+  // What the gains ask (a conservation bonus tile, a reputation bonus) is taken at once, before the
+  // ability: the frames they pushed go back on top of the ability's.
+  if (!g_upstream_rules && abilities_from > gains_from && s.stack_n > abilities_from) {
+    std::rotate(s.stack + gains_from, s.stack + abilities_from, s.stack + s.stack_n);
+  }
   IconCounts added{};
   const auto& ci = card_icons(m.card);
   for (int k = 0; k < kNumIcons; ++k) added[k] = ci[k];

@@ -41,10 +41,10 @@ def test_every_token_decodes_to_the_state():
     same checks and mirrors this one."""
     ck = checks.Checker()
     # The seed picks the map, so that every map rule feature is reached: random 19 and 9 are on map 9,
-    # 12 and 205 on T1 (205 discards for strength), 0 on 10, 36 on 14, 8 on 4, 58 on 5, 39 on 6, 6 on
+    # 12, 205 and 63 on T1 (63 discards for strength), 0 on 10, 36 on 14, 8 on 4, 58 on 5, 39 on 6, 6 on
     # 11, 22 on 12; greedy 21 on 13, 47 on 2 (and chooses a reward). Random 48 reaches Venom and a
     # project in a private list, greedy 49 and 50 end-of-game appeal, random 39 Constriction.
-    for seed in (19, 12, 9, 31, 0, 36, 48, 8, 58, 39, 6, 22, 205):
+    for seed in (19, 12, 9, 31, 0, 36, 48, 8, 58, 39, 6, 22, 205, 63):
         checks.check_episode(ck, seed, "random", stride=5, perspective_every=6)
     for seed in (21, 25, 49, 50, 69, 47):
         checks.check_episode(ck, seed, "greedy", stride=3, perspective_every=8)
