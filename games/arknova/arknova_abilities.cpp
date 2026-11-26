@@ -389,10 +389,18 @@ void resolve_keyword(State& s, int p, Keyword k, int value, Chance& ch) {
       return;
     }
     case Keyword::kSCAVENGING: {
-      ch.shuffle(s.discard);
       std::vector<CardIdx> taken;
       int n = std::min<int>(value, static_cast<int>(s.discard.size()));
-      for (int i = 0; i < n; ++i) {
+      while (static_cast<int>(taken.size()) < n && !s.discard_next.empty()) {
+        const CardIdx c = s.discard_next.front();
+        s.discard_next.erase(s.discard_next.begin());
+        auto it = std::find(s.discard.begin(), s.discard.end(), c);
+        if (it == s.discard.end()) engine_error("scavenging: a card known to come next is not in the discard pile");
+        s.discard.erase(it);
+        taken.push_back(c);
+      }
+      ch.shuffle(s.discard);
+      for (int i = static_cast<int>(taken.size()); i < n; ++i) {
         taken.push_back(s.discard.back());
         s.discard.pop_back();
       }

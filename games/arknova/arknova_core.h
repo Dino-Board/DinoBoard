@@ -206,6 +206,9 @@ struct State {
   bool harbor_used = false;  // turn_flags["harbor"]: the Map 4 harbour was used this turn
   std::vector<CardIdx> deck;  // hidden; drawn from the back
   std::vector<CardIdx> discard;
+  // Discard pile cards known to come out first when it is drawn from at random (Scavenging): what
+  // a board outside the engine already revealed. Empty in self-play.
+  std::vector<CardIdx> discard_next;
   CardIdx display[kDisplaySize] = {kNoCard, kNoCard, kNoCard, kNoCard, kNoCard, kNoCard};  // kNoCard = taken
   // Mark: the player whose token is on the display card, -1 for none (it moves with the card).
   std::int8_t display_mark[kDisplaySize] = {-1, -1, -1, -1, -1, -1};

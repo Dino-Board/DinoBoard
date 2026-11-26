@@ -806,6 +806,9 @@ std::string state_to_json(const State& s) {
   std::vector<CardIdx> discard = s.discard;
   std::sort(discard.begin(), discard.end());
   w.key("discard"); w_cards(w, discard.begin(), discard.end());
+  if (!s.discard_next.empty()) {
+    w.key("discard_next"); w_cards(w, s.discard_next.begin(), s.discard_next.end());
+  }
   w.key("display"); w_cards(w, s.display, s.display + kDisplaySize);
   w.key("display_marks");
   w.begin('[');
@@ -914,6 +917,8 @@ void state_from_json(State& s, const std::string& json) {
   }
   s.deck = parse_cards(v.at("deck"));
   s.discard = parse_cards(v.at("discard"));
+  // Checked when drawn: a card may reach the discard pile later in the turn being replayed.
+  if (const J* next = v.find("discard_next")) s.discard_next = parse_cards(*next);
   const auto& display = v.at("display").list();
   if (display.size() != kDisplaySize) throw std::runtime_error("arknova json: display size");
   for (int i = 0; i < kDisplaySize; ++i) s.display[i] = parse_card(display[i]);

@@ -75,6 +75,42 @@ def test_bga_variant_deals_only_board_game_arenas_maps():
     assert find_game_config("arknova_bga")["action_space"] == engine.game_metadata(GAME)["action_space"]
 
 
+def test_scavenging_draws_the_known_discard_cards_first():
+    """A board outside the engine (BGA) has already revealed what Scavenging draws from the discard
+    pile: discard_next names those cards, and the engine's draw then holds them (Tournament 1's
+    Scavenging 3 space here)."""
+    idx = card_index()
+    checked = 0
+    for seed in range(40):
+        host = engine.ExternalHost(GAME, seed, "plant1")
+        rng = random.Random(seed)
+        while not host.is_terminal and checked < 3:
+            before = json.loads(host.state_json())
+            key = rng.choice(host.options())[0]
+            host.step(key)
+            after = json.loads(host.state_json())
+            top = after["stack"][-1] if after["stack"] else None
+            if not top or top["kind"] != "ab_pick" or not set(top["data"]["cards"]) <= set(before["discard"]):
+                continue
+            others = [c for c in before["discard"] if c not in top["data"]["cards"]]
+            if not others:
+                continue
+            before["discard_next"] = [others[0]]
+            gs = engine.GameSession(GAME, 0, "")
+            gs.load_external_state(json.dumps(before))
+            atoms = dict(gs.external_options())[key]
+            for a in atoms:
+                if a in gs.get_legal_actions():
+                    gs.apply_action(a)
+            p = top["player"]
+            drawn = {c for frame in own_slots(gs, p)["private"] for c in frame}
+            assert idx[others[0]] in drawn, "the known card was not drawn"
+            checked += 1
+        if checked >= 3:
+            break
+    assert checked
+
+
 def test_strength_of_the_action_cards():
     """Map 12 conceals slots 1, 2, 4, 5 in turn (a card there has the next visible number); Tournament 1
     adds 1 after a hand card discard. The turn's base strength is the card's (X-tokens aside)."""
