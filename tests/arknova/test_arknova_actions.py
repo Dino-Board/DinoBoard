@@ -97,9 +97,9 @@ def test_no_atom_means_both_taking_and_giving():
     names = atom_names()
     seen, harbor = set(), set()
     # 106: a unique building placed with the "place" atom; 477: a partner zoo gain that may be skipped;
-    # 92: Archaeologist's free placement bonus; 140: a replenish between snaps; 210: Cut Down; 975: a
-    # partner zoo gain that may be skipped; 1250: Tournament 1's discard before an extra action
-    for seed in [*range(75), 92, 106, 140, 210, 477, 975, 1250]:
+    # 92: Archaeologist's free placement bonus; 96: a replenish between snaps; 210: Cut Down; 975: a
+    # partner zoo gain that may be skipped; 823: Tournament 1's discard before an extra action
+    for seed in [*range(75), 92, 96, 106, 210, 477, 823, 975]:
         gs = engine.GameSession(GAME, seed=seed)
         rng = random.Random(seed)
         while not gs.is_terminal:

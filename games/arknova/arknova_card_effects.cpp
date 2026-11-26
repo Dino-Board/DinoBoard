@@ -397,8 +397,17 @@ void icon_trigger(State& s, CardIdx trigger, int owner, int p, const IconCounts&
         }
       }
       return;
-    case 214:
-      for (int i = 0; i < added[icon]; ++i) push(s, FrameKind::clever, owner);
+    case 214:  // Clever: after finishing the action (glossary; BGA resolves it then)
+      for (int i = 0; i < added[icon]; ++i) {
+        if (s.turn_depth > 0) {
+          Frame f;
+          f.kind = FrameKind::clever;
+          f.player = static_cast<std::int8_t>(owner);
+          after_finishing(s, f);
+        } else {
+          push(s, FrameKind::clever, owner);
+        }
+      }
       return;
     case 249:
       for (int i = 0; i < added[icon]; ++i) {

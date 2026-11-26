@@ -159,6 +159,8 @@ void task_options(const State& s, int p, int remaining, int used, bool side2, st
   for (int task = 0; task < kNumTasks; ++task) {
     if ((used >> task & 1) || sr::task_value(pl, task) > remaining || workers_needed(pl, task) < 0) continue;
     if (task == kTaskReputation) {
+      // Capped at 9 without Cards II, the task would gain nothing (BGA does not offer it then).
+      if (!g_upstream_rules && pl.reputation >= kReputationCapWithoutCardsII && !pl.is_upgraded(kCards)) continue;
       out.push_back(opt(Head::reputation));
     } else if (task == kTaskPartnerZoo) {
       for (int c = 0; c < kNumContinents; ++c) {

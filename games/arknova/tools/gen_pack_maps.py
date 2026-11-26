@@ -136,11 +136,12 @@ def main():
             G.need(c in index, f"map {k}: {c} off the grid")
         cells = [[q, r, terrain.get((q, r), "plain"), bonus.get((q, r)), (q, r) in build2] for q, r in grid]
         tokens = []
-        abilities = dict(std_tokens)
+        abilities = {}
         for i, space in enumerate(b["bonusSpaces"]):
             repeats = space["type"] == "income"
             if "Snapping" in space["bonus"]:
                 G.need(i == 0, f"map {k}: Snapping on token {i}")
+                abilities["0"] = std_tokens["0"]
                 tokens.append([["card", 1], repeats])  # the encoder's view; the ability resolves (token_abilities)
             else:
                 tokens.append([effect(space["bonus"], f"map {k} token {i}"), repeats])

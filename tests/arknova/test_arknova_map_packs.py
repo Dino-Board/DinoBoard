@@ -75,6 +75,17 @@ def test_bga_variant_deals_only_board_game_arenas_maps():
     assert find_game_config("arknova_bga")["action_space"] == engine.game_metadata(GAME)["action_space"]
 
 
+def test_left_edge_abilities_are_bgas():
+    """A left-edge token resolves an animal ability only where BGA's map prints it: Snapping on the
+    first token of maps 9-14, a card in reputation range or from the deck on Tournament 1's."""
+    root = Path(__file__).resolve().parents[2] / "games/arknova"
+    pack = json.loads((root / "bga_pack_maps.json").read_text())["maps"]
+    maps = {m["key"]: m for m in json.loads((root / "arknova_maps.json").read_text())["maps"]}
+    for k, b in pack.items():
+        snapping = "Snapping" in b["bonusSpaces"][0]["bonus"]
+        assert ("0" in maps[f"plan{k.lower()}"]["token_abilities"]) == snapping, k
+
+
 def test_scavenging_draws_the_known_discard_cards_first():
     """A board outside the engine (BGA) has already revealed what Scavenging draws from the discard
     pile: discard_next names those cards, and the engine's draw then holds them (Tournament 1's

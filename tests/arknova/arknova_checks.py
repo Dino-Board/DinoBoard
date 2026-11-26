@@ -97,9 +97,10 @@ class HandTracker:
         self.maybe = {0: set(), 1: set()}
         self.hand = {q: own[q]["hand"] for q in (0, 1)}
 
-    def update(self, own_after, core_before, actor, name, revealed=False, harbor=False):
+    def update(self, own_after, core_before, actor, name, revealed=False, harbor=False, shown=frozenset()):
         """revealed: the move turned deck cards face up until one went to the hand (Waza, Hollywood);
-        harbor: the move completes a harbour trade (the card goes face up to the discard pile)."""
+        harbor: the move completes a harbour trade (the card goes face up to the discard pile);
+        shown: cards that entered a hand face up (Lagoon's person sponsors)."""
         idx = card_index()
         top = core_before["stack"][-1]["kind"]
         public = set(core_before["display"]) | set(core_before["base_project_deck"])
@@ -118,7 +119,7 @@ class HandTracker:
                 self.maybe[q] -= left
             self.known[q] -= left
             for c in entered:
-                if c in public or c in self.hand[1 - q] or revealed:
+                if c in public or c in self.hand[1 - q] or revealed or c in shown:
                     self.known[q].add(c)
         self.hand = after
 
@@ -149,16 +150,21 @@ def hollywood_reveals(before, after, p) -> bool:
     return bool(covered(after) - covered(before))
 
 
-def map_pack_draws(before, after) -> tuple[bool, bool]:
-    """(revealed, random) for the map rules that draw: Lagoon's new worker finds a person sponsor
-    (deck cards face up until one, to the hand), the Drawing Board's Hunter 4 area (covered now, or
-    paying at a break) reveals deck cards, Tournament 1's Scavenging 3 space shuffles the discard pile."""
+def map_pack_draws(before, after) -> tuple[bool, bool, set]:
+    """(revealed, random, shown) for the map rules that draw: the Drawing Board's Hunter 4 area
+    (covered now, or paying at a break) reveals deck cards, Tournament 1's Scavenging 3 space
+    shuffles the discard pile, Lagoon's new worker finds a person sponsor face up (shown: the
+    person sponsors that entered a hand)."""
     m = zoo_map(before["map"])
+    table, idx = cards(), card_index()
     revealed = random_ = False
+    shown = set()
+    # Lagoon's search runs when the worker comes, or later when it waited under another decision.
+    waiting = {f["player"] for f in before["stack"] if f["kind"] == "drawn_effect"}
     for p in (0, 1):
         b, a = before["players"][p], after["players"][p]
-        if m["rule"] == "lagoon" and a["workers"] > b["workers"]:
-            revealed = True
+        if m["rule"] == "lagoon" and (a["workers"] > b["workers"] or p in waiting):
+            shown |= {idx[c] for c in set(a["public_hand"]) - set(b["public_hand"]) if table[idx[c]]["human"]}
         if m["rule"] == "drawingboard":
             hunter_before, hunter_after = 3 in b["map_pack"]["quarters"], 3 in a["map_pack"]["quarters"]
             if (hunter_after and not hunter_before) or (hunter_before and after["break_pos"] < before["break_pos"]):
@@ -167,7 +173,7 @@ def map_pack_draws(before, after) -> tuple[bool, bool]:
         new = {tuple(c) for x in a["buildings"] for c in x["cells"]} - covered_before
         if any(m["cells"][qr]["bonus"] == "scavenging3" for qr in new):
             random_ = True
-    return revealed, random_
+    return revealed, random_, shown
 
 
 def turn_chain(core):
@@ -934,10 +940,11 @@ class Episode:
             gs.apply_action(action)
             self.own = {p: own_slots(gs, p) for p in (0, 1)}
             after = json.loads(gs.get_state_dict()["core_json"])
-            pack_revealed, pack_random = map_pack_draws(core, after)
+            pack_revealed, pack_random, pack_shown = map_pack_draws(core, after)
             revealed = (core["stack"][-1]["kind"] == "waza_kind" or hollywood_reveals(core, after, me)
                         or hunter_reveals(core, after, me) or pack_revealed)
-            self.tracker.update(self.own, core, me, name, revealed, harbor=state["prefix"].split()[-1:] == ["harbor"])
+            self.tracker.update(self.own, core, me, name, revealed, harbor=state["prefix"].split()[-1:] == ["harbor"],
+                                shown=pack_shown)
             # The replay in encode_state_for_perspective uses another step rng: it stays in step
             # until a random outcome (Pilfering a card, Scavenging's shuffle, a deck reshuffle, a
             # reveal from the deck).

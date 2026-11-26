@@ -273,7 +273,7 @@ const MapSource kMapSources[kNumMaps] = {
      {{EffectKind::kEffMoney, 0}, {EffectKind::kEffMoney, 0}, {EffectKind::kEffConservation, 1}},
      {{EffectKind::kEffMoney, 0}, {EffectKind::kEffReputation, 1}, {EffectKind::kEffReputation, 1}, {EffectKind::kEffConservation, 1}},
      {{EffectKind::kEffUpgrade, 1}, {EffectKind::kEffUpgrade, 1}, {EffectKind::kEffMoney, 0}},
-     {{{EffectKind::kEffCard, 1}, true, Keyword::kSNAPPING_1, -1}, {{EffectKind::kEffEnclosure, 2}, true}, {{EffectKind::kEffMoney, 5}, true}, {{EffectKind::kEffReputation, 3}, false}, {{EffectKind::kEffWorker, 1}, false}, {{EffectKind::kEffMoney, 12}, false}, {{EffectKind::kEffXtoken, 3}, false}},
+     {{{EffectKind::kEffCard, 1}, true}, {{EffectKind::kEffEnclosure, 2}, true}, {{EffectKind::kEffMoney, 5}, true}, {{EffectKind::kEffReputation, 3}, false}, {{EffectKind::kEffWorker, 1}, false}, {{EffectKind::kEffMoney, 12}, false}, {{EffectKind::kEffXtoken, 3}, false}},
      0, {},
      0, {0, 0, 0, 0, 0}, 1, 1},
 };
