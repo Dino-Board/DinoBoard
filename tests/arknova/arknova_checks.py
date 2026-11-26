@@ -125,6 +125,15 @@ class HandTracker:
         return self.known[q] - self.maybe[q]
 
 
+def hunter_reveals(before, after, p) -> bool:
+    """The move ran a Hunter (an animal with it, or Spotted Hyena Compound and a predator icon): the
+    revealed cards are public, and with one Animal card among them the engine plays its taking at once."""
+    table, idx = cards(), card_index()
+    new = [table[idx[c]] for c in set(after["players"][p]["zoo_cards"]) - set(before["players"][p]["zoo_cards"])]
+    hyena = "252" in before["players"][p]["zoo_cards"] and any("predator" in c.get("tags", []) for c in new)
+    return hyena or any("HUNTER" in c.get("abilities", []) for c in new)
+
+
 def hollywood_reveals(before, after, p) -> bool:
     """Hollywood Hills (Map 8): every H space a building covers reveals deck cards until a sponsor,
     which goes to the hand."""
@@ -868,7 +877,8 @@ class Episode:
             gs.apply_action(action)
             self.own = {p: own_slots(gs, p) for p in (0, 1)}
             after = json.loads(gs.get_state_dict()["core_json"])
-            revealed = core["stack"][-1]["kind"] == "waza_kind" or hollywood_reveals(core, after, me)
+            revealed = (core["stack"][-1]["kind"] == "waza_kind" or hollywood_reveals(core, after, me)
+                        or hunter_reveals(core, after, me))
             self.tracker.update(self.own, core, me, name, revealed, harbor=state["prefix"].split()[-1:] == ["harbor"])
             # The replay in encode_state_for_perspective uses another step rng: it stays in step
             # until a random outcome (Pilfering a card, Scavenging's shuffle, a deck reshuffle, a

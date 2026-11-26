@@ -55,7 +55,7 @@ MEANING = {
     "ab_snap": {"display": TAKE, "replenish": PICK, "skip": PICK},
     "ab_pick": {"private": TAKE},
     "ab_resist": {"private": TAKE},
-    "ab_hunter": {"list": TAKE, "skip": PICK},
+    "ab_hunter": {"list": TAKE},  # skip, with no animal revealed, is the only option: never a choice
     "ab_project": {"list": TAKE, "skip": PICK},
     "ab_boost": {"boost": PICK, "skip": PICK},
     "ab_pilfer": {"give_card": GIVE, "give_money": GIVE},
@@ -311,7 +311,7 @@ def test_public_list_longer_than_twelve_cards():
     view = engine.GameSession(GAME, seed=4242, model_path=get_test_model(GAME))
     view.apply_initial_observation(p, obs)
     legal = {names[a] for a in view.get_legal_actions()}
-    assert legal == {f"list:{j}" for j, c in enumerate(cards_now) if table[c]["type"] == "animal"} | {"skip"}
+    assert legal == {f"list:{j}" for j, c in enumerate(cards_now) if table[c]["type"] == "animal"}
     assert "list:15" in legal
     choice = view.get_ai_action(simulations=24, temperature=0.0)
     assert choice["action_info"]["name"] in legal

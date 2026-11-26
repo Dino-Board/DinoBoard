@@ -333,8 +333,17 @@ void gain(State& s, int p, EffectKind kind, int amount) {
     case EffectKind::kEffCard:
       for (int i = 0; i < amount; ++i) push(s, FrameKind::take_card, p);
       break;
-    case EffectKind::kEffClever:
-      for (int i = 0; i < amount; ++i) push(s, FrameKind::clever, p);
+    case EffectKind::kEffClever:  // as the ability (glossary): once the action is finished, its card in slot 1
+      for (int i = 0; i < amount; ++i) {
+        if (s.turn_depth > 0) {
+          Frame f;
+          f.kind = FrameKind::clever;
+          f.player = static_cast<std::int8_t>(p);
+          after_finishing(s, f);
+        } else {
+          push(s, FrameKind::clever, p);
+        }
+      }
       break;
     case EffectKind::kEffEnclosure: push_free_build(s, p, {{BuildingKind::kEnclosure, amount}}); break;
     case EffectKind::kEffKiosk:

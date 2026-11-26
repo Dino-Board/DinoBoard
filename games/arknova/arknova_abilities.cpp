@@ -76,11 +76,13 @@ void pick_apply(State& s, int fi, const Option& o, Chance&) {
 
 // ---- Hunter ------------------------------------------------------------------------
 
+// Hunter: an Animal card among the revealed ones must be added to the hand (glossary); skip only
+// discards them all when there is none.
 void hunter_options(State& s, int fi, std::vector<Option>& out) {
   for (CardIdx c : frame_list(frame(s, fi), fd::cards_n, fd::cards_list)) {
     if (is_animal(c)) out.push_back(opt(Head::take, c));
   }
-  out.push_back(opt_skip());
+  if (out.empty()) out.push_back(opt_skip());
 }
 
 void hunter_apply(State& s, int fi, const Option& o, Chance&) {
