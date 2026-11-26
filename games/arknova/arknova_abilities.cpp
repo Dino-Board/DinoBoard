@@ -144,11 +144,20 @@ void sun_apply(State& s, int fi, const Option& o, Chance&) {
   }
 }
 
+// Rescue Station's Digging (fd::dig_rescue): a discarded animal may instead go under the map (the
+// option's second field is 1). A marked display card goes to its marker, so is not rescued.
 void dig_options(State& s, int fi, std::vector<Option>& out) {
+  const int p = frame(s, fi).player;
+  const bool rescue = frame(s, fi).d[fd::dig_rescue] == 1;
   for (int i = 0; i < kDisplaySize; ++i) {
-    if (s.display[i] != kNoCard) out.push_back(opt(Head::discard_display, i));
+    if (s.display[i] == kNoCard) continue;
+    out.push_back(opt(Head::discard_display, i));
+    if (rescue && s.display_mark[i] < 0 && rescuable(s, p, s.display[i])) out.push_back(opt(Head::discard_display, i, 1));
   }
-  for (CardIdx c : s.players[frame(s, fi).player].hand_cards()) out.push_back(opt(Head::discard_hand, c));
+  for (CardIdx c : s.players[p].hand_cards()) {
+    out.push_back(opt(Head::discard_hand, c));
+    if (rescue && rescuable(s, p, c)) out.push_back(opt(Head::discard_hand, c, 1));
+  }
   out.push_back(opt(Head::done));
 }
 
@@ -157,13 +166,22 @@ void dig_apply(State& s, int fi, const Option& o, Chance& ch) {
   int p = f.player;
   --f.d[fd::left];
   if (o.head == Head::done || f.d[fd::left] <= 0) pop(s, fi);
+  const bool rescue = o.n == 2 && o.a[1] == 1;
   if (o.head == Head::discard_display) {
-    discard_from_display(s, o.a[0]);
+    if (rescue) {
+      rescue_card(s, p, take_from_display(s, o.a[0]), ch);
+    } else {
+      discard_from_display(s, o.a[0]);
+    }
     refill_display(s, ch);
   } else if (o.head == Head::discard_hand) {
     CardIdx drawn = draw_from_deck(s, ch);
     remove_from_hand(s, p, o.a[0]);
-    s.discard.push_back(o.a[0]);
+    if (rescue) {
+      rescue_card(s, p, o.a[0], ch);
+    } else {
+      s.discard.push_back(o.a[0]);
+    }
     if (drawn != kNoCard) to_hand(s, p, drawn, false);
   }
 }

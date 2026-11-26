@@ -70,7 +70,11 @@ constexpr int kTarget = kWaza + 2;
 constexpr int kBuildingType = kTarget + kTargets;
 constexpr int kPosition = kBuildingType + kBuildVerbs * kBuildingTypes;
 constexpr int kMapToken = kPosition + 3;
-constexpr int kNumGlobal = kMapToken + kNumMapTokens;
+constexpr int kTask = kMapToken + kNumMapTokens;  // Extra Shift: the task whose worker returns
+constexpr int kStored = kTask + kNumTasks;        // Caves: take back the card in this storage slot
+constexpr int kContinent = kStored + kMapPackSlots;    // Geographical Zoo: the marker's continent
+constexpr int kGeoBonus = kContinent + kNumContinents;  // Geographical Zoo: the bonus it gives
+constexpr int kNumGlobal = kGeoBonus + kNumGeoBonuses;
 // Pointer atoms. Cards have a "take" atom (play it, take it, keep it) and a "discard" atom (give
 // it up); the two are different pointer heads of the same token.
 constexpr int kHand = kNumGlobal;                        // play a hand card
@@ -78,7 +82,8 @@ constexpr int kHandDiscard = kHand + kCardSlots;         // discard / sell / tuc
 constexpr int kDisplayTake = kHandDiscard + kCardSlots;  // take or play a display card
 constexpr int kDisplayDiscard = kDisplayTake + kDisplaySize;  // discard a display card (Digging)
 constexpr int kDisplaySnap = kDisplayDiscard + kDisplaySize;  // Cards action: snap
-constexpr int kProject = kDisplaySnap + kDisplaySize;
+constexpr int kDisplayMark = kDisplaySnap + kDisplaySize;     // Mark: put a player token on it
+constexpr int kProject = kDisplayMark + kDisplaySize;
 constexpr int kZoo = kProject + kProjectSlots;  // move an animal into a new special enclosure
 constexpr int kZooGive = kZoo + kCardSlots;     // release an animal / spend a breeding token
 constexpr int kPublic = kZooGive + kCardSlots;

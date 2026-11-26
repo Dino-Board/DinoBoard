@@ -25,8 +25,10 @@ TAKE, GIVE, PICK = "take", "give", "pick"  # gain / play / keep it; give it up; 
 # frame, and what choosing it means there. An atom class is one family of logits.
 MEANING = {
     "setup_keep": {"hand_discard": GIVE},
-    "turn": {"act": PICK, "xtoken": PICK},
-    "extra_action": {"act": PICK, "xtoken": PICK, "skip": PICK},  # xtoken: Determination's any action
+    # hand_discard: Tournament 1's discard for +1 strength; stored: take back a card the Caves store
+    "turn": {"act": PICK, "xtoken": PICK, "hand_discard": GIVE, "stored": TAKE},
+    "extra_action": {"act": PICK, "xtoken": PICK, "skip": PICK,  # xtoken: Determination's any action
+                     "hand_discard": GIVE},
     "multiplier_repeat": {"act": PICK, "repeat": PICK, "skip": PICK},  # act: the strength of the repeat
     "ab_archaeologist": {"cell": PICK},  # the uncovered bonus space taken
     "act_cards": {"deck": TAKE, "display": TAKE, "snap": TAKE},
@@ -51,7 +53,8 @@ MEANING = {
     "discard_final": {"final_discard": GIVE},
     "ab_sun": {"hand_discard": GIVE, "done": PICK},
     "ab_pouch": {"hand_discard": GIVE, "done": PICK},
-    "ab_dig": {"hand_discard": GIVE, "display_discard": GIVE, "done": PICK},
+    # hand, display: the Rescue Station's Digging puts the animal under the map (into the zoo)
+    "ab_dig": {"hand_discard": GIVE, "display_discard": GIVE, "done": PICK, "hand": TAKE, "display": TAKE},
     "ab_snap": {"display": TAKE, "replenish": PICK, "skip": PICK},
     "ab_pick": {"private": TAKE},
     "ab_resist": {"private": TAKE},
@@ -62,6 +65,14 @@ MEANING = {
     "move_animals": {"zoo": PICK, "done": PICK},
     "okapi_stable": {"yes": PICK, "no": PICK},
     "waza_kind": {"kind": PICK},
+    # The Zoo Map Packs' and Tournament 1's decisions.
+    "ab_mark": {"display_mark": PICK},
+    "ab_shark": {"display_discard": GIVE, "done": PICK},
+    "ab_cut_down": {"enclosure": PICK, "skip": PICK},
+    "ab_extra_shift": {"task": PICK, "skip": PICK},
+    "ab_store": {"hand_discard": GIVE, "skip": PICK},
+    "continent_marker": {"continent": PICK, "geo_bonus": PICK, "skip": PICK},
+    "person_sponsor": {"hand": TAKE, "skip": PICK},
 }
 # The harbour (Map 4) is offered on top of any decision of the player whose turn it is: "harbor",
 # then the hand card to discard for 3 money.
@@ -86,8 +97,9 @@ def test_no_atom_means_both_taking_and_giving():
     names = atom_names()
     seen, harbor = set(), set()
     # 106: a unique building placed with the "place" atom; 477: a partner zoo gain that may be skipped;
-    # 92: Archaeologist's free placement bonus
-    for seed in [*range(75), 92, 106, 477]:
+    # 92: Archaeologist's free placement bonus; 140: a replenish between snaps; 210: Cut Down; 975: a
+    # partner zoo gain that may be skipped; 1250: Tournament 1's discard before an extra action
+    for seed in [*range(75), 92, 106, 140, 210, 477, 975, 1250]:
         gs = engine.GameSession(GAME, seed=seed)
         rng = random.Random(seed)
         while not gs.is_terminal:
@@ -113,8 +125,8 @@ def test_card_atoms_do_what_their_class_says():
     """F1, behaviour: after a "take" atom of a card the card is in my hand, my zoo or in play; after
     a "give" atom it is in the discard pile or tucked; `money` gains money and `give_money` loses it."""
     names, idx, index = atom_names(), card_index(), atom_index()
-    done = collections.Counter()
-    for seed in range(12):
+    done, pilfered = collections.Counter(), collections.Counter()
+    for seed in [*range(12), 21, 22, 26, 43, 57, 62, 65, 76, 85]:  # 21: a Hunter reveal; 22-85: Pilfering
         gs = engine.GameSession(GAME, seed=seed)
         rng = random.Random(seed)
         pending = []  # (atom class, frame, mover, card index or None, facts before)
@@ -123,7 +135,9 @@ def test_card_atoms_do_what_their_class_says():
             me, frame = gs.current_player, core["stack"][-1]
             action = rng.choice(gs.get_legal_actions())
             if frame["kind"] == "ab_pilfer":  # rare: take both answers in turn
-                action = index["give_money" if done["give_money"] <= done["give_card"] else "give_card"]
+                answer = "give_money" if pilfered["give_money"] <= pilfered["give_card"] else "give_card"
+                pilfered[answer] += 1
+                action = index[answer]
                 assert action in gs.get_legal_actions()
             cls, _, arg = names[action].partition(":")
             own = {p: own_slots(gs, p) for p in (0, 1)}
@@ -139,7 +153,9 @@ def test_card_atoms_do_what_their_class_says():
                 card = own[me]["private"][k][int(arg)]
             elif cls == "list" and frame["kind"] == "ab_hunter":
                 card = idx[frame["data"]["cards"][int(arg)]]
-            pending.append((cls, frame["kind"], me, card, core, own))
+            # A marked display card that is discarded goes to the hand of the player who marked it.
+            marker = core["display_marks"][int(arg)] if cls == "display_discard" else None
+            pending.append((cls, frame["kind"], me, card, core, own, marker))
             gs.apply_action(action)
             if gs.get_state_dict()["prefix"]:
                 continue  # the option is not complete yet
@@ -147,7 +163,7 @@ def test_card_atoms_do_what_their_class_says():
             own_after = {p: own_slots(gs, p) for p in (0, 1)}
             reshuffled = len(after["deck"]) > len(core["deck"])
             harbor = pending[0][0] == "harbor"  # the card goes to the discard pile whatever the decision
-            for cls, kind, p, card, before, own_before in pending:
+            for cls, kind, p, card, before, own_before, marker in pending:
                 mine, cid = after["players"][p], cards()[card]["id_str"] if card is not None else None
                 in_play = card is not None and (cid in mine["zoo_cards"] or cid in after["projects"])
                 if cls in ("hand", "display", "snap", "private", "list") and card is not None:
@@ -155,9 +171,13 @@ def test_card_atoms_do_what_their_class_says():
                     assert kept, f"{cls} in {kind}: card {cid} was not gained (seed {seed})"
                     assert cid not in after["discard"] and card not in own_after[p]["tucked"]
                 elif cls in ("hand_discard", "display_discard"):
-                    assert card not in own_after[p]["hand"] and not in_play
+                    assert (card not in own_after[p]["hand"] or marker == p) and not in_play
                     if kind == "ab_pouch" and not harbor:
                         assert card in own_after[p]["tucked"]
+                    elif kind == "ab_store" and not harbor:
+                        assert card in own_after[p]["stored"], f"ab_store: card {cid} is not stored"
+                    elif marker is not None:
+                        assert card in own_after[marker]["hand"], f"{cls} in {kind}: marked card {cid} not with its marker"
                     elif not reshuffled:
                         assert cid in after["discard"], f"{cls} in {kind}: card {cid} is not on the discard pile"
                 elif cls == "final_discard":
@@ -251,6 +271,9 @@ def _pack_deck_index(pack):
             i += 1 + pack[i]    # tokens on each action card
         i += 1 + 2 * pack[i]    # card tokens
         i += 3
+        i += 1                  # continent markers
+        i += 1 + pack[i]        # rescued animals
+        i += 4                  # stored cards, concealed slots, covered areas, hand boost
     return i + 1                # after the player to move
 
 
@@ -297,7 +320,7 @@ def test_public_list_longer_than_twelve_cards():
 
     obs = truth.extract_initial_observation(p)
     pack = obs["public_snapshot"]["public"][1]
-    assert pack[0] == 0xA47, "the packed public state changed: update _pack_deck_index"
+    assert pack[0] == 0xA48, "the packed public state changed: update _pack_deck_index"
     deck_at = _pack_deck_index(pack)
     assert pack[deck_at] == len(core["deck"])
     n_prefix = len(truth.get_state_dict()["prefix"].split())

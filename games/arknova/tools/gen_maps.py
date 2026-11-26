@@ -34,13 +34,14 @@ EFFECTS = {"money": "kEffMoney", "appeal": "kEffAppeal", "xtoken": "kEffXtoken",
            "rescue": "kEffRescue", "store": "kEffStore", "extra_shift": "kEffExtraShift", "strength": "kEffStrength",
            "mark": "kEffMark", "wave": "kEffWave", "shark_attack": "kEffSharkAttack", "adapt": "kEffAdapt",
            "cut_down": "kEffCutDown", "animal_magnet": "kEffAnimalMagnet", "continent_marker": "kEffContinentMarker",
-           "find_person": "kEffFindPerson", "person_sponsor": "kEffPersonSponsor"}
+           "find_person": "kEffFindPerson", "person_sponsor": "kEffPersonSponsor", "scavenging": "kEffScavenging"}
 BONUSES = {None: "kPBNone", "money5": "kPBMoney5", "money10": "kPBMoney10", "xtoken": "kPBXtoken", "rep2": "kPBRep2",
            "card": "kPBCard", "clever": "kPBClever", "money2": "kPBMoney2", "rep1": "kPBRep1", "kiosk": "kPBKiosk",
            "worker1": "kPBWorker1", "partner_zoo": "kPBPartnerZoo", "university": "kPBUniversity",
            "multiplier": "kPBMultiplier", "sponsor_for_money": "kPBSponsorForMoney", "rescue": "kPBRescue",
            "store": "kPBStore", "extra_shift": "kPBExtraShift", "strength": "kPBStrength", "mark": "kPBMark",
-           "appeal1": "kPBAppeal1", "wave": "kPBWave", "shark_attack": "kPBSharkAttack", "adapt": "kPBAdapt"}
+           "appeal1": "kPBAppeal1", "wave": "kPBWave", "shark_attack": "kPBSharkAttack", "adapt": "kPBAdapt",
+           "scavenging3": "kPBScavenging3"}
 KINDS = {"enclosure": "kEnclosure", "kiosk": "kKiosk"}
 MAX_AREAS = 5
 # Left-edge tokens whose reward is an animal ability, as Board Game Arena's MAPS_DATA has them:

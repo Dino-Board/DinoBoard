@@ -21,7 +21,8 @@ from arknova_reference import (GAME, ROOT, BGA_PROMOS, atom_index, atom_names, c
                                layout, own_slots, sponsor_endgame, target_appeal)
 
 # Features that need a rare situation (Hypnosis, Snapping 2, Dominance, the Engineer, an extra
-# action offered as a decision, a donation followed by another decision, ...). The games below do
+# action offered as a decision, a donation followed by another decision, a conservation project
+# stored in the Caves, ...). The games below do
 # not reach them with a non-zero value; they are compared whenever they occur, and the larger runs
 # of the same checker (see docs/games/arknova_api.md, Verification) cover them; Dominance has
 # test_dominance_offers_only_the_primates_project.
@@ -29,7 +30,7 @@ RARE = {("decision", "turn_borrowed"), ("decision", "extra_from_opponent"), ("de
         ("decision", "replenish_between"), ("decision", "only_one"), ("decision", "turn_xtoken"),
         ("decision", "engineer_used"), ("decision", "chosen_map_token"), ("decision", "optional"),
         ("decision", "extra_actions"), ("decision", "donated"), ("global", "final_turns"),
-        ("project", "public_list"), ("project", "opp_maybe_tucked"), ("enclosure", "target")}
+        ("project", "public_list"), ("project", "opp_maybe_tucked"), ("enclosure", "target"), ("project", "my_stored")}
 
 
 def test_every_token_decodes_to_the_state():
@@ -39,12 +40,13 @@ def test_every_token_decodes_to_the_state():
     the ground-truth state bit for bit, and the other player's view of the same state passes the
     same checks and mirrors this one."""
     ck = checks.Checker()
-    # The seed picks the map: these games are on maps 4, 8, 7, 1, 6, 5 (random) and 8, 2, 6, 8a
-    # (greedy), so that every map rule feature is reached; greedy 49 and 50 reach end-of-game appeal,
-    # random 48 Venom and a project in a private list, greedy 69 a chosen reward.
-    for seed in (19, 12, 9, 31, 0, 36, 48):
+    # The seed picks the map, so that every map rule feature is reached: random 19 and 9 are on map 9,
+    # 12 and 205 on T1 (205 discards for strength), 0 on 10, 36 on 14, 8 on 4, 58 on 5, 39 on 6, 6 on
+    # 11, 22 on 12; greedy 21 on 13, 47 on 2 (and chooses a reward). Random 48 reaches Venom and a
+    # project in a private list, greedy 49 and 50 end-of-game appeal, random 39 Constriction.
+    for seed in (19, 12, 9, 31, 0, 36, 48, 8, 58, 39, 6, 22, 205):
         checks.check_episode(ck, seed, "random", stride=5, perspective_every=6)
-    for seed in (21, 25, 49, 50, 69):
+    for seed in (21, 25, 49, 50, 69, 47):
         checks.check_episode(ck, seed, "greedy", stride=3, perspective_every=8)
     assert ck.decisions > 600
     assert not ck.unchecked(), f"features never compared: {ck.unchecked()}"
@@ -54,13 +56,13 @@ def test_every_token_decodes_to_the_state():
 
 def test_dominance_offers_only_the_primates_project():
     """decision.only_one. A Dominance animal played while base project 108 (primates) is still in the
-    base project pile lets its owner take only that project (abilities: kDOMINANCE). Greedy game 102
+    base project pile lets its owner take only that project (abilities: kDOMINANCE). Greedy game 0
     reaches it: there the flag is set, the legal atoms are that project's list atom and skip, and the
     whole encoding passes the full check; in every other decision of the game the flag is 0."""
     table, idx = cards(), card_index()
     dominance = next(c["id_str"] for c in table if "DOMINANCE" in c["abilities"])
     ck = checks.Checker()
-    episode = checks.Episode(102, "greedy")
+    episode = checks.Episode(0, "greedy")
     found = 0
     for n, sample, me, state, core, legal in episode.steps():
         toks = decode(sample["features"])
@@ -110,7 +112,7 @@ def test_discard_and_unseen_pools_account_for_every_card():
                    core["base_project_deck"] + core["projects"] + core["players"][0]["zoo_cards"] +
                    core["players"][1]["zoo_cards"]]
         visible += [idx[c] for f in core["stack"] if f["kind"] == "ab_hunter" for c in f["data"]["cards"]]
-        visible += list(own[me]["hand"]) + own[me]["tucked"] + [c for fr in own[me]["private"] for c in fr]
+        visible += list(own[me]["hand"]) + own[me]["tucked"] + own[me]["stored"] + [c for fr in own[me]["private"] for c in fr]
         visible += sorted(tracker.shown(opp) | tracker.maybe[opp])
         visible = [c for c in visible if c in regular]
         unseen = sorted(regular - set(discard) - set(visible))
@@ -121,7 +123,7 @@ def test_discard_and_unseen_pools_account_for_every_card():
         assert (from_encoder + by_type(visible) == totals).all(), f"decision {n}"
         assert (np.rint(g["unseen_type"] * totals) == by_type(unseen)).all()
         # The truth: the deck and the opponent's hidden regular cards are the unseen pool.
-        hidden = ((own[opp]["hand"] - tracker.shown(opp)) | set(own[opp]["tucked"]) |
+        hidden = ((own[opp]["hand"] - tracker.shown(opp)) | set(own[opp]["tucked"]) | set(own[opp]["stored"]) |
                   {c for fr in own[opp]["private"] for c in fr}) - tracker.maybe[opp]
         hidden &= regular
         assert hidden <= set(unseen) and len(unseen) == len(core["deck"]) + len(hidden), f"decision {n}"
@@ -153,7 +155,7 @@ def test_pools_do_not_read_hidden_cards():
                     world._force_write_field("hand", [1 - p, c], 0)
                 for c in noise.sample(sorted(set(pool) - hand), len(hand)):
                     world._force_write_field("hand", [1 - p, c], 1)
-                for field, n in (("final_cards", 6), ("tucked", 24), ("final_known", 4)):
+                for field, n in (("final_cards", 6), ("tucked", 24), ("final_known", 11), ("stored", 3)):
                     for i in range(n):
                         world._force_write_field(field, [1 - p, i], noise.choice(pool))
                 for k in range(4):
@@ -198,6 +200,7 @@ def test_layout_is_what_the_network_is_built_from():
     assert where == {
         "hand": {("hand", 0)}, "hand_discard": {("hand", 1)}, "zoo": {("zoo", 0)}, "zoo_give": {("zoo", 1)},
         "display": {("display", 0)}, "display_discard": {("display", 1)}, "snap": {("display", 2)},
+        "display_mark": {("display", 3)},
         "project": {("project", 0)}, "list": {("public_list", 0)}, "private": {("private_list", 0)},
         "final_discard": {("final", 1)}, "enclosure": {("enclosure", 0)}, "cell": cell}
     assert meta["action_space"] == json.loads((ROOT / "games/arknova/config/game.json").read_text())[
@@ -355,7 +358,7 @@ def test_search_does_not_depend_on_hidden_slots(with_belief, tmp_path):
                     for c in range(len(table)):
                         if c not in shown:
                             garbage._force_write_field("hand", [1 - p, c], noise.randint(0, 1))
-                    for field, n in (("final_cards", 6), ("tucked", 24), ("final_known", 4)):
+                    for field, n in (("final_cards", 6), ("tucked", 24), ("final_known", 11), ("stored", 3)):
                         for i in range(n):
                             garbage._force_write_field(field, [1 - p, i], noise.randint(-1, len(table) - 1))
                     for k in range(4):

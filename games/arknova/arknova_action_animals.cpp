@@ -302,6 +302,8 @@ void animals_apply(State& s, int fi, const Option& o, Chance& ch) {
   gain(s, p, EffectKind::kEffReputation, c.reputation);
   sr::on_animal_played(s, p, m.card);
   if (filled) map_enclosure_filled(s, p, m.building);
+  // A Flock Animal joining an occupied standard enclosure has no enclosure of its own.
+  if (filled || pl.zoo.buildings[m.building].kind != BuildingKind::kEnclosure) map_animal_housed(s, p, m.card, m.building);
   resolve_abilities(s, p, m.card, ch);
   IconCounts added{};
   const auto& ci = card_icons(m.card);

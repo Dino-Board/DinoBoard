@@ -153,6 +153,7 @@ Effect placement_bonus_effect(PlacementBonus b) {
     case kPBWave: return {EffectKind::kEffWave, 1};
     case kPBSharkAttack: return {EffectKind::kEffSharkAttack, 1};
     case kPBAdapt: return {EffectKind::kEffAdapt, 1};
+    case kPBScavenging3: return {EffectKind::kEffScavenging, 3};
     default: throw std::invalid_argument("arknova: bad placement bonus");
   }
 }

@@ -76,6 +76,9 @@ std::vector<std::uint8_t> known_cards(const ArknovaState& st, int observer, bool
     for (int i = 0; i < kMaxTucked; ++i) {
       if (view.visible(kFieldTucked, {p, i}, st.tucked[p][i])) mark(st.tucked[p][i]);
     }
+    for (int i = 0; i < kMapPackSlots; ++i) {
+      if (view.visible(kFieldStored, {p, i}, st.stored[p][i])) mark(st.stored[p][i]);
+    }
     for (int k = 0; k < kPrivateFrames; ++k) {
       for (int j = 0; j < kPrivateCards; ++j) {
         if (view.visible(kFieldPrivateCards, {p, k, j}, st.private_cards[p][k][j])) mark(st.private_cards[p][k][j]);
@@ -200,6 +203,7 @@ std::vector<int> flat_owner_slots(const ArknovaState& st, int p) {
   out.insert(out.end(), st.tucked[p], st.tucked[p] + kMaxTucked);
   out.insert(out.end(), &st.private_cards[p][0][0], &st.private_cards[p][0][0] + kPrivateFrames * kPrivateCards);
   out.insert(out.end(), st.final_known[p], st.final_known[p] + kFinalKnown);
+  out.insert(out.end(), st.stored[p], st.stored[p] + kMapPackSlots);
   return out;
 }
 
@@ -231,6 +235,7 @@ void ArknovaBeliefTracker::init(IGameState& state, int perspective, const AnyMap
   put(st.tucked[p], kMaxTucked, at);
   put(&st.private_cards[p][0][0], kPrivateFrames * kPrivateCards, at);
   put(st.final_known[p], kFinalKnown, at);
+  put(st.stored[p], kMapPackSlots, at);
   st.mark_core_stale();
 }
 
@@ -298,6 +303,9 @@ void ArknovaBeliefTracker::sample_world(ArknovaState& st, int observer, const Ha
   std::shuffle(tucked_cards.begin(), tucked_cards.end(), rng);
   for (int i = 0; i < kMaxTucked; ++i) {
     st.tucked[q][i] = static_cast<std::int16_t>(i < opp.n_tucked ? tucked_cards[static_cast<std::size_t>(i)] : kEmptySlot);
+  }
+  for (int i = 0; i < kMapPackSlots; ++i) {
+    st.stored[q][i] = static_cast<std::int16_t>(i < opp.n_stored ? regular.draw(rng) : kEmptySlot);
   }
   for (int i = 0; i < kMaxFinalCards; ++i) {
     st.final_cards[q][i] = static_cast<std::int16_t>(i < opp.n_final ? endgame.draw(rng) : kEmptySlot);

@@ -226,6 +226,7 @@ void move_apply(State& s, int fi, const Option& o, Chance&) {
   h->building = static_cast<std::int8_t>(building);
   h->used = static_cast<std::int8_t>(spaces);
   if (movable(s, p, building).empty()) pop(s, fi);
+  map_animal_housed(s, p, o.a[0], building);
 }
 
 }  // namespace

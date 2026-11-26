@@ -84,7 +84,10 @@ ActionId ArknovaRules::public_action(const IGameState& state_before, ActionId ac
   const bool tuck_atom = action >= atom::kHandDiscard && action < atom::kHandDiscard + kCardSlots;
   // After `harbor` the card goes face up to the discard pile, whatever decision is pending.
   const bool harbor = !st.prefix.empty() && st.prefix.back() == atom::kHarbor;
-  if (tuck_atom && !harbor && s.stack_n && s.top().kind == FrameKind::ab_pouch) return atom::kHiddenHandCard;
+  // Pouch tucks the card face down; the Caves store it face down.
+  if (tuck_atom && !harbor && s.stack_n && (s.top().kind == FrameKind::ab_pouch || s.top().kind == FrameKind::ab_store)) {
+    return atom::kHiddenHandCard;
+  }
   return action;
 }
 

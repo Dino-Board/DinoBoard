@@ -324,6 +324,7 @@ void gain(State& s, int p, EffectKind kind, int amount) {
         if (pl.workers < kMaxWorkers) {
           ++pl.workers;
           apply_effect(s, p, pl.zoo.def().worker_slots[pl.workers - 1]);
+          if (pl.zoo.def().rule == MapRule::kLagoon) map_pack_gain(s, p, EffectKind::kEffFindPerson, 1);
         }
       }
       break;
@@ -360,8 +361,9 @@ void gain(State& s, int p, EffectKind kind, int amount) {
     case EffectKind::kEffStrength: case EffectKind::kEffMark: case EffectKind::kEffWave:
     case EffectKind::kEffSharkAttack: case EffectKind::kEffAdapt: case EffectKind::kEffCutDown:
     case EffectKind::kEffAnimalMagnet: case EffectKind::kEffContinentMarker: case EffectKind::kEffFindPerson:
-    case EffectKind::kEffPersonSponsor:
-      engine_error(std::string("gain: ") + kEffectKindNames[static_cast<int>(kind)] + " is not implemented yet");
+    case EffectKind::kEffPersonSponsor: case EffectKind::kEffScavenging:
+      map_pack_gain(s, p, kind, amount);
+      break;
     case EffectKind::kNumEffectKinds: engine_error("gain: bad effect kind");
   }
 }
@@ -468,11 +470,12 @@ int place_building(State& s, int p, BuildingKind kind, int size, CellMask cells,
   std::vector<PlacementBonus> bonuses;
   int b = pl.zoo.place(kind, size, cells, name, &bonuses);
   after_build_hooks(s, p, b, ch);
+  map_quarters_changed(s, p, ch);
   if (kind == BuildingKind::kPavilion) {
     FeedCause cause([] { return std::string("[\"build\",\"pavilion\"]"); });
     gain(s, p, EffectKind::kEffAppeal, 1);
   }
-  if (!pl.full_cover_scored && pl.zoo.is_fully_covered()) {
+  if (!pl.full_cover_scored && pl.zoo.def().rule != MapRule::kDrawingBoard && pl.zoo.is_fully_covered()) {
     pl.full_cover_scored = true;
     FeedCause cause([] { return std::string("[\"build\",\"cover\"]"); });
     gain(s, p, EffectKind::kEffAppeal, kFullCoverAppeal);

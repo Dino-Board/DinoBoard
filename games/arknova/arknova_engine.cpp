@@ -72,6 +72,7 @@ Registry& registry() {
     register_relocate_frames();
     register_ability_frames();
     register_sponsor_effect_frames();
+    register_map_pack_frames();
     Registry& r = registry_storage();
     for (int k = 0; k < static_cast<int>(FrameKind::kNumFrameKinds); ++k) {
       FrameKind kind = static_cast<FrameKind>(k);
@@ -129,7 +130,7 @@ int find_frame(const State& s, std::uint16_t uid) {
 
 int Player::strength(int action) const {
   for (int i = 0; i < kNumActions; ++i) {
-    if (slots[i] == action) return i + 1;
+    if (slots[i] == action) return zoo.def().rule == MapRule::kAI ? ai_strength(*this, i + 1) : i + 1;
   }
   engine_error("strength: action not in slots");
 }
@@ -195,7 +196,9 @@ const ProjectTokens* State::tokens_of(CardIdx project) const {
 namespace {
 
 constexpr int kSetupDraw = 8;
-constexpr int kSetupKeep = 4;
+// The setup discards 4 and keeps the rest: 4 of 8, or 5 of 9 with Lagoon's person sponsor.
+constexpr int kSetupDiscard = 4;
+constexpr int kMaxSetupKeep = 8;
 
 template <class T>
 void rng_shuffle(std::vector<T>& v, std::mt19937_64& rng) {
@@ -224,6 +227,7 @@ void new_game(State& s, std::mt19937_64& rng, int map) {
     pl.slots[0] = kAnimals;
     for (int k = 0; k < 4; ++k) pl.slots[k + 1] = static_cast<std::int8_t>(others[k]);
     pl.appeal = static_cast<std::int16_t>(i);
+    if (md.rule == MapRule::kGeographical) pl.continent_markers = static_cast<std::uint8_t>((1u << md.n_areas) - 1);
   }
   std::vector<CardIdx> endgame, base;
   for (int c = 0; c < num_cards(); ++c) {
@@ -274,6 +278,7 @@ void new_game(State& s, std::mt19937_64& rng, int map) {
       to_hand(s, p, s.deck.back(), false);
       s.deck.pop_back();
     }
+    lagoon_setup(s, p);
     push(s, FrameKind::setup_keep, p);
   }
 }
@@ -282,19 +287,21 @@ namespace {
 
 void setup_options(State& s, int fi, std::vector<Option>& out) {
   std::vector<CardIdx> hand = s.players[frame(s, fi).player].hand_cards();
-  int n = static_cast<int>(hand.size());
-  if (n < kSetupKeep) return;
-  int idx[kSetupKeep] = {0, 1, 2, 3};
+  const int n = static_cast<int>(hand.size());
+  const int keep = n - kSetupDiscard;
+  if (keep < 1 || keep > kMaxSetupKeep) return;
+  int idx[kMaxSetupKeep];
+  for (int k = 0; k < keep; ++k) idx[k] = k;
   while (true) {
     Option o = opt(Head::keep);
-    o.n = kSetupKeep;
-    for (int k = 0; k < kSetupKeep; ++k) o.a[k] = hand[idx[k]];
+    o.n = static_cast<std::int8_t>(keep);
+    for (int k = 0; k < keep; ++k) o.a[k] = hand[idx[k]];
     out.push_back(o);
-    int k = kSetupKeep - 1;
-    while (k >= 0 && idx[k] == n - kSetupKeep + k) --k;
+    int k = keep - 1;
+    while (k >= 0 && idx[k] == n - keep + k) --k;
     if (k < 0) break;
     ++idx[k];
-    for (int j = k + 1; j < kSetupKeep; ++j) idx[j] = idx[j - 1] + 1;
+    for (int j = k + 1; j < keep; ++j) idx[j] = idx[j - 1] + 1;
   }
 }
 
@@ -302,7 +309,7 @@ void setup_apply(State& s, int fi, const Option& o, Chance&) {
   int p = frame(s, fi).player;
   pop(s, fi);
   for (CardIdx c : s.players[p].hand_cards()) {
-    if (std::find(o.a, o.a + kSetupKeep, c) != o.a + kSetupKeep) continue;
+    if (std::find(o.a, o.a + o.n, c) != o.a + o.n) continue;
     remove_from_hand(s, p, c);
     s.discard.push_back(c);
   }
@@ -323,17 +330,18 @@ void turn_options_impl(State& s, int fi, std::vector<Option>& out, bool charge_v
   std::size_t n0 = out.size();
   std::int8_t slots[kNumActions];
   std::copy(pl.slots, pl.slots + kNumActions, slots);
+  const int boost = hand_boost_strength(pl);
   for (int action : slots) {
     int cost = poisoned && !has_token(s, p, action, TokenKind::kVenom) ? kVenomCost : 0;
     if (charge_venom && pl.money < cost) continue;
-    int base = card_strength(s, p, action);
+    int base = card_strength(s, p, action) + boost;
     int paid = std::min<int>(pl.money, cost);
     pl.money -= paid;
     for (int x = 0; x <= pl.xtokens; ++x) {
       if (base + x >= 1 && r.feasible[action](s, p, base + x)) out.push_back(opt(Head::act, action, x));
     }
     pl.money += paid;
-    if (pl.xtokens < kMaxXtokens) out.push_back(opt(Head::xtoken, action));
+    if (pl.xtokens < kMaxXtokens && !boost) out.push_back(opt(Head::xtoken, action));
   }
   if (out.size() == n0 && charge_venom) turn_options_impl(s, fi, out, false);
 }
@@ -361,7 +369,8 @@ void turn_apply(State& s, int fi, const Option& o, Chance&) {
   bool xtoken = o.head == Head::xtoken;
   pl.last_action = xtoken ? kLastActionXtoken : static_cast<std::int8_t>(action);
   if (has_venom(s, p) && !has_token(s, p, action, TokenKind::kVenom)) pl.money -= std::min<int>(pl.money, kVenomCost);
-  int strength = use_card(s, p, action);
+  int strength = use_card(s, p, action) + hand_boost_strength(pl);
+  spend_hand_boost(pl);
   s.turn_depth = 1;
   s.turns[0] = TurnCtx{};
   s.turns[0].action = static_cast<std::int8_t>(action);
@@ -472,12 +481,13 @@ void extra_options(State& s, int fi, std::vector<Option>& out) {
   int p = f.player, owner = f.d[fd::extra_owner];
   const Registry& r = registry();
   std::size_t n0 = out.size();
-  if (xtoken_allowed(s, f)) {
+  const int boost = hand_boost_strength(s.players[p]);
+  if (xtoken_allowed(s, f) && !boost) {
     for (int action = 0; action < kNumActions; ++action) out.push_back(opt(Head::xtoken, action));
   }
   for (int action = 0; action < kNumActions; ++action) {
     if (!(f.d[fd::extra_actions] >> action & 1)) continue;
-    int base = card_strength(s, owner, action);
+    int base = card_strength(s, owner, action) + boost;
     if (owner != p) {
       s.borrowed_action = static_cast<std::int8_t>(action);
       s.borrowed_upgraded = s.players[owner].is_upgraded(action);
@@ -506,6 +516,10 @@ void extra_apply(State& s, int fi, const Option& o, Chance&) {
     pl.money -= std::min<int>(pl.money, kVenomCost);
   }
   int strength = use_card(s, owner, action) + x;
+  if (!xtoken) {
+    strength += hand_boost_strength(pl);
+    spend_hand_boost(pl);
+  }
   pl.xtokens -= x;
   if (s.turn_depth >= kMaxTurnDepth) engine_error("turn context overflow");
   TurnCtx& t = s.turns[s.turn_depth++];
@@ -557,6 +571,7 @@ void next_turn(State& s, int fi, Chance&) {
   }
   s.current = static_cast<std::int8_t>((s.current + 1) % kPlayers);
   s.harbor_used = false;
+  s.players[s.current].hand_boost = kBoostFree;
   push(s, FrameKind::turn, s.current);
 }
 
@@ -619,6 +634,7 @@ void break_auto(State& s, int fi, Chance& ch) {
     }
     FeedCause cause([] { return std::string("[\"income\",\"map\"]"); });
     map_break_income(s, p);
+    map_pack_break_income(s, p, ch);
   } else {
     pop(s, fi);
     s.break_pos = 0;
@@ -713,6 +729,7 @@ std::vector<Option> legal_options(State& s) {
   if (s.over) return {};
   std::vector<Option> out = frame_options(s);
   harbor_options(s, out);
+  map_pack_turn_options(s, out);
   return out;
 }
 
@@ -753,6 +770,8 @@ void step(State& s, const Option& option, Chance& ch) {
   });
   if (option.head == Head::harbor) {
     harbor_apply(s, option);
+  } else if (is_map_pack_turn_option(option)) {
+    map_pack_turn_apply(s, option);
   } else {
     registry().apply[static_cast<int>(s.stack[fi].kind)](s, fi, option, ch);
   }

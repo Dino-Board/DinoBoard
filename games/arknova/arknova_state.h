@@ -7,7 +7,8 @@
 //     of any size needs no slots. Owners see their row; the opponent sees the entries of cards it
 //     saw enter the hand (Player::hand_known). Hand sizes are public (part of `public`).
 //   - final_cards, tucked (Pouch), private_cards (the cards of the owner's ab_pick / ab_resist
-//     frames) and final_known (endgame cards the owner returned to the final deck): owner only.
+//     frames), final_known (endgame cards the owner returned to the final deck) and stored (Caves'
+//     face-down storage): owner only.
 //   - deck and final_deck contents are not schema slots; their sizes are public. The tracker
 //     resamples them (randomize_unseen).
 // Everything else is public and travels as one packed integer vector (field `public`).
@@ -33,7 +34,7 @@ namespace board_ai::arknova {
 
 constexpr int kPrivateFrames = 4;  // private frames of one player on the stack at once
 constexpr int kPrivateCards = 6;
-constexpr int kFinalKnown = 4;
+constexpr int kFinalKnown = 11;  // Adapt may put back any number of them
 constexpr int kMaxPrefix = 6;
 constexpr std::int16_t kEmptySlot = -1;
 // Placeholder written into masked hidden card slots (card ids are int16).
@@ -47,6 +48,7 @@ enum ArknovaField : viz::FieldId {
   kFieldTucked,
   kFieldPrivateCards,
   kFieldFinalKnown,
+  kFieldStored,
 };
 
 class ArknovaState final : public CloneableState<ArknovaState> {
@@ -91,6 +93,7 @@ class ArknovaState final : public CloneableState<ArknovaState> {
   std::int16_t tucked[kPlayers][kMaxTucked];
   std::int16_t private_cards[kPlayers][kPrivateFrames][kPrivateCards];
   std::int16_t final_known[kPlayers][kFinalKnown];
+  std::int16_t stored[kPlayers][kMapPackSlots];
   std::vector<ActionId> prefix;
 
  private:

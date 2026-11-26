@@ -118,7 +118,10 @@ std::vector<CardIdx> releasable(const Player& pl, CardIdx project, int slot_inde
   std::vector<CardIdx> found;
   for (int i = 0; i < pl.n_zoo_cards; ++i) {
     CardIdx c = pl.zoo_cards[i];
-    if (!is_animal(c) || !project_icon_is_plain(pj.proj_icon) || !card(c).tags[project_icon(pj.proj_icon)]) continue;
+    if (!is_animal(c) || is_rescued(pl, c) || !project_icon_is_plain(pj.proj_icon) ||
+        !card(c).tags[project_icon(pj.proj_icon)]) {
+      continue;
+    }
     if (card(c).size >= lo && card(c).size <= hi) found.push_back(c);
   }
   return found;
@@ -618,7 +621,8 @@ std::vector<int> archaeologist_spaces(const Zoo& zoo) {
   const CellMask covered = zoo.covered();
   for (int c = 0; c < kMapCells; ++c) {
     const PlacementBonus b = zoo.cell(c).bonus;
-    if (b == kPBNone || (covered >> c & 1) || seen[b]) continue;
+    // Artificial Intelligence's strength spaces conceal card slots; they are not placement bonuses.
+    if (b == kPBNone || b == kPBStrength || (covered >> c & 1) || seen[b]) continue;
     seen[b] = true;  // spaces with the same bonus are the same choice
     out.push_back(c);
   }

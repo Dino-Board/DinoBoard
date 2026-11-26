@@ -1,5 +1,5 @@
 {
- "_doc": "Maps 9-14 (Zoo Map Packs 1 and 2) of Board Game Arena's Ark Nova (MAPS_DATA of its client, release 261104-1014): cells as BGA's x_row (column, doubled row), terrains, Build II spaces, placement bonuses, the left-edge spaces (bonusSpaces) and the university / partner zoo / worker / linked bonuses keyed by the count reached. Read by tools/gen_pack_maps.py.",
+ "_doc": "Maps 9-14 (Zoo Map Packs 1 and 2) and the Tournament 1 map (T1) of Board Game Arena's Ark Nova (MAPS_DATA of its client, release 261104-1014): cells as BGA's x_row (column, doubled row), terrains, Build II spaces, placement bonuses, the left-edge spaces (bonusSpaces) and the university / partner zoo / worker / linked bonuses keyed by the count reached. Read by tools/gen_pack_maps.py.",
  "maps": {
   "9": {
    "id": "9",
@@ -819,6 +819,150 @@
     }
    },
    "facPartnerZooLinkedBonuses": []
+  },
+  "T1": {
+   "id": "T1",
+   "name": "Tournament 1",
+   "desc": "Active if <HAND-CARDS> unlocked: once during your turn, you may discard 1 hand card to increase the strength of an action by <STRENGTH:+1>",
+   "asset": "T1",
+   "terrains": {
+    "Water": [
+     "1_4",
+     "4_3",
+     "5_2",
+     "7_6",
+     "7_12",
+     "8_3",
+     "8_5",
+     "8_11"
+    ],
+    "Rock": [
+     "0_1",
+     "0_9",
+     "0_11",
+     "1_0",
+     "2_5",
+     "3_6",
+     "4_9",
+     "7_10"
+    ]
+   },
+   "upgradeNeeded": [
+    "2_7",
+    "5_0",
+    "5_4"
+   ],
+   "bonuses": {
+    "1_2": {
+     "xtoken": 1
+    },
+    "1_6": {
+     "take-in-range-or-deck": 1
+    },
+    "1_10": {
+     "money": 5
+    },
+    "3_0": {
+     "xtoken": 1
+    },
+    "3_4": {
+     "Scavenging": 3
+    },
+    "4_7": {
+     "bonus-sponsor": 1
+    },
+    "4_11": {
+     "Mark": 1
+    },
+    "6_5": {
+     "take-in-range-or-deck": 1
+    },
+    "6_9": {
+     "Clever": 1
+    },
+    "7_2": {
+     "money": 5
+    },
+    "8_9": {
+     "take-in-range-or-deck": 1
+    }
+   },
+   "bonusSpaces": [
+    {
+     "type": "income",
+     "bonus": {
+      "take-in-range-or-deck": 1
+     }
+    },
+    {
+     "type": "income",
+     "bonus": {
+      "size-2": 1
+     }
+    },
+    {
+     "type": "income",
+     "bonus": {
+      "money": 5
+     }
+    },
+    {
+     "type": "bonus",
+     "bonus": {
+      "reputation": 3
+     }
+    },
+    {
+     "type": "bonus",
+     "bonus": {
+      "add-worker": 1
+     }
+    },
+    {
+     "type": "bonus",
+     "bonus": {
+      "money": 12
+     }
+    },
+    {
+     "type": "bonus",
+     "bonus": {
+      "xtoken": 3
+     }
+    }
+   ],
+   "workersBonuses": {
+    "1": {
+     "reputation": 1
+    },
+    "2": {
+     "reputation": 1
+    },
+    "3": {
+     "conservation": 1
+    }
+   },
+   "partnerZooBonuses": {
+    "3": {
+     "add-worker": 1
+    },
+    "4": {
+     "conservation": 1
+    }
+   },
+   "facBonuses": {
+    "3": {
+     "conservation": 1
+    }
+   },
+   "facPartnerZooLinkedBonuses": {
+    "1": {
+     "upgrade-card": 1
+    },
+    "2": {
+     "upgrade-card": 1
+    }
+   }
   }
  }
 }

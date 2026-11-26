@@ -81,13 +81,13 @@ enum class EffectKind : std::uint8_t {
   kEffCard, kEffClever, kEffEnclosure, kEffKiosk, kEffMultiplier, kEffPartnerZoo, kEffUniversity,
   kEffSponsorForMoney, kEffSpecialEnclosure, kEffRescue, kEffStore, kEffExtraShift, kEffStrength, kEffMark,
   kEffWave, kEffSharkAttack, kEffAdapt, kEffCutDown, kEffAnimalMagnet, kEffContinentMarker, kEffFindPerson,
-  kEffPersonSponsor, kNumEffectKinds
+  kEffPersonSponsor, kEffScavenging, kNumEffectKinds
 };
 constexpr const char* kEffectKindNames[] = {
     "money", "appeal", "xtoken", "conservation", "reputation", "worker", "upgrade", "card", "clever", "enclosure",
     "kiosk", "multiplier", "partner_zoo", "university", "sponsor_for_money", "special_enclosure", "rescue",
     "store", "extra_shift", "strength", "mark", "wave", "shark_attack", "adapt", "cut_down", "animal_magnet",
-    "continent_marker", "find_person", "person_sponsor"};
+    "continent_marker", "find_person", "person_sponsor", "scavenging"};
 struct Effect {
   EffectKind kind = EffectKind::kEffMoney;
   std::int8_t amount = 0;
@@ -242,13 +242,14 @@ Effect bonus_tile_effect(BonusTile t);
 enum PlacementBonus : std::uint8_t {
   kPBNone, kPBMoney5, kPBMoney10, kPBXtoken, kPBRep2, kPBCard, kPBClever, kPBMoney2, kPBRep1, kPBKiosk,
   kPBWorker1, kPBPartnerZoo, kPBUniversity, kPBMultiplier, kPBSponsorForMoney, kPBRescue, kPBStore,
-  kPBExtraShift, kPBStrength, kPBMark, kPBAppeal1, kPBWave, kPBSharkAttack, kPBAdapt, kNumPlacementBonuses
+  kPBExtraShift, kPBStrength, kPBMark, kPBAppeal1, kPBWave, kPBSharkAttack, kPBAdapt, kPBScavenging3,
+  kNumPlacementBonuses
 };
 constexpr const char* kPlacementBonusNames[] = {"", "money5", "money10", "xtoken", "rep2", "card", "clever",
                                                 "money2", "rep1", "kiosk", "worker1", "partner_zoo",
                                                 "university", "multiplier", "sponsor_for_money", "rescue",
                                                 "store", "extra_shift", "strength", "mark", "appeal1", "wave",
-                                                "shark_attack", "adapt"};
+                                                "shark_attack", "adapt", "scavenging3"};
 Effect placement_bonus_effect(PlacementBonus b);
 
 constexpr int kNumMapTokens = 7;

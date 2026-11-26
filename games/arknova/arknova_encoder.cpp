@@ -231,7 +231,7 @@ class Writer {
     }
     for (int k = 0; k < kNumFrameKinds; ++k) f[gf::pending + k] = std::min(below[k], 4) / 4.0f;
     // "After finishing" effects queued by the turns in progress.
-    int after[3] = {};
+    int after[4] = {};
     for (int d = 0; d < s_.turn_depth; ++d) {
       const TurnCtx& t = s_.turns[d];
       for (int i = 0; i < t.n_after; ++i) {
@@ -239,6 +239,7 @@ class Writer {
           case FrameKind::clever: ++after[0]; break;
           case FrameKind::ab_boost: ++after[1]; break;
           case FrameKind::extra_action: ++after[2]; break;
+          case FrameKind::ab_mark: ++after[3]; break;
           default: throw std::logic_error("arknova encoder: unexpected deferred frame");
         }
       }
@@ -246,6 +247,7 @@ class Writer {
     f[gf::after_clever] = std::min(after[0], 4) / 4.0f;
     f[gf::after_boost] = std::min(after[1], 4) / 4.0f;
     f[gf::after_extra_action] = std::min(after[2], 4) / 4.0f;
+    f[gf::after_mark] = std::min(after[3], 4) / 4.0f;
     // The discard pile (public), and the cards whose place I do not know: the deck and the
     // opponent's hidden hand, tucked cards and private draws (the belief tracker's pools), less
     // the cards it may have tucked, which have tokens of their own.
@@ -465,6 +467,14 @@ class Writer {
     }
     f[pf::reputation_capped] = !pl.is_upgraded(kCards) && pl.reputation >= kReputationCapWithoutCardsII ? 1.0f : 0.0f;
     f[pf::break_income] = break_income(s_, p) / 40.0f;
+    // The Zoo Map Packs' and Tournament 1's state.
+    for (int c = 0; c < kNumContinents; ++c) f[pf::continent_markers + c] = pl.continent_markers >> c & 1 ? 1.0f : 0.0f;
+    f[pf::rescued] = pl.n_rescued / static_cast<float>(kMapPackSlots);
+    f[pf::stored] = pl.n_stored / static_cast<float>(kMapPackSlots);
+    f[pf::concealed] = pl.concealed / 4.0f;
+    for (int a = 0; a < kDrawingBoardAreas; ++a) f[pf::quarters + a] = pl.quarters >> a & 1 ? 1.0f : 0.0f;
+    f[pf::hand_boost] = md.rule == MapRule::kTournament && !pl.tokens[0] && pl.hand_boost == kBoostFree ? 1.0f : 0.0f;
+    f[pf::hand_boost_pending] = pl.hand_boost == kBoostPending ? 1.0f : 0.0f;
   }
 
   void reward_tokens() {
@@ -493,9 +503,9 @@ class Writer {
       float* f = add(Enc::kActionCardToken, Enc::kEntityAction + a, -1);
       f[p == me_ ? af::mine : af::opponent] = 1.0f;
       f[af::action + a] = 1.0f;
-      const int strength = pl.strength(a);
-      f[af::slot + strength - 1] = 1.0f;
-      f[af::strength] = strength / 5.0f;
+      const int slot = static_cast<int>(std::find(pl.slots, pl.slots + kNumActions, a) - pl.slots);
+      f[af::slot + slot] = 1.0f;
+      f[af::strength] = pl.strength(a) / 5.0f;  // Artificial Intelligence: up to 6
       f[af::effective_strength] = effective_strength(s_, p, a) / 5.0f;
       f[af::upgraded] = pl.is_upgraded(a) ? 1.0f : 0.0f;
       const bool venom = has_token(s_, p, a, TokenKind::kVenom);
@@ -532,6 +542,12 @@ class Writer {
       return f;
     }
     const bool in_zoo = w.loc == cf::my_zoo || w.loc == cf::opp_zoo;
+    if (!project) {
+      if (w.display >= 0 && s_.display_mark[w.display] >= 0) {
+        f[s_.display_mark[w.display] == me_ ? cf::marked_me : cf::marked_opp] = 1.0f;
+      }
+      if (in_zoo && is_rescued(s_.players[w.loc == cf::my_zoo ? me_ : opp_], static_cast<CardIdx>(c))) f[cf::rescued] = 1.0f;
+    }
     // The sponsor whose unique building is being placed.
     if (in_zoo && top_ && top_->kind == FrameKind::sponsor_building && top_->d[sponsor_building_card] == c) {
       f[cf::pending] = 1.0f;
@@ -591,7 +607,22 @@ class Writer {
         case MapRule::kHollywood:
           if (rule & bit) f[xf::cover_draw_sponsor] = f[xf::group] = f[xf::group_sponsor_discount] = 1.0f;
           break;
-        case MapRule::kNone:
+        case MapRule::kGeographical:
+          for (int k = 0; k < md.n_areas; ++k) {
+            if (!(md.areas[k] & bit)) continue;
+            f[xf::continent_area + k] = 1.0f;
+            f[xf::marker_left] = pl.continent_markers >> k & 1 ? 1.0f : 0.0f;
+          }
+          break;
+        case MapRule::kDrawingBoard:
+          for (int a = 0; a < md.n_areas; ++a) {
+            if (!(md.areas[a] & bit)) continue;
+            f[xf::quarter + a] = 1.0f;
+            f[xf::quarter_covered] = pl.quarters >> a & 1 ? 1.0f : 0.0f;
+          }
+          break;
+        case MapRule::kNone: case MapRule::kRescue: case MapRule::kCaves: case MapRule::kAI: case MapRule::kLagoon:
+        case MapRule::kTournament:
           break;
       }
       if (opp_zoo.cell_owner[c] >= 0) f[xf::opp_kind + static_cast<int>(opp_zoo.buildings[opp_zoo.cell_owner[c]].kind)] = 1.0f;
@@ -1185,6 +1216,7 @@ ArknovaTokenEncoder::ArknovaTokenEncoder() {
     bind(kAnchorDisplay + i, kHeadTake, atom::kDisplayTake + i);
     bind(kAnchorDisplay + i, kHeadDiscard, atom::kDisplayDiscard + i);
     bind(kAnchorDisplay + i, kHeadSnap, atom::kDisplaySnap + i);
+    bind(kAnchorDisplay + i, kHeadMark, atom::kDisplayMark + i);
   }
   for (int i = 0; i < atom::kProjectSlots; ++i) bind(kAnchorProject + i, kHeadTake, atom::kProject + i);
   for (int i = 0; i < atom::kPublicSlots; ++i) bind(kAnchorPublic + i, kHeadTake, atom::kPublic + i);
@@ -1310,6 +1342,7 @@ void ArknovaTokenEncoder::encode_features(const IGameState& masked_state, int pe
   for (int i = 0; i < s.players[me].n_final; ++i) {
     w.card_token(st.final_cards[me][i], {cf::my_final, kAnchorFinal + i});
   }
+  for (int i = 0; i < s.players[me].n_stored; ++i) w.card_token(st.stored[me][i], {cf::my_stored});
   for (int i = 0; i < s.n_base_projects; ++i) {
     w.card_token(s.base_projects[i], {jf::in_play, kAnchorProject + i, atom::kProject + i});
   }

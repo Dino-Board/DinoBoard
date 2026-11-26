@@ -72,7 +72,9 @@ def test_ui_payload_hides_private_cards(seed):
 
 def _pouch_with_seen_and_unseen(seed):
     """Plays seed's random game to a Pouch decision whose mover shows some hand cards and hides
-    others. Returns (actions so far, tuck of a shown card, tuck of a hidden card) or None."""
+    others, and where the rest of the turn does not depend on which card is left in the hand (the
+    card left could be the only animal the action can still play). Returns (actions so far, tuck of
+    a shown card, tuck of a hidden card) or None."""
     gs = engine.GameSession(GAME, seed=seed)
     rng = random.Random(seed)
     actions = []
@@ -85,11 +87,18 @@ def _pouch_with_seen_and_unseen(seed):
                      if gs.get_action_info(a)["name"].startswith("hand_discard:")}
             seen = [a for c, a in tucks.items() if c in shown]
             unseen = [a for c, a in tucks.items() if c not in shown]
-            if seen and unseen:
+            if seen and unseen and _stack_after(seed, actions, seen[0]) == _stack_after(seed, actions, unseen[0]):
                 return actions, seen[0], unseen[0]
         actions.append(rng.choice(legal))
         gs.apply_action(actions[-1])
     return None
+
+
+def _stack_after(seed, actions, last):
+    gs = engine.GameSession(GAME, seed=seed)
+    for a in actions + [last]:
+        gs.apply_action(a)
+    return [f["kind"] for f in json.loads(gs.get_state_dict()["core_json"])["stack"]]
 
 
 def test_face_down_tuck_hides_which_card():
@@ -175,8 +184,8 @@ def test_variable_layout_binds_every_pointer_atom_by_anchor():
     gs = engine.GameSession(GAME, seed=1)
     pointer = {a for a in range(meta["action_space"])
                if gs.get_action_info(a)["name"].split(":")[0] in
-               ("hand", "hand_discard", "display", "display_discard", "snap", "project", "zoo", "zoo_give", "list",
-                "private", "final_discard", "enclosure", "cell")}
+               ("hand", "hand_discard", "display", "display_discard", "snap", "display_mark", "project", "zoo",
+                "zoo_give", "list", "private", "final_discard", "enclosure", "cell")}
     assert set(bound) == pointer
 
 

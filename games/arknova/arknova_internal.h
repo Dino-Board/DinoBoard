@@ -222,6 +222,42 @@ bool harbor_active(const Player& pl);
 void harbor_options(State& s, std::vector<Option>& out);  // added to the pending decision
 void harbor_apply(State& s, const Option& o);  // the decision stays pending
 
+// ---- Zoo Map Packs (maps 9-14) and Tournament 1 (arknova_map_packs.cpp) -------------------
+
+namespace fd {
+constexpr int dig_rescue = 1;     // ab_dig: Rescue Station's bonus (a discarded animal may go under the map)
+constexpr int shark_appeal = 1;   // ab_shark (left: animals still to discard): appeal discarded so far
+constexpr int marker_any = 0;     // continent_marker: any marker (the map token), else ...
+constexpr int marker_areas = 1;   // ... bit per continent whose area the housed animal reached
+constexpr int drawn_kind = 0, drawn_amount = 1;  // drawn_effect: an EffectKind that draws cards
+}  // namespace fd
+void register_map_pack_frames();
+// gain() of the Zoo Map Packs' effect kinds.
+void map_pack_gain(State& s, int p, EffectKind kind, int amount);
+bool is_rescued(const Player& pl, CardIdx c);
+// Rescue Station: whether discarded card c may go under p's map, and putting it there.
+bool rescuable(const State& s, int p, CardIdx c);
+void rescue_card(State& s, int p, CardIdx c, Chance& ch);
+// Artificial Intelligence: the strength of card slot `slot` (1-5) with pl.concealed slots concealed.
+int ai_strength(const Player& pl, int slot);
+// Geographical Zoo: animal c was housed in building `building` (not as a Flock animal).
+void map_animal_housed(State& s, int p, CardIdx c, int building);
+// Drawing Board: the areas covered now; an area covered anew gives its bonus.
+void map_quarters_changed(State& s, int p, Chance& ch);
+// Drawing Board's areas and Caves' storage at a break.
+void map_pack_break_income(State& s, int p, Chance& ch);
+// Lagoon: a player's first association worker at setup finds a person sponsor (from the shuffled
+// deck; the discard pile is still empty).
+void lagoon_setup(State& s, int p);
+// Tournament 1: the strength its hand card discard adds to the next action of player p now.
+int hand_boost_strength(const Player& pl);
+void spend_hand_boost(Player& pl);
+// Options open during a player's own turn decision (Tournament 1's discard, taking back a stored
+// card) and their effect; the decision stays pending.
+void map_pack_turn_options(State& s, std::vector<Option>& out);
+bool is_map_pack_turn_option(const Option& o);
+void map_pack_turn_apply(State& s, const Option& o);
+
 // ---- engine (engine.py) ----------------------------------------------------------------
 
 void offer_extra_action(State& s, int p, unsigned action_mask, int owner = -1, bool optional = true);

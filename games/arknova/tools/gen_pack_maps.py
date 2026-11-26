@@ -1,4 +1,5 @@
-"""Add maps 9-14 (Zoo Map Packs 1 and 2) to arknova_maps.json and arknova_maps_data.inc.
+"""Add maps 9-14 (Zoo Map Packs 1 and 2) and the Tournament 1 map to arknova_maps.json and
+arknova_maps_data.inc.
 
 Usage: python games/arknova/tools/gen_pack_maps.py   (after gen_maps.py and gen_alt_maps.py)
 
@@ -16,7 +17,8 @@ does not:
     as BGA lists their bonuses (3 money, 2 appeal, 1 reputation, Hunter 4).
   * Lagoon (14): every new worker finds a person sponsor (the rule), so its worker bonuses keep only
     the conservation point of the 4th.
-The maps are not dealt in self-play (selfplay false) until their rules are complete.
+  * Tournament 1 ("T1", key "plant1"): its hand card discard for +1 strength is the rule
+    (kTournament), active once the first left-edge token is taken.
 """
 import json
 import math
@@ -29,7 +31,7 @@ import gen_maps as G  # noqa: E402
 
 PACK = Path(__file__).resolve().parent.parent / "bga_pack_maps.json"
 RULES = {"9": "kGeographical", "10": "kRescue", "11": "kCaves", "12": "kAI", "13": "kDrawingBoard",
-         "14": "kLagoon"}
+         "14": "kLagoon", "T1": "kTournament"}
 # BGA placement bonus -> DinoBoard's name.
 BONUS = {("xtoken", 1): "xtoken", ("money", 5): "money5", ("money", 10): "money10", ("money", 2): "money2",
          ("take-in-range-or-deck", 1): "card", ("Clever", 1): "clever", ("reputation", 1): "rep1",
@@ -37,7 +39,7 @@ BONUS = {("xtoken", 1): "xtoken", ("money", 5): "money5", ("money", 10): "money1
          ("kiosk", 1): "kiosk", ("Fac", 1): "university", ("Multiplier", 1): "multiplier", ("add-worker", 1): "worker1",
          ("map10", 1): "rescue", ("STORE", 1): "store", ("ExtraShift", 1): "extra_shift", ("strength", 1): "strength",
          ("Mark", 1): "mark", ("appeal", 1): "appeal1", ("wave", 1): "wave", ("SharkAttack", 1): "shark_attack",
-         ("Adapt", 1): "adapt"}
+         ("Adapt", 1): "adapt", ("Scavenging", 3): "scavenging3"}
 # BGA side-panel bonus -> DinoBoard effect.
 EFFECT = {"money": "money", "reputation": "reputation", "xtoken": "xtoken", "conservation": "conservation",
           "upgrade-card": "upgrade", "add-worker": "worker", "size-2": "enclosure", "bonus-sponsor": "sponsor_for_money",
@@ -106,9 +108,13 @@ def quarters(grid, terrain, prebuilt):
     return [sorted(p) for p in sorted(parts, key=angle)]
 
 
+def map_key(k):
+    return f"plan{k.lower()}"
+
+
 def main():
     data = json.loads(G.OUT_JSON.read_text())["maps"]
-    maps = [m for m in data if m["key"] not in {f"plan{k}" for k in RULES}]
+    maps = [m for m in data if m["key"] not in {map_key(k) for k in RULES}]
     grid = [(c[0], c[1]) for c in next(m for m in maps if m["key"] == "map0")["cells"]]
     index = {c: i for i, c in enumerate(grid)}
     for m in maps:
@@ -116,7 +122,7 @@ def main():
                          rule_mask=G.mask([tuple(c) for c in m["rule_cells"]], index))
     std_tokens = next(m for m in maps if m["key"] == "plan1")["token_abilities"]
     pack = json.loads(PACK.read_text())["maps"]
-    for k in ("9", "10", "11", "12", "13", "14"):
+    for k in RULES:
         b = pack[k]
         terrain = {axial(u): "rock" for u in b["terrains"].get("Rock", [])}
         terrain.update({axial(u): "water" for u in b["terrains"].get("Water", [])})
@@ -156,11 +162,11 @@ def main():
         else:
             workers = slots(b.get("workersBonuses"), 3, f"map {k} workers")
         m = dict(
-            key=f"plan{k}", name=b["name"], rule=RULES[k][1:].lower(), cells=cells, rule_cells=[],
+            key=map_key(k), name=b["name"], rule=RULES[k][1:].lower(), cells=cells, rule_cells=[],
             partner_zoo_slots=slots(b.get("partnerZooBonuses"), 4, f"map {k} partner zoo"),
             university_slots=slots(b.get("facBonuses"), 3, f"map {k} university"),
             worker_slots=[None] + workers, linked_slots=slots(b.get("facPartnerZooLinkedBonuses"), 3, f"map {k} linked"),
-            tokens=tokens, token_abilities=abilities, prebuilt=prebuilt, areas=areas, selfplay=False,
+            tokens=tokens, token_abilities=abilities, prebuilt=prebuilt, areas=areas, selfplay=True,
             _cpp=dict(rule=RULES[k], rule_mask=0))
         maps.append(m)
     G.write(maps, index, source="ark-nova-ai (hexmap.MAP0, data/maps) and BGA (bga_alt_maps.json, "

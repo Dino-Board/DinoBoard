@@ -14,7 +14,7 @@ namespace board_ai::arknova {
 
 namespace {
 
-constexpr int kPackVersion = 0xA47;
+constexpr int kPackVersion = 0xA48;
 
 void fill_slots(std::int16_t* first, int n, std::int16_t v) { std::fill(first, first + n, v); }
 
@@ -105,6 +105,7 @@ const viz::VisibilitySchema& ArknovaState::schema() {
     viz::declare_field(schema, "private_cards",
                        viz::owner_only_first_axis({kPlayers, kPrivateFrames, kPrivateCards}, kPlayers));
     viz::declare_field(schema, "final_known", viz::owner_only_first_axis({kPlayers, kFinalKnown}, kPlayers));
+    viz::declare_field(schema, "stored", viz::owner_only_first_axis({kPlayers, kMapPackSlots}, kPlayers));
     return schema;
   }();
   return s;
@@ -116,6 +117,7 @@ ArknovaState::ArknovaState() {
   fill_slots(&tucked[0][0], kPlayers * kMaxTucked, kEmptySlot);
   fill_slots(&private_cards[0][0][0], kPlayers * kPrivateFrames * kPrivateCards, kEmptySlot);
   fill_slots(&final_known[0][0], kPlayers * kFinalKnown, kEmptySlot);
+  fill_slots(&stored[0][0], kPlayers * kMapPackSlots, kEmptySlot);
 }
 
 void ArknovaState::reset_with_seed(std::uint64_t seed) {
@@ -174,6 +176,7 @@ State& ArknovaState::synced_core() const {
     for (int c = 0; c < num_cards(); ++c) pl.hand[c] = hand[p][c] == 1;
     for (int i = 0; i < pl.n_final; ++i) pl.final_cards[i] = valid_card(final_cards[p][i]) ? final_cards[p][i] : kNoCard;
     for (int i = 0; i < pl.n_tucked; ++i) pl.tucked[i] = valid_card(tucked[p][i]) ? tucked[p][i] : kNoCard;
+    for (int i = 0; i < pl.n_stored; ++i) pl.stored[i] = valid_card(stored[p][i]) ? stored[p][i] : kNoCard;
     std::vector<int> frames = private_frames_of(core, p);
     for (std::size_t k = 0; k < frames.size(); ++k) {
       Frame& f = core.stack[frames[k]];
@@ -219,6 +222,8 @@ void ArknovaState::absorb_core() {
     std::copy(pl.final_cards, pl.final_cards + pl.n_final, final_cards[p]);
     fill_slots(tucked[p], kMaxTucked, kEmptySlot);
     std::copy(pl.tucked, pl.tucked + pl.n_tucked, tucked[p]);
+    fill_slots(stored[p], kMapPackSlots, kEmptySlot);
+    std::copy(pl.stored, pl.stored + pl.n_stored, stored[p]);
     fill_slots(&private_cards[p][0][0], kPrivateFrames * kPrivateCards, kEmptySlot);
     std::vector<int> frames = private_frames_of(s, p);
     for (std::size_t k = 0; k < frames.size(); ++k) {
@@ -280,12 +285,16 @@ void ArknovaState::pack_public(std::vector<int>& out) const {
     out.push_back(pl.n_card_tokens);
     for (int i = 0; i < pl.n_card_tokens; ++i) out.insert(out.end(), {pl.card_tokens[i].card, pl.card_tokens[i].n});
     out.insert(out.end(), {pl.n_tucked, pl.full_cover_scored, pl.last_action});
+    out.insert(out.end(), {pl.continent_markers, pl.n_rescued});
+    out.insert(out.end(), pl.rescued, pl.rescued + pl.n_rescued);
+    out.insert(out.end(), {pl.n_stored, pl.concealed, pl.quarters, pl.hand_boost});
   }
   out.push_back(s.current);
   out.push_back(static_cast<int>(s.deck.size()));
   out.push_back(static_cast<int>(s.discard.size()));
   out.insert(out.end(), s.discard.begin(), s.discard.end());
   out.insert(out.end(), s.display, s.display + kDisplaySize);
+  out.insert(out.end(), s.display_mark, s.display_mark + kDisplaySize);
   out.push_back(static_cast<int>(s.final_deck.size()));
   out.insert(out.end(), {s.break_pos, s.break_by, s.n_base_projects});
   out.insert(out.end(), s.base_projects, s.base_projects + s.n_base_projects);
@@ -386,6 +395,14 @@ void ArknovaState::unpack_public(const std::vector<int>& in) {
     std::fill(pl.tucked, pl.tucked + kMaxTucked, kNoCard);
     pl.full_cover_scored = r.next() != 0;
     pl.last_action = r.as<std::int8_t>();
+    pl.continent_markers = r.as<std::uint8_t>();
+    pl.n_rescued = static_cast<std::int8_t>(r.count(kMapPackSlots, "rescued animals"));
+    for (int i = 0; i < pl.n_rescued; ++i) pl.rescued[i] = r.as<CardIdx>();
+    pl.n_stored = static_cast<std::int8_t>(r.count(kMapPackSlots, "stored cards"));
+    std::fill(pl.stored, pl.stored + kMapPackSlots, kNoCard);
+    pl.concealed = r.as<std::int8_t>();
+    pl.quarters = r.as<std::uint8_t>();
+    pl.hand_boost = r.as<std::int8_t>();
   }
   State& s = core;
   s.current = r.as<std::int8_t>();
@@ -393,6 +410,7 @@ void ArknovaState::unpack_public(const std::vector<int>& in) {
   s.discard.resize(static_cast<std::size_t>(r.count(kCardSlots, "discard")));
   for (CardIdx& c : s.discard) c = r.as<CardIdx>();
   for (CardIdx& c : s.display) c = r.as<CardIdx>();
+  for (std::int8_t& m : s.display_mark) m = r.as<std::int8_t>();
   s.final_deck.assign(static_cast<std::size_t>(r.count(kCardSlots, "final deck")), kNoCard);
   s.break_pos = r.as<std::int8_t>();
   s.break_by = r.as<std::int8_t>();
@@ -462,6 +480,7 @@ std::int16_t& hidden_slot(ArknovaState& s, viz::FieldId fid, const std::vector<i
     case kFieldTucked: return s.tucked[idx.at(0)][idx.at(1)];
     case kFieldPrivateCards: return s.private_cards[idx.at(0)][idx.at(1)][idx.at(2)];
     case kFieldFinalKnown: return s.final_known[idx.at(0)][idx.at(1)];
+    case kFieldStored: return s.stored[idx.at(0)][idx.at(1)];
     default: throw std::invalid_argument("arknova: not a card slot field");
   }
 }
@@ -489,6 +508,7 @@ StateHash64 ArknovaState::state_hash() const {
   h.combine_bytes(tucked, sizeof tucked);
   h.combine_bytes(private_cards, sizeof private_cards);
   h.combine_bytes(final_known, sizeof final_known);
+  h.combine_bytes(stored, sizeof stored);
   // Draw order never enters the hash; the deck contents follow from every other zone.
   h.add(core.deck.size());
   h.add(core.final_deck.size());
@@ -541,6 +561,7 @@ void ArknovaState::mask_all_hidden_slots(const viz::VisibilitySchema& sch, int p
     }
     std::fill(pl.final_cards, pl.final_cards + kMaxFinalCards, kNoCard);
     std::fill(pl.tucked, pl.tucked + kMaxTucked, kNoCard);
+    std::fill(pl.stored, pl.stored + kMapPackSlots, kNoCard);
     for (int fi : private_frames_of(core, p)) {
       Frame& f = core.stack[fi];
       int n_off, list_off;

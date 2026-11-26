@@ -74,10 +74,23 @@ class Mapper {
         return {public_slot(o.a[0])};
       case Head::discard_final: return {final_slot(o.a[0])};
       case Head::move: return {zoo_card(atom::kZoo, o.a[0])};
-      case Head::sell: case Head::tuck: case Head::discard: case Head::discard_hand:
+      case Head::discard_hand:  // Rescue Station's Digging: a rescued animal goes into the zoo
+        if (o.n == 2) return {hand_card(atom::kHand, o.a[0])};
+        return {hand_card(atom::kHandDiscard, o.a[0])};
+      case Head::sell: case Head::tuck: case Head::discard: case Head::hand_boost: case Head::store:
         return {hand_card(atom::kHandDiscard, o.a[0])};
       case Head::display: case Head::take_small: return {display(atom::kDisplayTake, o.a[0])};
-      case Head::discard_display: return {display(atom::kDisplayDiscard, o.a[0])};
+      case Head::mark: return {display(atom::kDisplayMark, o.a[0])};
+      case Head::discard_display:
+        if (o.n == 2) return {display(atom::kDisplayTake, o.a[0])};
+        return {display(atom::kDisplayDiscard, o.a[0])};
+      case Head::shark: return {display(atom::kDisplayDiscard, o.a[0])};
+      case Head::unstore:
+        if (o.a[0] < 0 || o.a[0] >= pl_.n_stored) action_error("no stored card in that slot");
+        return {atom::kStored + o.a[0]};
+      case Head::cut_down: return {building(o.a[0])};
+      case Head::shift: return {atom::kTask + o.a[0]};
+      case Head::continent: return {atom::kContinent + o.a[0], atom::kGeoBonus + o.a[1]};
       case Head::snap: return {display(atom::kDisplaySnap, o.a[0])};
       case Head::play:
         if (o.n >= 2) return {hand_card(atom::kHand, o.a[0]), building(o.a[1])};
@@ -316,11 +329,16 @@ std::string atom_name(ActionId a) {
   }
   if (in(kPosition, 3)) return "position:" + num(a - kPosition + 1);
   if (in(kMapToken, kNumMapTokens)) return "map_token:" + num(a - kMapToken);
+  if (in(kTask, kNumTasks)) return std::string("task:") + kTaskNames[a - kTask];
+  if (in(kStored, kMapPackSlots)) return "stored:" + num(a - kStored);
+  if (in(kContinent, kNumContinents)) return std::string("continent:") + kContinentNames[a - kContinent];
+  if (in(kGeoBonus, kNumGeoBonuses)) return std::string("geo_bonus:") + kGeoBonusNames[a - kGeoBonus];
   if (in(kHand, kCardSlots)) return "hand:" + num(a - kHand);
   if (in(kHandDiscard, kCardSlots)) return "hand_discard:" + num(a - kHandDiscard);
   if (in(kDisplayTake, kDisplaySize)) return "display:" + num(a - kDisplayTake);
   if (in(kDisplayDiscard, kDisplaySize)) return "display_discard:" + num(a - kDisplayDiscard);
   if (in(kDisplaySnap, kDisplaySize)) return "snap:" + num(a - kDisplaySnap);
+  if (in(kDisplayMark, kDisplaySize)) return "display_mark:" + num(a - kDisplayMark);
   if (in(kProject, kProjectSlots)) return "project:" + num(a - kProject);
   if (in(kZoo, kCardSlots)) return "zoo:" + num(a - kZoo);
   if (in(kZooGive, kCardSlots)) return "zoo_give:" + num(a - kZooGive);

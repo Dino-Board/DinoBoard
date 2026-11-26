@@ -58,7 +58,7 @@ def enums() -> dict:
     out["bonus_tiles"] = [t.strip() for t in out["bonus_tiles"]]
     out["building_kinds"] = [t.strip() for t in out["building_kinds"]]
     out["reqs"] = out["icons"] + out["req_extra"]
-    assert len(out["icons"]) == 15 and len(out["frames"]) == 43 and len(out["keywords"]) == 44
+    assert len(out["icons"]) == 15 and len(out["frames"]) == 51 and len(out["keywords"]) == 44
     return out
 
 
@@ -202,6 +202,10 @@ PLACEMENT_BONUS_EFFECT = {
     "rep2": ("reputation", 2), "rep1": ("reputation", 1), "card": ("card", 1), "clever": ("clever", 1),
     "kiosk": ("kiosk", 1), "worker1": ("worker", 1), "partner_zoo": ("partner_zoo", 1),
     "university": ("university", 1), "multiplier": ("multiplier", 1), "sponsor_for_money": ("sponsor_for_money", 1),
+    # The Zoo Map Packs (their rulebooks and the Marine Worlds glossary) and Tournament 1.
+    "rescue": ("rescue", 1), "store": ("store", 1), "extra_shift": ("extra_shift", 1), "strength": ("strength", 1),
+    "mark": ("mark", 1), "appeal1": ("appeal", 1), "wave": ("wave", 1), "shark_attack": ("shark_attack", 1),
+    "adapt": ("adapt", 1), "scavenging3": ("scavenging", 3),
 }
 
 
@@ -319,9 +323,20 @@ def animal_cost(pl, c) -> int:
     return max(0, cost)
 
 
-def action_strength(pl, action: str) -> int:
+def slot_strength(pl, action: str, key: str) -> int:
+    """The strength of an action card's slot. Artificial Intelligence (map 12): slots 1, 2, 4, 5 are
+    concealed in turn, and a concealed slot has the next visible number to its right (6 at most)."""
+    strength = pl["slots"].index(action) + 1
+    if zoo_map(key)["rule"] == "ai":
+        concealed = [1, 2, 4, 5][:pl["map_pack"]["concealed"]]
+        while strength < 6 and strength in concealed:
+            strength += 1
+    return strength
+
+
+def action_strength(pl, action: str, key: str) -> int:
     """Strength an action card would be used with now: its slot, less 2 under a Constriction token."""
-    return pl["slots"].index(action) + 1 - 2 * ("constriction" in pl["action_tokens"].get(action, []))
+    return slot_strength(pl, action, key) - 2 * ("constriction" in pl["action_tokens"].get(action, []))
 
 
 def sponsor_level(pl, c, key: str) -> int:
@@ -342,7 +357,7 @@ def strength_short(pl, c, key: str) -> float:
         action, needed = "association", 4 if "203" in pl["zoo_cards"] else 5
     else:
         return 0.0
-    return min(max(needed - action_strength(pl, action), 0), 5) / 5
+    return min(max(needed - action_strength(pl, action, key), 0), 5) / 5
 
 
 # Buildings of the Build action (rulebook p. 9): name, size, side II only.
@@ -441,6 +456,43 @@ def _distinct(icons, continents=True, categories=True) -> int:
     return sum(icons[i] > 0 for i in (e["icons"][:7] if categories else []) + (e["continents"] if continents else []))
 
 
+REPUTATION_SPACES = {5: "upgrade", 8: "worker", 10: "card", 13: "card", 11: "conservation", 14: "conservation",
+                     12: "xtoken", 15: "xtoken"}  # rulebook p. 18
+
+
+def _gain(out: dict, track: dict, kind: str, n: int, key: str) -> None:
+    """A gain as sponsor_immediate measures it (money, appeal, conservation, cards to take, workers,
+    free buildings), following reputation track spaces and the worker slots of the map."""
+    if kind == "worker":
+        for _ in range(n):
+            if track["workers"] < 4:
+                _gain_worker(out, track, key)
+    elif kind == "reputation":
+        for _ in range(n):
+            if track["reputation"] >= 15:
+                out["appeal"] += 1
+                continue
+            if track["reputation"] >= 9 and not track["cards2"]:
+                break
+            track["reputation"] += 1
+            if track["reputation"] in REPUTATION_SPACES:
+                _gain(out, track, REPUTATION_SPACES[track["reputation"]], 1, key)
+    elif kind in ("money", "appeal", "conservation"):
+        out[kind] += n
+    elif kind == "card":
+        out["cards"] += n
+    elif kind == "enclosure":
+        out["buildings"] += 1
+
+
+def _gain_worker(out: dict, track: dict, key: str) -> None:
+    out["workers"] += 1
+    slot = zoo_map(key)["worker_slots"][track["workers"]]
+    track["workers"] += 1
+    if slot:
+        _gain(out, track, slot[0], slot[1], key)
+
+
 def sponsor_immediate(pl, c, key: str) -> dict:
     """What sponsor c's immediate effect gives pl when played now (the card already counts as in
     the zoo): money, appeal, conservation, cards to take, workers, free buildings."""
@@ -453,10 +505,8 @@ def sponsor_immediate(pl, c, key: str) -> dict:
     elif cid in (201, 254):
         out["cards"] = 1
     elif cid == 216 and pl["workers"] < 4:  # the new worker brings what the map prints next to it
-        out["workers"] = 1
-        slot = zoo_map(key)["worker_slots"][pl["workers"]]
-        assert slot is None or slot[0] == "conservation"
-        out["conservation"] = slot[1] if slot else 0
+        _gain_worker(out, dict(workers=pl["workers"], reputation=pl["reputation"],
+                               cards2="cards" in pl["upgraded"]), key)
     elif cid == 207:
         out["conservation"] = _distinct(icons) // 2
     elif cid == 222:
@@ -638,14 +688,14 @@ def atom_index() -> dict:
 
 def own_slots(gs, p: int) -> dict:
     """Player p's private cards (hand, final cards, tucked, private frame lists, final cards it put
-    back under the final deck), as card indices."""
+    back under the final deck, Caves' stored cards), as card indices."""
     v = gs.extract_initial_observation(p)["tracker_init"]["own_slots"]
     n = len(cards())
-    assert len(v) == 298
+    assert len(v) == 308
     return dict(hand={c for c in range(n) if v[c] == 1}, final=[c for c in v[240:246] if c >= 0],
                 tucked=[c for c in v[246:270] if c >= 0],
                 private=[[c for c in v[270 + 6 * k:276 + 6 * k] if c >= 0] for k in range(4)],
-                final_known=[c for c in v[294:298] if c >= 0])
+                final_known=[c for c in v[294:305] if c >= 0], stored=[c for c in v[305:308] if c >= 0])
 
 
 # ---- card pools: the discard pile and the cards a player has not seen -----------------------------
@@ -717,4 +767,5 @@ def known_to(me: int, core, own, shown_opp) -> set:
     # The BGA promos are known to be out of a game that does not deal them.
     absent = set() if core.get("promos") else {i for i, c in enumerate(cards()) if c["id"] in BGA_PROMOS}
     return ({idx[c] for c in public} | mine["hand"] | set(mine["final"]) | set(mine["tucked"]) |
-            {c for frame in mine["private"] for c in frame} | set(mine["final_known"]) | set(shown_opp) | absent)
+            {c for frame in mine["private"] for c in frame} | set(mine["final_known"]) | set(mine["stored"]) |
+            set(shown_opp) | absent)

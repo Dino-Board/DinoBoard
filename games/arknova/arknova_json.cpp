@@ -307,7 +307,10 @@ struct Field {
 const std::vector<Field>& frame_fields(FrameKind k) {
   static const std::map<FrameKind, std::vector<Field>> table = {
       {FrameKind::ab_boost, {{"action", 'A', fd::boost_action, 0}}},
-      {FrameKind::ab_dig, {{"left", 'I', fd::left, 0}}},
+      {FrameKind::ab_dig, {{"left", 'I', fd::left, 0}, {"rescue", 'B', fd::dig_rescue, 0}}},
+      {FrameKind::ab_shark, {{"left", 'I', fd::left, 0}, {"appeal", 'I', fd::shark_appeal, 0}}},
+      {FrameKind::continent_marker, {{"any", 'B', fd::marker_any, 0}, {"areas", 'I', fd::marker_areas, 0}}},
+      {FrameKind::drawn_effect, {{"effect", 'I', fd::drawn_kind, 0}, {"amount", 'I', fd::drawn_amount, 0}}},
       {FrameKind::ab_sun, {{"left", 'I', fd::left, 0}}},
       {FrameKind::ab_pouch, {{"left", 'I', fd::left, 0}}},
       {FrameKind::ab_hunter, {{"cards", 'L', fd::cards_n, fd::cards_list}}},
@@ -615,6 +618,25 @@ void write_player(Writer& w, const Player& pl) {
   }
   w.end('}');
   w.key("tucked"); w_cards(w, pl.tucked, pl.tucked + pl.n_tucked);
+  w.key("map_pack");
+  w.begin('{');
+  w.key("continent_markers");
+  w.begin('[');
+  for (int c = 0; c < kNumContinents; ++c) {
+    if (pl.continent_markers >> c & 1) w_str(w, kContinentNames[c]);
+  }
+  w.end(']');
+  w.key("rescued"); w_cards(w, pl.rescued, pl.rescued + pl.n_rescued);
+  w.key("stored"); w_cards(w, pl.stored, pl.stored + pl.n_stored);
+  w.key("concealed"); w_num(w, pl.concealed);
+  w.key("quarters");
+  w.begin('[');
+  for (int a = 0; a < kDrawingBoardAreas; ++a) {
+    if (pl.quarters >> a & 1) w_num(w, a);
+  }
+  w.end(']');
+  w.key("hand_boost"); w_str(w, kHandBoostNames[pl.hand_boost]);
+  w.end('}');
   w.key("full_cover_scored"); w_bool(w, pl.full_cover_scored);
   w.key("last_action");
   if (pl.last_action < 0) {
@@ -711,6 +733,26 @@ void read_player(Player& pl, const J& v, int map) {
     card_tokens_set(pl, c, n);
   }
   pl.n_tucked = fill_list(pl.tucked, parse_cards(v.at("tucked")), "tucked cards");
+  // The Zoo Map Packs' fields: required on their maps, optional elsewhere (all at their defaults).
+  const J* pack = v.find("map_pack");
+  if (!pack && map_def(map).rule >= MapRule::kGeographical) throw std::runtime_error("arknova json: player without map_pack");
+  if (pack) {
+    for (const J& c : pack->at("continent_markers").list()) {
+      pl.continent_markers |= static_cast<std::uint8_t>(1u << name_index(c.str(), kContinentNames, kNumContinents, "continent"));
+    }
+    pl.n_rescued = fill_list(pl.rescued, parse_cards(pack->at("rescued")), "rescued animals");
+    for (int i = 0; i < pl.n_rescued; ++i) {
+      if (!pl.in_zoo(pl.rescued[i])) throw std::runtime_error("arknova json: a rescued animal is not among the zoo cards");
+    }
+    pl.n_stored = fill_list(pl.stored, parse_cards(pack->at("stored")), "stored cards");
+    pl.concealed = static_cast<std::int8_t>(pack->at("concealed").i());
+    if (pl.concealed < 0 || pl.concealed > 4) throw std::runtime_error("arknova json: concealed slots out of range");
+    for (const J& a : pack->at("quarters").list()) {
+      if (a.i() < 0 || a.i() >= kDrawingBoardAreas) throw std::runtime_error("arknova json: bad Drawing Board area");
+      pl.quarters |= static_cast<std::uint8_t>(1u << a.i());
+    }
+    pl.hand_boost = static_cast<std::int8_t>(name_index(pack->at("hand_boost").str(), kHandBoostNames, 3, "hand boost"));
+  }
   pl.full_cover_scored = v.at("full_cover_scored").boolean();
   const J& last = v.at("last_action");
   pl.last_action = last.is_null() ? -1 : last.str() == "xtoken" ? kLastActionXtoken : static_cast<std::int8_t>(action_index(last.str()));
@@ -765,6 +807,10 @@ std::string state_to_json(const State& s) {
   std::sort(discard.begin(), discard.end());
   w.key("discard"); w_cards(w, discard.begin(), discard.end());
   w.key("display"); w_cards(w, s.display, s.display + kDisplaySize);
+  w.key("display_marks");
+  w.begin('[');
+  for (std::int8_t q : s.display_mark) w_opt_int(w, q);
+  w.end(']');
   w.key("final_deck"); w_cards(w, s.final_deck.begin(), s.final_deck.end());
   w.key("break_pos"); w_num(w, s.break_pos);
   w.key("break_by"); w_opt_int(w, s.break_by);
@@ -871,6 +917,17 @@ void state_from_json(State& s, const std::string& json) {
   const auto& display = v.at("display").list();
   if (display.size() != kDisplaySize) throw std::runtime_error("arknova json: display size");
   for (int i = 0; i < kDisplaySize; ++i) s.display[i] = parse_card(display[i]);
+  if (const J* marks = v.find("display_marks")) {
+    if (marks->list().size() != kDisplaySize) throw std::runtime_error("arknova json: display_marks size");
+    for (int i = 0; i < kDisplaySize; ++i) {
+      const J& m = marks->list()[i];
+      if (m.is_null()) continue;
+      if (m.i() < 0 || m.i() >= kPlayers || s.display[i] == kNoCard) throw std::runtime_error("arknova json: bad display mark");
+      s.display_mark[i] = static_cast<std::int8_t>(m.i());
+    }
+  } else if (map_def(s.map).rule >= MapRule::kGeographical) {
+    throw std::runtime_error("arknova json: state without display_marks");
+  }
   s.final_deck = parse_cards(v.at("final_deck"));
   s.break_pos = static_cast<std::int8_t>(v.at("break_pos").i());
   s.break_by = v.at("break_by").is_null() ? -1 : static_cast<std::int8_t>(v.at("break_by").i());
@@ -953,17 +1010,30 @@ std::string option_to_json(const State& s, const Option& o) {
       w_str(w, kActionNames[o.a[0]]);
       break;
     case Head::keep: case Head::discard_final: case Head::discard: case Head::pick: case Head::sell: case Head::tuck:
-    case Head::discard_hand: case Head::move:
+    case Head::move: case Head::hand_boost: case Head::store:
       card_args(o.n);
+      break;
+    case Head::discard_hand:  // Rescue Station's Digging: then whether the animal is rescued
+      w_card(w, o.a[0]);
+      if (o.n == 2) w_bool(w, o.a[1] == 1);
+      break;
+    case Head::discard_display:
+      w_num(w, o.a[0]);
+      if (o.n == 2) w_bool(w, o.a[1] == 1);
       break;
     case Head::tile: w_str(w, kBonusTileNames[o.a[0]]); break;
     case Head::bonus:  // the space, then its bonus
       w_num(w, o.a[0]);
       w_str(w, kPlacementBonusNames[s.players[s.top().player].zoo.cell(o.a[0]).bonus]);
       break;
-    case Head::display: case Head::snap: case Head::take_small: case Head::discard_display: case Head::target:
-    case Head::boost:
+    case Head::display: case Head::snap: case Head::take_small: case Head::target: case Head::boost:
+    case Head::unstore: case Head::mark: case Head::shark: case Head::cut_down:
       w_num(w, o.a[0]);
+      break;
+    case Head::shift: w_str(w, kTaskNames[o.a[0]]); break;
+    case Head::continent:
+      w_str(w, kContinentNames[o.a[0]]);
+      w_str(w, kGeoBonusNames[o.a[1]]);
       break;
     case Head::take:
       if (top == FrameKind::ab_snap) {
@@ -1239,7 +1309,7 @@ std::string done_label(FrameKind top) {
     case FrameKind::act_animals: case FrameKind::act_sponsors: case FrameKind::act_association: return "Finish";
     case FrameKind::act_build: return "Done building";
     case FrameKind::move_animals: return "Finish moving animals";
-    case FrameKind::ab_sun: case FrameKind::ab_dig: case FrameKind::ab_pouch: return "Done";
+    case FrameKind::ab_sun: case FrameKind::ab_dig: case FrameKind::ab_pouch: case FrameKind::ab_shark: return "Done";
     default: engine_error(std::string("no 'done' text for frame ") + frame_kind_name(top));
   }
 }
@@ -1339,8 +1409,21 @@ std::string option_label(const State& s, const Option& o) {
     case Head::no: return "Do not use Okapi Stable";
     case Head::replenish: return "Replenish the display";
     case Head::kind: return o.a[0] == kWazaSmall ? "Small animals (size 2 or less)" : "Large animals (size 4 or more)";
-    case Head::discard_display: return "Discard display folder " + num(o.a[0] + 1);
-    case Head::discard_hand: return "Discard " + name_of(o.a[0]) + " and draw";
+    case Head::discard_display:
+      if (o.n == 2 && o.a[1] == 1) return "Rescue " + name_of(s.display[o.a[0]]) + " from folder " + num(o.a[0] + 1);
+      return "Discard display folder " + num(o.a[0] + 1);
+    case Head::discard_hand:
+      if (o.n == 2 && o.a[1] == 1) return "Rescue " + name_of(o.a[0]) + " from the hand and draw";
+      return "Discard " + name_of(o.a[0]) + " and draw";
+    case Head::hand_boost: return "Discard " + name_of(o.a[0]) + " for +1 strength on the next action";
+    case Head::store: return "Store " + name_of(o.a[0]);
+    case Head::unstore: return "Take back stored card " + num(o.a[0] + 1);
+    case Head::mark: return "Mark " + name_of(s.display[o.a[0]]) + " in folder " + num(o.a[0] + 1);
+    case Head::shark: return "Shark attack: discard " + name_of(s.display[o.a[0]]) + " from folder " + num(o.a[0] + 1);
+    case Head::cut_down: return "Cut down enclosure " + num(o.a[0]);
+    case Head::shift: return std::string("Extra shift: take back the worker from ") + kTaskNames[o.a[0]];
+    case Head::continent:
+      return std::string("Remove the ") + kContinentNames[o.a[0]] + " marker for " + kGeoBonusNames[o.a[1]];
     case Head::sell: return "sell " + name_of(o.a[0]);
     case Head::tuck: return "tuck " + name_of(o.a[0]);
     case Head::harbor: return "Harbour: discard " + name_of(o.a[0]) + " for " + num(kHarborMoney) + " money";

@@ -61,7 +61,15 @@ enum class MapRule : std::uint8_t {
   kAI,             // strength bonuses conceal the action card slots 1, 2, 4, 5
   kDrawingBoard,   // each of the 4 areas, once covered: its bonus now and at every break; no full-cover appeal
   kLagoon,         // every new association worker (the first one too) finds a person sponsor
+  kTournament,     // Tournament 1, once its first left-edge token is taken: once per turn, discard a
+                   // hand card for +1 strength on an action
 };
+// Geographical Zoo: a removed continent marker gives one of these (reputation 1, 4 money, Clever,
+// 2 appeal, a free kiosk or pavilion); the last one also gives 1 conservation point.
+enum GeoBonus : std::uint8_t { kGeoReputation, kGeoMoney, kGeoClever, kGeoAppeal, kGeoKioskPavilion, kNumGeoBonuses };
+constexpr const char* kGeoBonusNames[] = {"reputation", "money", "clever", "appeal", "kiosk_or_pavilion"};
+// Drawing Board: the 4 areas clockwise from the top give 3 money, 2 appeal, 1 reputation, Hunter 4.
+constexpr int kDrawingBoardAreas = 4;
 constexpr int kObservationAppeal = 2;
 constexpr int kOutdoorExtraSize = 2;
 constexpr int kHarborMoney = 3;
@@ -179,6 +187,8 @@ struct Zoo {
   // Places a building and returns its id; `bonuses` receives the placement bonuses of the covered
   // cells in ascending cell order.
   int place(BuildingKind kind, int size, CellMask cells, CardIdx name, std::vector<PlacementBonus>* bonuses);
+  // Takes building `id` off the map; the later buildings' ids drop by 1 (callers fix references).
+  void remove(int id);
   int adjacent_terrain(CellMask cells, Terrain t) const;
   // Ids of buildings adjacent to building b, ascending.
   std::vector<int> adjacent_buildings(int b) const;

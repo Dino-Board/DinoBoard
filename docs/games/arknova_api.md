@@ -97,8 +97,8 @@ atom. `legal_actions` returns the atoms that extend the current prefix
 it; decisions with a single continuation are applied without asking. So one
 Python step is one or more framework plies.
 
-Action space: 1570 atoms. Atoms 0–132 are **global** (scored by the network's
-global head from the CLS token); atoms 133–1569 are **pointer** atoms, each
+Action space: 1593 atoms. Atoms 0–149 are **global** (scored by the network's
+global head from the CLS token); atoms 150–1592 are **pointer** atoms, each
 scored by one pointer head of the token that carries its anchor (see
 [anchors](#anchors)).
 
@@ -154,7 +154,7 @@ to encode or to choose from.
 | 11 | 1 | `give_card` | Pilfering victim: give a random hand card |
 | 12 | 1 | `break` | Sponsors: advance the break and take money |
 | 13 | 1 | `no_extra` | project support without a released animal / breeding token (never a choice of its own) |
-| 14 | 1 | `hidden_hand_card` | never legal: what observers see for a Pouch tuck |
+| 14 | 1 | `hidden_hand_card` | never legal: what observers see for a Pouch tuck or a Caves store |
 | 15 | 1 | `give_money` | Pilfering victim: pay 5 money |
 | 16 | 1 | `harbor` | Map 4 harbour: discard a hand card for 3 money (then `hand_discard:c`), once a turn |
 | 17 | 30 | `act:.+` | use action card with X X-tokens (`act:<card>+<X>`, 5 cards x 6) |
@@ -173,19 +173,24 @@ to encode or to choose from.
 | 112 | 11 | `place:.+` | free building (effect / sponsor): this type |
 | 123 | 3 | `position:.+` | project level 1-3 |
 | 126 | 7 | `map_token:.+` | map token 0-6 to place on the project |
-| 133 | 240 | `hand:.+` | play this hand card (animal, sponsor, project to support) |
-| 373 | 240 | `hand_discard:.+` | give up this hand card: setup discard, hand-limit discard, Sun Bathing sale, Pouch tuck, Digging discard |
-| 613 | 6 | `display:.+` | take this display card into the hand, or play it from there (animal, sponsor, project) |
-| 619 | 6 | `display_discard:.+` | discard this display card (Digging) |
-| 625 | 6 | `snap:.+` | Cards action: snap this display card |
-| 631 | 10 | `project:.+` | support this project in play |
-| 641 | 240 | `zoo:.+` | move this animal into the new special enclosure |
-| 881 | 240 | `zoo_give:.+` | release this animal / spend a token of this breeding card |
-| 1121 | 31 | `list:.+` | take this card of the public list |
-| 1152 | 6 | `private:.+` | keep this card of my private list |
-| 1158 | 6 | `final_discard:.+` | discard this final scoring card |
-| 1164 | 58 | `enclosure:.+` | house the animal in this enclosure (building id) |
-| 1222 | 348 | `cell:.+` | place the building with this lowest cell in orientation o (`cell:<c>/o<k>`, 58 cells x 6) |
+| 133 | 4 | `task:.+` | Extra Shift: take back the worker on this association task |
+| 137 | 3 | `stored:.+` | Caves: take back the card in this storage slot (own turn, before the action) |
+| 140 | 5 | `continent:.+` | Geographical Zoo: remove this continent's marker (then `geo_bonus:b`) |
+| 145 | 5 | `geo_bonus:.+` | Geographical Zoo: the bonus the removed marker gives |
+| 150 | 240 | `hand:.+` | play this hand card (animal, sponsor, project to support); Rescue Station's Digging: slide this animal under the map |
+| 390 | 240 | `hand_discard:.+` | give up this hand card: setup discard, hand-limit discard, Sun Bathing sale, Pouch tuck, Digging discard, Caves store, Tournament 1 discard for +1 strength |
+| 630 | 6 | `display:.+` | take this display card into the hand, or play it from there (animal, sponsor, project); Rescue Station's Digging: slide this animal under the map |
+| 636 | 6 | `display_discard:.+` | discard this display card (Digging, Shark Attack) |
+| 642 | 6 | `snap:.+` | Cards action: snap this display card |
+| 648 | 6 | `display_mark:.+` | Mark: put my player token on this display animal |
+| 654 | 10 | `project:.+` | support this project in play |
+| 664 | 240 | `zoo:.+` | move this animal into the new special enclosure |
+| 904 | 240 | `zoo_give:.+` | release this animal / spend a token of this breeding card |
+| 1144 | 31 | `list:.+` | take this card of the public list |
+| 1175 | 6 | `private:.+` | keep this card of my private list |
+| 1181 | 6 | `final_discard:.+` | discard this final scoring card |
+| 1187 | 58 | `enclosure:.+` | house the animal in this enclosure (building id); Cut Down: remove this empty enclosure |
+| 1245 | 348 | `cell:.+` | place the building with this lowest cell in orientation o (`cell:<c>/o<k>`, 58 cells x 6) |
 
 ## Hidden Information
 
@@ -397,68 +402,69 @@ in the pools (only their composition).
 | 21-38 | 18 | `bonus_tiles` | bonus tiles left at conservation 5 (first 9) and 8 (last 9), by tile (money10, xtoken3, reputation2, university, partner_zoo, enclosure3, cards3, multiplier, sponsor) |
 | 39 | 1 | `base_pile` | unused base projects (Assertion / Dominance) / 10 |
 | 40 | 1 | `stack_depth` | frames on the stack, min(n, 10) / 10 |
-| 41-83 | 43 | `pending` | frames below the pending decision, by frame kind (same order as `decision.frame`): min(count, 4) / 4 |
-| 84 | 1 | `pending_opponent` | a decision of the opponent waits below mine |
-| 85 | 1 | `after_clever` | queued "after finishing" Clever effects, min(n, 4) / 4 |
-| 86 | 1 | `after_boost` | queued "after finishing" Boost effects, min(n, 4) / 4 |
-| 87 | 1 | `after_extra_action` | queued "after finishing" extra actions (Action, Determination, Hypnosis), min(n, 4) / 4 |
-| 88-90 | 3 | `discard_type` | discard pile (see Card pools; every pool column is count in the pool / count among all regular cards): animals / 128, sponsors / 64, projects / 32 |
-| 91-95 | 5 | `discard_animal_size` | animals of size 1..5 |
-| 96-110 | 15 | `discard_icons` | icons the cards add to a zoo (tags plus rock / water requirement icons, as `player.icons`), by icon (same order as `card.tags`), summed |
-| 111-114 | 4 | `discard_sponsor_level` | sponsors of level ≤3, 4, 5, ≥6 |
-| 115-118 | 4 | `discard_project_category` | projects by category (base, release, breed, normal) |
-| 119 | 1 | `discard_appeal` | animals' appeal, summed |
-| 120 | 1 | `discard_conservation` | animals' conservation points, summed |
-| 121-123 | 3 | `unseen_type` | unseen regular cards (deck, the opponent's hidden hand / tucked / private draws), same columns as `discard_type` |
-| 124-128 | 5 | `unseen_animal_size` | as `discard_animal_size` |
-| 129-143 | 15 | `unseen_icons` | as `discard_icons` |
-| 144-147 | 4 | `unseen_sponsor_level` | as `discard_sponsor_level` |
-| 148-151 | 4 | `unseen_project_category` | as `discard_project_category` |
-| 152 | 1 | `unseen_appeal` | as `discard_appeal` |
-| 153 | 1 | `unseen_conservation` | as `discard_conservation` |
-| 154-164 | 11 | `unseen_final` | final scoring cards 1..11 I have not seen (final deck, the opponent's final cards and Resistance draws) |
-| 165 | 1 | `trade_used` | the harbour (map rule) was used this turn |
+| 41-91 | 51 | `pending` | frames below the pending decision, by frame kind (same order as `decision.frame`): min(count, 4) / 4 |
+| 92 | 1 | `pending_opponent` | a decision of the opponent waits below mine |
+| 93 | 1 | `after_clever` | queued "after finishing" Clever effects, min(n, 4) / 4 |
+| 94 | 1 | `after_boost` | queued "after finishing" Boost effects, min(n, 4) / 4 |
+| 95 | 1 | `after_extra_action` | queued "after finishing" extra actions (Action, Determination, Hypnosis), min(n, 4) / 4 |
+| 96 | 1 | `after_mark` | queued Marks (after finishing the action), min(n, 4) / 4 |
+| 97-99 | 3 | `discard_type` | discard pile (see Card pools; every pool column is count in the pool / count among all regular cards): animals / 128, sponsors / 64, projects / 32 |
+| 100-104 | 5 | `discard_animal_size` | animals of size 1..5 |
+| 105-119 | 15 | `discard_icons` | icons the cards add to a zoo (tags plus rock / water requirement icons, as `player.icons`), by icon (same order as `card.tags`), summed |
+| 120-123 | 4 | `discard_sponsor_level` | sponsors of level ≤3, 4, 5, ≥6 |
+| 124-127 | 4 | `discard_project_category` | projects by category (base, release, breed, normal) |
+| 128 | 1 | `discard_appeal` | animals' appeal, summed |
+| 129 | 1 | `discard_conservation` | animals' conservation points, summed |
+| 130-132 | 3 | `unseen_type` | unseen regular cards (deck, the opponent's hidden hand / tucked / private draws), same columns as `discard_type` |
+| 133-137 | 5 | `unseen_animal_size` | as `discard_animal_size` |
+| 138-152 | 15 | `unseen_icons` | as `discard_icons` |
+| 153-156 | 4 | `unseen_sponsor_level` | as `discard_sponsor_level` |
+| 157-160 | 4 | `unseen_project_category` | as `discard_project_category` |
+| 161 | 1 | `unseen_appeal` | as `discard_appeal` |
+| 162 | 1 | `unseen_conservation` | as `discard_conservation` |
+| 163-173 | 11 | `unseen_final` | final scoring cards 1..11 I have not seen (final deck, the opponent's final cards and Resistance draws) |
+| 174 | 1 | `trade_used` | the harbour (map rule) was used this turn |
 
 ### `decision` token
 
 | offset | width | feature | meaning |
 |---|---|---|---|
-| 0-42 | 43 | `frame` | kind of the pending decision frame, one-hot in the order of `ARKNOVA_FRAME_KINDS` (arknova_core.h) |
-| 43 | 1 | `to_move` | the perspective is the player to decide (always 1 when the policy is queried) |
-| 44 | 1 | `prefix_len` | atoms already chosen for this decision / 6 |
-| 45-49 | 5 | `turn_action` | action card of the (innermost) action in progress: animals, build, cards, association, sponsors |
-| 50 | 1 | `turn_strength` | its strength including X-tokens / 10 (0 for an X-token turn) |
-| 51 | 1 | `turn_xtoken` | the turn is an X-token action |
-| 52 | 1 | `turn_depth` | nesting of actions in progress (extra actions) / 4 |
-| 53 | 1 | `turn_borrowed` | the action uses the opponent's action card (Hypnosis) |
-| 54 | 1 | `budget` | act_build: size left / 10; act_association: task value left / 10; act_sponsors: level budget left / 10 |
-| 55 | 1 | `remaining` | picks left / 5: act_animals animals, act_cards draws, ab_sun / ab_dig / ab_pouch / ab_snap uses, ab_pick cards to keep, discard_hand cards to discard |
-| 56 | 1 | `done_count` | done so far / 5: animals played, sponsors played, cards drawn, buildings built |
-| 57 | 1 | `side2` | the action is performed on side II of its card (the card in use, also when borrowed) |
-| 58 | 1 | `discard_after` | act_cards: cards to discard after drawing (0 or 1) |
-| 59 | 1 | `may_snap` | act_cards: snapping is still allowed |
-| 60 | 1 | `normal_done` | act_build: the regular builds are over (only the Engineer's extra build remains) |
-| 61 | 1 | `engineer_used` | act_build: the Engineer's extra build was used |
-| 62-64 | 3 | `animals_phase` | act_animals: play, bonus play (Waza Small Animals Program), take a small animal |
-| 65 | 1 | `all_small` | act_animals: every animal played so far was small |
-| 66-69 | 4 | `tasks_used` | act_association: tasks already done this action (reputation, partner zoo, university, project) |
-| 70 | 1 | `donated` | act_association: the donation was made |
-| 71 | 1 | `optional` | extra_action: it may be skipped |
-| 72-76 | 5 | `extra_actions` | extra_action: the action cards it may use |
-| 77 | 1 | `extra_from_opponent` | extra_action: it would use the opponent's cards (Hypnosis) |
-| 78-82 | 5 | `boost_action` | ab_boost: the action card to move |
-| 83-84 | 2 | `tile_space` | conservation_tile: the space reached, [5, 8] |
-| 85 | 1 | `can_replenish` | ab_snap: the display may be replenished now |
-| 86 | 1 | `replenish_between` | ab_snap: a replenish between the two snaps is still available |
-| 87 | 1 | `only_one` | ab_project: only one of the listed base projects may be taken (Dominance) |
-| 88-98 | 11 | `built` | act_build: building types already built this action (same order as `chosen_type`) |
-| 99-109 | 11 | `offered` | free_build: building types on offer |
-| 110 | 1 | `list_len` | cards in the frame's list / 10: Hunter reveal, Perception / Scavenging / Resistance draw, base project pile |
-| 111-113 | 3 | `chosen_verb` | prefix: build, engineer, place |
-| 114-124 | 11 | `chosen_type` | prefix: building type (enclosure 1-5, kiosk, pavilion, petting zoo, reptile house, aviary, unique) |
-| 125-127 | 3 | `chosen_position` | prefix: project level 1-3 |
-| 128-134 | 7 | `chosen_map_token` | prefix: map token 0-6 |
-| 135 | 1 | `chosen_harbor` | prefix: the harbour trade (`harbor`, then the hand card) |
+| 0-50 | 51 | `frame` | kind of the pending decision frame, one-hot in the order of `ARKNOVA_FRAME_KINDS` (arknova_core.h) |
+| 51 | 1 | `to_move` | the perspective is the player to decide (always 1 when the policy is queried) |
+| 52 | 1 | `prefix_len` | atoms already chosen for this decision / 6 |
+| 53-57 | 5 | `turn_action` | action card of the (innermost) action in progress: animals, build, cards, association, sponsors |
+| 58 | 1 | `turn_strength` | its strength including X-tokens / 10 (0 for an X-token turn) |
+| 59 | 1 | `turn_xtoken` | the turn is an X-token action |
+| 60 | 1 | `turn_depth` | nesting of actions in progress (extra actions) / 4 |
+| 61 | 1 | `turn_borrowed` | the action uses the opponent's action card (Hypnosis) |
+| 62 | 1 | `budget` | act_build: size left / 10; act_association: task value left / 10; act_sponsors: level budget left / 10 |
+| 63 | 1 | `remaining` | picks left / 5: act_animals animals, act_cards draws, ab_sun / ab_dig / ab_pouch / ab_snap uses, ab_pick cards to keep, discard_hand cards to discard |
+| 64 | 1 | `done_count` | done so far / 5: animals played, sponsors played, cards drawn, buildings built |
+| 65 | 1 | `side2` | the action is performed on side II of its card (the card in use, also when borrowed) |
+| 66 | 1 | `discard_after` | act_cards: cards to discard after drawing (0 or 1) |
+| 67 | 1 | `may_snap` | act_cards: snapping is still allowed |
+| 68 | 1 | `normal_done` | act_build: the regular builds are over (only the Engineer's extra build remains) |
+| 69 | 1 | `engineer_used` | act_build: the Engineer's extra build was used |
+| 70-72 | 3 | `animals_phase` | act_animals: play, bonus play (Waza Small Animals Program), take a small animal |
+| 73 | 1 | `all_small` | act_animals: every animal played so far was small |
+| 74-77 | 4 | `tasks_used` | act_association: tasks already done this action (reputation, partner zoo, university, project) |
+| 78 | 1 | `donated` | act_association: the donation was made |
+| 79 | 1 | `optional` | extra_action: it may be skipped |
+| 80-84 | 5 | `extra_actions` | extra_action: the action cards it may use |
+| 85 | 1 | `extra_from_opponent` | extra_action: it would use the opponent's cards (Hypnosis) |
+| 86-90 | 5 | `boost_action` | ab_boost: the action card to move |
+| 91-92 | 2 | `tile_space` | conservation_tile: the space reached, [5, 8] |
+| 93 | 1 | `can_replenish` | ab_snap: the display may be replenished now |
+| 94 | 1 | `replenish_between` | ab_snap: a replenish between the two snaps is still available |
+| 95 | 1 | `only_one` | ab_project: only one of the listed base projects may be taken (Dominance) |
+| 96-106 | 11 | `built` | act_build: building types already built this action (same order as `chosen_type`) |
+| 107-117 | 11 | `offered` | free_build: building types on offer |
+| 118 | 1 | `list_len` | cards in the frame's list / 10: Hunter reveal, Perception / Scavenging / Resistance draw, base project pile |
+| 119-121 | 3 | `chosen_verb` | prefix: build, engineer, place |
+| 122-132 | 11 | `chosen_type` | prefix: building type (enclosure 1-5, kiosk, pavilion, petting zoo, reptile house, aviary, unique) |
+| 133-135 | 3 | `chosen_position` | prefix: project level 1-3 |
+| 136-142 | 7 | `chosen_map_token` | prefix: map token 0-6 |
+| 143 | 1 | `chosen_harbor` | prefix: the harbour trade (`harbor`, then the hand card) |
 
 ### `player` token
 
@@ -492,26 +498,33 @@ in the pools (only their composition).
 | 60 | 1 | `appeal_income` | money the appeal earns at a break / 40 |
 | 61 | 1 | `display_range` | display folders within reputation range / 6 |
 | 62-72 | 11 | `placeable` | per building type (enclosure 1-5, kiosk, pavilion, petting zoo, reptile house, aviary, unique): this player's own Build card offers it and its map has a legal spot for it now, money and strength aside (unique: always 0) |
-| 73-101 | 29 | `next_partner_zoo` | what the next partner zoo gives (the map's side panel; 0 when all 4 are taken): per effect kind (money, appeal, xtoken, conservation, reputation, worker, upgrade, card, clever, enclosure, kiosk, multiplier, partner_zoo, university, sponsor_for_money, special_enclosure, rescue, store, extra_shift, strength, mark, wave, shark_attack, adapt, cut_down, animal_magnet, continent_marker, find_person, person_sponsor) its amount: money / 10, an enclosure's size / 5, anything else / 3 |
-| 102-130 | 29 | `next_university` | what the next university gives (side panel; 0 when all 3 are taken), as `next_partner_zoo` |
-| 131-159 | 29 | `next_worker` | what the next association worker gives (side panel; 0 once all 4 are hired), as `next_partner_zoo` |
-| 160 | 1 | `map_income` | break money from the map rule now / 5: covered spaces next to the park restaurant, or the kiosk count once all ice cream parlour spaces are covered |
-| 161 | 1 | `can_trade` | the harbour is open to this player: once per turn, discard a hand card for 3 money |
-| 162 | 1 | `ignore_conditions` | animal conditions this player may leave unmet thanks to the map (research institute) |
-| 163 | 1 | `sponsor_discount` | levels the map takes off this player's sponsors (Hollywood, all H spaces covered) |
-| 164 | 1 | `group_left` | spaces of the map's group rule still uncovered / 3 (ice cream parlours, Hollywood H) |
-| 165 | 1 | `endgame_final` | conservation the Final Scoring cards would score now / 4: mine, the worst of two left out while no one has discarded; the opponent's (hidden): the expectation over the final cards I have not seen, the best of two kept while no one has discarded |
-| 166 | 1 | `endgame_cards` | conservation the end-of-game effects of the zoo cards would score now / 4 |
-| 167 | 1 | `endgame_appeal` | appeal the end-of-game effects of the zoo cards would score now / 10 |
-| 168 | 1 | `projected_vp` | `victory_points` with the three above added / 30 |
-| 169 | 1 | `best_project` | conservation of the best project level one Association action could support now (the most victory points net of a release) / 5: one supportable project level (in play, in the hand as far as I know it, on the display within range with Association II), a worker free for it, the strength reachable with X-tokens |
-| 170 | 1 | `best_project_release` | appeal that level takes (the animal a release project lets go, the least of those it could release) / 10 |
-| 171 | 1 | `best_animals` | the most appeal one Animals action could bring now / 15: as many animals as the strength with X-tokens plays, from the hand as far as I know it and the display within range with Animals II, each playable and paid for, housed together: each in its own empty standard enclosure (a flock animal may join an occupied one) or within a special enclosure's free spaces |
-| 172 | 1 | `best_turn_vp` | victory points the better of those two would add / 15 (a release's appeal counted off) |
-| 173 | 1 | `conservation_to_bonus` | conservation still needed for the next Conservation track space with an effect (2, 5, 8, 10) / 5; 0 past 10 |
-| 174 | 1 | `reputation_to_bonus` | reputation still needed for the next Reputation track bonus within reach (9 at most before Cards II) / 5 |
-| 175 | 1 | `reputation_capped` | reputation stands at 9 without Cards II: more is lost |
-| 176 | 1 | `break_income` | money the next break would pay now (appeal, kiosks, map tokens, income cards, the map rule) / 40 |
+| 73-102 | 30 | `next_partner_zoo` | what the next partner zoo gives (the map's side panel; 0 when all 4 are taken): per effect kind (money, appeal, xtoken, conservation, reputation, worker, upgrade, card, clever, enclosure, kiosk, multiplier, partner_zoo, university, sponsor_for_money, special_enclosure, rescue, store, extra_shift, strength, mark, wave, shark_attack, adapt, cut_down, animal_magnet, continent_marker, find_person, person_sponsor) its amount: money / 10, an enclosure's size / 5, anything else / 3 |
+| 103-132 | 30 | `next_university` | what the next university gives (side panel; 0 when all 3 are taken), as `next_partner_zoo` |
+| 133-162 | 30 | `next_worker` | what the next association worker gives (side panel; 0 once all 4 are hired), as `next_partner_zoo` |
+| 163 | 1 | `map_income` | break money from the map rule now / 5: covered spaces next to the park restaurant, or the kiosk count once all ice cream parlour spaces are covered |
+| 164 | 1 | `can_trade` | the harbour is open to this player: once per turn, discard a hand card for 3 money |
+| 165 | 1 | `ignore_conditions` | animal conditions this player may leave unmet thanks to the map (research institute) |
+| 166 | 1 | `sponsor_discount` | levels the map takes off this player's sponsors (Hollywood, all H spaces covered) |
+| 167 | 1 | `group_left` | spaces of the map's group rule still uncovered / 3 (ice cream parlours, Hollywood H) |
+| 168 | 1 | `endgame_final` | conservation the Final Scoring cards would score now / 4: mine, the worst of two left out while no one has discarded; the opponent's (hidden): the expectation over the final cards I have not seen, the best of two kept while no one has discarded |
+| 169 | 1 | `endgame_cards` | conservation the end-of-game effects of the zoo cards would score now / 4 |
+| 170 | 1 | `endgame_appeal` | appeal the end-of-game effects of the zoo cards would score now / 10 |
+| 171 | 1 | `projected_vp` | `victory_points` with the three above added / 30 |
+| 172 | 1 | `best_project` | conservation of the best project level one Association action could support now (the most victory points net of a release) / 5: one supportable project level (in play, in the hand as far as I know it, on the display within range with Association II), a worker free for it, the strength reachable with X-tokens |
+| 173 | 1 | `best_project_release` | appeal that level takes (the animal a release project lets go, the least of those it could release) / 10 |
+| 174 | 1 | `best_animals` | the most appeal one Animals action could bring now / 15: as many animals as the strength with X-tokens plays, from the hand as far as I know it and the display within range with Animals II, each playable and paid for, housed together: each in its own empty standard enclosure (a flock animal may join an occupied one) or within a special enclosure's free spaces |
+| 175 | 1 | `best_turn_vp` | victory points the better of those two would add / 15 (a release's appeal counted off) |
+| 176 | 1 | `conservation_to_bonus` | conservation still needed for the next Conservation track space with an effect (2, 5, 8, 10) / 5; 0 past 10 |
+| 177 | 1 | `reputation_to_bonus` | reputation still needed for the next Reputation track bonus within reach (9 at most before Cards II) / 5 |
+| 178 | 1 | `reputation_capped` | reputation stands at 9 without Cards II: more is lost |
+| 179 | 1 | `break_income` | money the next break would pay now (appeal, kiosks, map tokens, income cards, the map rule) / 40 |
+| 180-184 | 5 | `continent_markers` | Geographical Zoo: the continent markers still on the map (africa, americas, asia, australia, europe) |
+| 185 | 1 | `rescued` | Rescue Station: animals under the map / 3 |
+| 186 | 1 | `stored` | Caves: stored cards / 3 (hidden from the opponent) |
+| 187 | 1 | `concealed` | Artificial Intelligence: action card slots concealed (1, 2, 4, 5 in turn) / 4 |
+| 188-191 | 4 | `quarters` | Drawing Board: the 4 areas (clockwise from the top: 3 money, 2 appeal, 1 reputation, Hunter 4) covered now, each paying at every break |
+| 192 | 1 | `hand_boost` | Tournament 1: a hand card may be discarded now for +1 strength on the next action (once a turn, once the first left-edge token is taken) |
+| 193 | 1 | `hand_boost_pending` | Tournament 1: a card was discarded; the next action gets +1 strength |
 
 ### `action_card` token
 
@@ -540,51 +553,55 @@ in the pools (only their composition).
 | 3 | 1 | `public_list` | in the pending frame's public list (Hunter reveal, base project pile) |
 | 4 | 1 | `private_list` | in my pending private list (Perception / Scavenging / Resistance draw) |
 | 5 | 1 | `opp_maybe_tucked` | seen in the opponent's hand before a face-down tuck: in its hand or tucked |
-| 6 | 1 | `chosen` | named by a take atom of the prefix (hand / display / project) |
-| 7 | 1 | `chosen_discard` | named by a discard atom of the prefix (setup discards so far) |
-| 8 | 1 | `display_pos` | display folder / 6 (also the extra money to play it from there) |
-| 9 | 1 | `in_range` | display card within my reputation range |
-| 10 | 1 | `unknown` | an unseen hand card of the opponent: entity 0, no other feature |
-| 11 | 1 | `my_zoo` | in my zoo |
-| 12 | 1 | `opp_zoo` | in the opponent's zoo |
-| 13 | 1 | `my_final` | one of my final scoring cards |
-| 14 | 1 | `pending` | the sponsor whose unique building is being placed |
-| 15-17 | 3 | `type` | animal, sponsor, final scoring card |
-| 18 | 1 | `cost` | printed cost / 36 |
-| 19 | 1 | `money_now` | money for its holder to play it now / 36: animals cost less the holder's partner zoo and expert discounts, plus the display folder (cards not yet in a zoo) |
-| 20 | 1 | `affordable` | the holder has that money |
-| 21 | 1 | `size` | animal size / 5 |
-| 22 | 1 | `appeal` | appeal / 10 |
-| 23 | 1 | `conservation` | conservation / 5 |
-| 24 | 1 | `reputation` | reputation / 5 |
-| 25 | 1 | `level` | sponsor level / 6 |
-| 26 | 1 | `rock` | rock spaces required next to the enclosure / 2 |
-| 27 | 1 | `water` | water spaces required / 2 |
-| 28 | 1 | `no_standard` | animal that cannot live in a standard enclosure (petting zoo animal) |
-| 29-34 | 6 | `special` | per special enclosure (reptile house, aviary, petting zoo): [may live there, spaces it takes / 5] |
-| 35-49 | 15 | `tags` | icons printed top right / 2 (same order as `player.icons`) |
-| 50-69 | 20 | `req` | conditions: 15 icons (count / 2), partner zoo (count / 2), Animals II, Sponsors II (0.5), maximum appeal / 50, minimum reputation / 15 |
-| 70 | 1 | `unmet` | conditions the holder does not meet / 3 |
-| 71 | 1 | `req_ok` | the holder meets the conditions to play it (cards not yet in a zoo) |
-| 72 | 1 | `has_place` | the holder's zoo has room for it: an enclosure for the animal, a spot for the sponsor's building |
-| 73-116 | 44 | `ability` | ability keywords in the order of `Keyword` (arknova_cards.h): 1, or (X + 1) / 6 for "keyword X" |
-| 117-121 | 5 | `effect` | the card has: an immediate effect, an icon-triggered effect, a break income, an end-of-game effect, any lasting effect |
-| 122-127 | 6 | `building` | sponsor's unique building: [present, size / 5, rock next to it / 2, water / 2, border spaces / 2, must touch a building] |
-| 128-135 | 8 | `scoring` | final scoring card: 4 x [threshold / 24, conservation / 4] |
-| 136-137 | 2 | `yield` | what its end-of-game effect would score now for its holder: [conservation / 4, appeal / 10] (final scoring cards: my final cards and offered ones; sponsors: in a zoo for its owner, anywhere else as if its holder played it now, its icons counted in the zoo) |
-| 138 | 1 | `tokens` | tokens on the card / 5 (breeding, Okapi; Waza: 1 small, 2 large) |
-| 139-144 | 6 | `immediate` | sponsor: what its immediate effect would give its holder if played now (cards not yet in a zoo; the rules' effect run on a copy of the state, with the card counted in the holder's zoo): [money / 20, appeal / 10, conservation / 5, cards to take / 2, workers / 2, free buildings / 2], each capped at 1 |
-| 145-148 | 4 | `income` | sponsor: what its break income pays its holder now (as if in the holder's zoo when not yet there): [money / 10, conservation / 2, X-tokens / 2, cards to take / 2], each capped at 1 |
-| 149-163 | 15 | `trigger_icon` | sponsor with an icon trigger: the icon whose plays trigger it, one-hot (same order as `player.icons`; none for Explorer, which reacts to icons new to the zoo) |
-| 164 | 1 | `trigger_any` | the trigger counts icons played into any zoo (else only into its owner's) |
-| 165-172 | 8 | `trigger_gain` | per triggering icon: [money / 3, appeal / 2, conservation, reputation, X-token, a free building, a card to pick, an ability (Pouch, Clever, Sun Bathing, Hunter, Okapi Stable, Explorer)] |
-| 173 | 1 | `strength_short` | animal / sponsor not yet in a zoo: strength points the holder's Animals / Sponsors card lacks to play it now, X-tokens aside, / 5 (capped at 1). Animals I plays from strength 2, Animals II from 1; Sponsors plays levels up to its strength, +1 on side II |
-| 174 | 1 | `opp_in_range` | display card within the opponent's reputation range |
-| 175 | 1 | `opp_money_now` | display card: `money_now` for the opponent |
-| 176 | 1 | `opp_affordable` | display card: the opponent has that money |
-| 177 | 1 | `opp_req_ok` | display card: the opponent meets its conditions |
-| 178 | 1 | `opp_has_place` | display card: the opponent's zoo has room for it |
-| 179 | 1 | `opp_strength_short` | display card: `strength_short` for the opponent |
+| 6 | 1 | `my_stored` | one of my cards stored face down (Caves) |
+| 7 | 1 | `chosen` | named by a take atom of the prefix (hand / display / project) |
+| 8 | 1 | `chosen_discard` | named by a discard atom of the prefix (setup discards so far) |
+| 9 | 1 | `display_pos` | display folder / 6 (also the extra money to play it from there) |
+| 10 | 1 | `in_range` | display card within my reputation range |
+| 11 | 1 | `unknown` | an unseen hand card of the opponent: entity 0, no other feature |
+| 12 | 1 | `my_zoo` | in my zoo |
+| 13 | 1 | `opp_zoo` | in the opponent's zoo |
+| 14 | 1 | `my_final` | one of my final scoring cards |
+| 15 | 1 | `pending` | the sponsor whose unique building is being placed |
+| 16-18 | 3 | `type` | animal, sponsor, final scoring card |
+| 19 | 1 | `cost` | printed cost / 36 |
+| 20 | 1 | `money_now` | money for its holder to play it now / 36: animals cost less the holder's partner zoo and expert discounts, plus the display folder (cards not yet in a zoo) |
+| 21 | 1 | `affordable` | the holder has that money |
+| 22 | 1 | `size` | animal size / 5 |
+| 23 | 1 | `appeal` | appeal / 10 |
+| 24 | 1 | `conservation` | conservation / 5 |
+| 25 | 1 | `reputation` | reputation / 5 |
+| 26 | 1 | `level` | sponsor level / 6 |
+| 27 | 1 | `rock` | rock spaces required next to the enclosure / 2 |
+| 28 | 1 | `water` | water spaces required / 2 |
+| 29 | 1 | `no_standard` | animal that cannot live in a standard enclosure (petting zoo animal) |
+| 30-35 | 6 | `special` | per special enclosure (reptile house, aviary, petting zoo): [may live there, spaces it takes / 5] |
+| 36-50 | 15 | `tags` | icons printed top right / 2 (same order as `player.icons`) |
+| 51-70 | 20 | `req` | conditions: 15 icons (count / 2), partner zoo (count / 2), Animals II, Sponsors II (0.5), maximum appeal / 50, minimum reputation / 15 |
+| 71 | 1 | `unmet` | conditions the holder does not meet / 3 |
+| 72 | 1 | `req_ok` | the holder meets the conditions to play it (cards not yet in a zoo) |
+| 73 | 1 | `has_place` | the holder's zoo has room for it: an enclosure for the animal, a spot for the sponsor's building |
+| 74-117 | 44 | `ability` | ability keywords in the order of `Keyword` (arknova_cards.h): 1, or (X + 1) / 6 for "keyword X" |
+| 118-122 | 5 | `effect` | the card has: an immediate effect, an icon-triggered effect, a break income, an end-of-game effect, any lasting effect |
+| 123-128 | 6 | `building` | sponsor's unique building: [present, size / 5, rock next to it / 2, water / 2, border spaces / 2, must touch a building] |
+| 129-136 | 8 | `scoring` | final scoring card: 4 x [threshold / 24, conservation / 4] |
+| 137-138 | 2 | `yield` | what its end-of-game effect would score now for its holder: [conservation / 4, appeal / 10] (final scoring cards: my final cards and offered ones; sponsors: in a zoo for its owner, anywhere else as if its holder played it now, its icons counted in the zoo) |
+| 139 | 1 | `tokens` | tokens on the card / 5 (breeding, Okapi; Waza: 1 small, 2 large) |
+| 140-145 | 6 | `immediate` | sponsor: what its immediate effect would give its holder if played now (cards not yet in a zoo; the rules' effect run on a copy of the state, with the card counted in the holder's zoo): [money / 20, appeal / 10, conservation / 5, cards to take / 2, workers / 2, free buildings / 2], each capped at 1 |
+| 146-149 | 4 | `income` | sponsor: what its break income pays its holder now (as if in the holder's zoo when not yet there): [money / 10, conservation / 2, X-tokens / 2, cards to take / 2], each capped at 1 |
+| 150-164 | 15 | `trigger_icon` | sponsor with an icon trigger: the icon whose plays trigger it, one-hot (same order as `player.icons`; none for Explorer, which reacts to icons new to the zoo) |
+| 165 | 1 | `trigger_any` | the trigger counts icons played into any zoo (else only into its owner's) |
+| 166-173 | 8 | `trigger_gain` | per triggering icon: [money / 3, appeal / 2, conservation, reputation, X-token, a free building, a card to pick, an ability (Pouch, Clever, Sun Bathing, Hunter, Okapi Stable, Explorer)] |
+| 174 | 1 | `strength_short` | animal / sponsor not yet in a zoo: strength points the holder's Animals / Sponsors card lacks to play it now, X-tokens aside, / 5 (capped at 1). Animals I plays from strength 2, Animals II from 1; Sponsors plays levels up to its strength, +1 on side II |
+| 175 | 1 | `opp_in_range` | display card within the opponent's reputation range |
+| 176 | 1 | `opp_money_now` | display card: `money_now` for the opponent |
+| 177 | 1 | `opp_affordable` | display card: the opponent has that money |
+| 178 | 1 | `opp_req_ok` | display card: the opponent meets its conditions |
+| 179 | 1 | `opp_has_place` | display card: the opponent's zoo has room for it |
+| 180 | 1 | `opp_strength_short` | display card: `strength_short` for the opponent |
+| 181 | 1 | `marked_me` | display card with my Mark token (2 money when it leaves the display, the card when discarded) |
+| 182 | 1 | `marked_opp` | display card with the opponent's Mark token |
+| 183 | 1 | `rescued` | zoo animal under the map (Rescue Station): counts for icons and sizes, cannot be released |
 
 ### `project` token
 
@@ -596,29 +613,30 @@ in the pools (only their composition).
 | 3 | 1 | `public_list` | in the pending frame's public list (Hunter reveal, base project pile) |
 | 4 | 1 | `private_list` | in my pending private list (Perception / Scavenging / Resistance draw) |
 | 5 | 1 | `opp_maybe_tucked` | seen in the opponent's hand before a face-down tuck: in its hand or tucked |
-| 6 | 1 | `chosen` | named by a take atom of the prefix (hand / display / project) |
-| 7 | 1 | `chosen_discard` | named by a discard atom of the prefix (setup discards so far) |
-| 8 | 1 | `display_pos` | display folder / 6 (also the extra money to play it from there) |
-| 9 | 1 | `in_range` | display card within my reputation range |
-| 10 | 1 | `in_play` | a conservation project in play |
-| 11-14 | 4 | `category` | base, release, breed, normal |
-| 15-33 | 19 | `icon` | what it counts, in the order of `ProjIcon`: the 15 icons, all animal categories, all continents, small animals, large animals |
-| 34-36 | 3 | `level_required` | per level 1-3: icons required / 8 (0: none) |
-| 37-39 | 3 | `level_size_min` | per level: smallest animal size to release / 5 |
-| 40-42 | 3 | `level_size_max` | per level: largest animal size to release / 5 |
-| 43-45 | 3 | `level_conservation` | per level: conservation reward / 5 |
-| 46-48 | 3 | `level_reputation` | per level: reputation reward / 5 |
-| 49-52 | 4 | `play_bonus` | bonus for playing the card: [money / 10, appeal / 10, conservation / 5, reputation / 5] |
-| 53-55 | 3 | `occupied_free` | in play, per level: free |
-| 56-58 | 3 | `occupied_me` | in play, per level: mine |
-| 59-61 | 3 | `occupied_opp` | in play, per level: the opponent's |
-| 62-64 | 3 | `occupied_blocked` | in play, per level: blocked (2 players) |
-| 65-67 | 3 | `can_me` | per level: I could support it there now (level free, not yet supported by me, condition met, a map token left) |
-| 68-70 | 3 | `can_opp` | per level: the opponent could |
-| 71 | 1 | `count_me` | how many of its icon my zoo has / 8 |
-| 72 | 1 | `count_opp` | the opponent's count / 8 |
-| 73 | 1 | `affordable` | I have the money for its display folder (1 when not on the display) |
-| 74 | 1 | `strength_short` | strength points the holder's Association card lacks to support a project, X-tokens aside, / 5 (needs 5, 4 with the Veterinarian) |
+| 6 | 1 | `my_stored` | one of my cards stored face down (Caves) |
+| 7 | 1 | `chosen` | named by a take atom of the prefix (hand / display / project) |
+| 8 | 1 | `chosen_discard` | named by a discard atom of the prefix (setup discards so far) |
+| 9 | 1 | `display_pos` | display folder / 6 (also the extra money to play it from there) |
+| 10 | 1 | `in_range` | display card within my reputation range |
+| 11 | 1 | `in_play` | a conservation project in play |
+| 12-15 | 4 | `category` | base, release, breed, normal |
+| 16-34 | 19 | `icon` | what it counts, in the order of `ProjIcon`: the 15 icons, all animal categories, all continents, small animals, large animals |
+| 35-37 | 3 | `level_required` | per level 1-3: icons required / 8 (0: none) |
+| 38-40 | 3 | `level_size_min` | per level: smallest animal size to release / 5 |
+| 41-43 | 3 | `level_size_max` | per level: largest animal size to release / 5 |
+| 44-46 | 3 | `level_conservation` | per level: conservation reward / 5 |
+| 47-49 | 3 | `level_reputation` | per level: reputation reward / 5 |
+| 50-53 | 4 | `play_bonus` | bonus for playing the card: [money / 10, appeal / 10, conservation / 5, reputation / 5] |
+| 54-56 | 3 | `occupied_free` | in play, per level: free |
+| 57-59 | 3 | `occupied_me` | in play, per level: mine |
+| 60-62 | 3 | `occupied_opp` | in play, per level: the opponent's |
+| 63-65 | 3 | `occupied_blocked` | in play, per level: blocked (2 players) |
+| 66-68 | 3 | `can_me` | per level: I could support it there now (level free, not yet supported by me, condition met, a map token left) |
+| 69-71 | 3 | `can_opp` | per level: the opponent could |
+| 72 | 1 | `count_me` | how many of its icon my zoo has / 8 |
+| 73 | 1 | `count_opp` | the opponent's count / 8 |
+| 74 | 1 | `affordable` | I have the money for its display folder (1 when not on the display) |
+| 75 | 1 | `strength_short` | strength points the holder's Association card lacks to support a project, X-tokens aside, / 5 (needs 5, 4 with the Veterinarian) |
 
 ### `cell` token
 
@@ -627,30 +645,34 @@ in the pools (only their composition).
 | 0-2 | 3 | `terrain` | plain, water, rock |
 | 3 | 1 | `build2_only` | needs Build II |
 | 4 | 1 | `border` | on the border |
-| 5-33 | 29 | `bonus` | placement bonus, as an effect: per effect kind (money, appeal, xtoken, conservation, reputation, worker, upgrade, card, clever, enclosure, kiosk, multiplier, partner_zoo, university, sponsor_for_money, special_enclosure, rescue, store, extra_shift, strength, mark, wave, shark_attack, adapt, cut_down, animal_magnet, continent_marker, find_person, person_sponsor) its amount: money / 10, an enclosure's size / 5, anything else / 3 |
-| 34 | 1 | `covered` | covered by a building |
-| 35 | 1 | `adjacent` | next to a covered cell |
-| 36 | 1 | `buildable` | free and allowed for me now (terrain, Build II) |
-| 37-43 | 7 | `kind` | kind of the building on it: enclosure, kiosk, pavilion, petting zoo, reptile house, aviary, unique |
-| 44 | 1 | `anchor` | the lowest cell of its building (where an enclosure's token sits) |
-| 45 | 1 | `anchor_dq` | q offset to that cell / 4 |
-| 46 | 1 | `anchor_dr` | r offset to that cell / 4 |
-| 47 | 1 | `rock_neighbors` | rock cells next to it / 6 |
-| 48 | 1 | `water_neighbors` | water cells next to it / 6 |
-| 49 | 1 | `kiosk_income` | a kiosk: money it earns at a break / 6 |
-| 50 | 1 | `kiosks_adjacent` | my kiosks next to it / 3 |
-| 51 | 1 | `landmark` | one of the map's special spaces (its rule names it) |
-| 52 | 1 | `fill_appeal` | an animal placed into an empty standard enclosure covering this cell brings 2 more appeal / 2 (next to the observation tower) |
-| 53 | 1 | `extra_capacity` | a standard enclosure covering this cell holds 2 spaces more / 2 (next to the outdoor area) |
-| 54 | 1 | `break_money` | covering it pays this much money at every break (park restaurants next to it) |
-| 55 | 1 | `unlocks_trade` | covering it opens the harbour trade |
-| 56 | 1 | `unlocks_condition` | covering it lets one animal condition go unmet (research institute) |
-| 57 | 1 | `cover_draw_sponsor` | covering it reveals deck cards until a sponsor, which goes to the hand (Hollywood H) |
-| 58 | 1 | `group` | part of a group of spaces whose full cover counts (the rule's group) |
-| 59 | 1 | `group_kiosk_income` | the group, once covered, pays 1 money per kiosk at every break (ice cream parlours) |
-| 60 | 1 | `group_sponsor_discount` | the group, once covered, lowers sponsor levels by 1 (Hollywood) |
-| 61-67 | 7 | `opp_kind` | kind of the opponent's building on this space of its map (same order as `kind`) |
-| 68 | 1 | `opp_adjacent` | next to a space the opponent has covered |
+| 5-34 | 30 | `bonus` | placement bonus, as an effect: per effect kind (money, appeal, xtoken, conservation, reputation, worker, upgrade, card, clever, enclosure, kiosk, multiplier, partner_zoo, university, sponsor_for_money, special_enclosure, rescue, store, extra_shift, strength, mark, wave, shark_attack, adapt, cut_down, animal_magnet, continent_marker, find_person, person_sponsor) its amount: money / 10, an enclosure's size / 5, anything else / 3 |
+| 35 | 1 | `covered` | covered by a building |
+| 36 | 1 | `adjacent` | next to a covered cell |
+| 37 | 1 | `buildable` | free and allowed for me now (terrain, Build II) |
+| 38-44 | 7 | `kind` | kind of the building on it: enclosure, kiosk, pavilion, petting zoo, reptile house, aviary, unique |
+| 45 | 1 | `anchor` | the lowest cell of its building (where an enclosure's token sits) |
+| 46 | 1 | `anchor_dq` | q offset to that cell / 4 |
+| 47 | 1 | `anchor_dr` | r offset to that cell / 4 |
+| 48 | 1 | `rock_neighbors` | rock cells next to it / 6 |
+| 49 | 1 | `water_neighbors` | water cells next to it / 6 |
+| 50 | 1 | `kiosk_income` | a kiosk: money it earns at a break / 6 |
+| 51 | 1 | `kiosks_adjacent` | my kiosks next to it / 3 |
+| 52 | 1 | `landmark` | one of the map's special spaces (its rule names it) |
+| 53 | 1 | `fill_appeal` | an animal placed into an empty standard enclosure covering this cell brings 2 more appeal / 2 (next to the observation tower) |
+| 54 | 1 | `extra_capacity` | a standard enclosure covering this cell holds 2 spaces more / 2 (next to the outdoor area) |
+| 55 | 1 | `break_money` | covering it pays this much money at every break (park restaurants next to it) |
+| 56 | 1 | `unlocks_trade` | covering it opens the harbour trade |
+| 57 | 1 | `unlocks_condition` | covering it lets one animal condition go unmet (research institute) |
+| 58 | 1 | `cover_draw_sponsor` | covering it reveals deck cards until a sponsor, which goes to the hand (Hollywood H) |
+| 59 | 1 | `group` | part of a group of spaces whose full cover counts (the rule's group) |
+| 60 | 1 | `group_kiosk_income` | the group, once covered, pays 1 money per kiosk at every break (ice cream parlours) |
+| 61 | 1 | `group_sponsor_discount` | the group, once covered, lowers sponsor levels by 1 (Hollywood) |
+| 62-68 | 7 | `opp_kind` | kind of the opponent's building on this space of its map (same order as `kind`) |
+| 69 | 1 | `opp_adjacent` | next to a space the opponent has covered |
+| 70-74 | 5 | `continent_area` | Geographical Zoo: the continent area the space belongs to |
+| 75 | 1 | `marker_left` | Geographical Zoo: that area's marker is still on my map |
+| 76-79 | 4 | `quarter` | Drawing Board: the area the space belongs to |
+| 80 | 1 | `quarter_covered` | Drawing Board: that area is completely covered in my zoo |
 
 ### `enclosure` token
 
@@ -675,11 +697,11 @@ in the pools (only their composition).
 | offset | width | feature | meaning |
 |---|---|---|---|
 | 0-6 | 7 | `index` | which of the 7 tokens (left edge, top to bottom; the `map_token:t` atoms) |
-| 7-35 | 29 | `effect` | what it gives when taken: per effect kind (money, appeal, xtoken, conservation, reputation, worker, upgrade, card, clever, enclosure, kiosk, multiplier, partner_zoo, university, sponsor_for_money, special_enclosure, rescue, store, extra_shift, strength, mark, wave, shark_attack, adapt, cut_down, animal_magnet, continent_marker, find_person, person_sponsor) its amount: money / 10, an enclosure's size / 5, anything else / 3 |
-| 36 | 1 | `repeats` | it gives it again at every break once taken (the upper tokens) |
-| 37 | 1 | `taken_me` | I have taken it |
-| 38 | 1 | `taken_opp` | the opponent has taken it |
-| 39 | 1 | `chosen` | named by the prefix (`map_token:t`) |
+| 7-36 | 30 | `effect` | what it gives when taken: per effect kind (money, appeal, xtoken, conservation, reputation, worker, upgrade, card, clever, enclosure, kiosk, multiplier, partner_zoo, university, sponsor_for_money, special_enclosure, rescue, store, extra_shift, strength, mark, wave, shark_attack, adapt, cut_down, animal_magnet, continent_marker, find_person, person_sponsor) its amount: money / 10, an enclosure's size / 5, anything else / 3 |
+| 37 | 1 | `repeats` | it gives it again at every break once taken (the upper tokens) |
+| 38 | 1 | `taken_me` | I have taken it |
+| 39 | 1 | `taken_opp` | the opponent has taken it |
+| 40 | 1 | `chosen` | named by the prefix (`map_token:t`) |
 
 ### anchors
 
@@ -696,7 +718,7 @@ in the pools (only their composition).
 | `cell` | 598 | 58 | my map cell | `cell:c/o0` | `cell:c/o1` | `cell:c/o2` (heads 3-5: `o3`-`o5`) |
 
 Pointer heads: 6 per token (`TokenLayout.pointer_heads`). Head 0 = take / pick,
-head 1 = give, head 2 = snap; on `cell` tokens heads 0–5 are the six rotations
+head 1 = give, head 2 = snap, head 3 = mark (`display_mark:i`); on `cell` tokens heads 0–5 are the six rotations
 of the building whose lowest cell this is. The logit of pointer atom `a` is
 read from the token whose header names the atom's anchor, on the atom's head;
 an atom whose token is absent is never legal. Atoms 0–132 have no anchor.
@@ -818,7 +840,7 @@ the ark-nova-ai checkout:
 
 ## Configs
 
-`config/game.json` (feature 0 = variable tokens, actions 1570, belief 1218 / 240, max 1500
+`config/game.json` (feature 0 = variable tokens, actions 1593, belief 1218 / 240, max 1500
 plies), `mcts.json`, `train.json` (token transformer with
 `relative_position_radius` 4, beam_2x3 guidance),
 `belief.json`, `heuristic.json`, `web.json`.

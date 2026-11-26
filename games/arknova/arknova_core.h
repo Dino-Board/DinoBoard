@@ -32,6 +32,9 @@ constexpr int kMaxActionTokens = 4;
 constexpr int kMaxCardTokens = 12;
 constexpr int kMaxTucked = 24;
 constexpr int kMapPackSlots = 3;  // Rescue Station's slots under the map; Caves' storage slots
+// Tournament 1's hand card discard: free this turn, discarded (the next action gets +1), used.
+constexpr std::int8_t kBoostFree = 0, kBoostPending = 1, kBoostUsed = 2;
+constexpr const char* kHandBoostNames[] = {"free", "pending", "used"};
 constexpr int kMaxStack = 48;
 // A frame's card list (Hunter reveal) starts at d[1]: room for every predator icon of the game
 // (the Spotted Hyena Compound reveals one card per predator icon in the zoo); checked at startup.
@@ -47,16 +50,19 @@ constexpr std::int8_t kLastActionXtoken = kNumActions;  // Player::last_action v
 // ---- frames -------------------------------------------------------------------
 
 #define ARKNOVA_FRAME_KINDS(X)                                                                     \
-  X(ab_archaeologist) X(ab_boost) X(ab_dig) X(ab_hunter) X(ab_hypnosis_pick) X(ab_pick) X(ab_pilfer) \
-  X(ab_pilfer_pick)                                                                                 \
-  X(ab_pouch) X(ab_project) X(ab_resist) X(ab_snap) X(ab_sun) X(act_animals) X(act_association)    \
-  X(act_build) X(act_cards) X(act_sponsors) X(clever) X(conservation_tile) X(discard_final)         \
+  X(ab_archaeologist) X(ab_boost) X(ab_cut_down) X(ab_dig) X(ab_extra_shift) X(ab_hunter)           \
+  X(ab_hypnosis_pick) X(ab_mark) X(ab_pick) X(ab_pilfer) X(ab_pilfer_pick)                          \
+  X(ab_pouch) X(ab_project) X(ab_resist) X(ab_shark) X(ab_snap) X(ab_store) X(ab_sun)               \
+  X(act_animals) X(act_association)                                                                 \
+  X(act_build) X(act_cards) X(act_sponsors) X(clever) X(conservation_tile) X(continent_marker)      \
+  X(discard_final)                                                                                  \
   X(discard_hand) X(extra_action) X(free_build) X(gain_partner_zoo) X(gain_university)             \
-  X(move_animals) X(multiplier_repeat) X(okapi_stable) X(paid_sponsor) X(place_multiplier)          \
+  X(move_animals) X(multiplier_repeat) X(okapi_stable) X(paid_sponsor) X(person_sponsor)            \
+  X(place_multiplier)                                                                               \
   X(setup_keep) X(sponsor_building) X(take_card) X(turn) X(upgrade) X(upgrade_or_worker)            \
   X(waza_kind)                                                                                      \
   /* auto frames */                                                                                 \
-  X(break_) X(extra_end) X(final_scoring) X(next_turn) X(turn_end)
+  X(break_) X(drawn_effect) X(extra_end) X(final_scoring) X(next_turn) X(turn_end)
 
 enum class FrameKind : std::uint8_t {
 #define ARKNOVA_ENUM(k) k,
@@ -85,7 +91,8 @@ struct Frame {
   X(reputation) X(donate) X(support) X(play_project) X(play_project_display) X(release)            \
   X(play_release) X(play_release_display) X(break_) X(pick) X(take) X(target) X(move) X(boost)     \
   X(yes) X(no) X(replenish) X(kind) X(card) X(discard_display) X(discard_hand) X(tuck) X(sponsor)  \
-  X(project) X(stable) X(return_) X(sell) X(harbor) X(bonus)
+  X(project) X(stable) X(return_) X(sell) X(harbor) X(bonus) X(hand_boost) X(store) X(unstore)       \
+  X(mark) X(shark) X(cut_down) X(shift) X(continent)
 
 enum class Head : std::uint8_t {
 #define ARKNOVA_ENUM(k) k,
@@ -161,7 +168,7 @@ struct Player {
   CardIdx stored[kMapPackSlots] = {};
   std::int8_t concealed = 0;           // Artificial Intelligence: card slots concealed (1, 2, 4, 5 in turn)
   std::uint8_t quarters = 0;           // Drawing Board: bit per area completely covered now
-  bool hand_boost_used = false;        // Tournament 1: a hand card discarded for +1 strength this turn
+  std::int8_t hand_boost = 0;          // Tournament 1, this turn: kBoostFree, kBoostPending or kBoostUsed
 
   int strength(int action) const;
   bool is_upgraded(int action) const { return upgraded >> action & 1; }

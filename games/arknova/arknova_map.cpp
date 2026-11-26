@@ -397,6 +397,19 @@ int Zoo::place(BuildingKind kind, int size, CellMask cells, CardIdx name, std::v
   return id;
 }
 
+void Zoo::remove(int id) {
+  if (id < 0 || id >= n_buildings) throw std::runtime_error("arknova: no such building");
+  for (int i = id + 1; i < n_buildings; ++i) buildings[i - 1] = buildings[i];
+  buildings[--n_buildings] = Building{};
+  for (std::int8_t& o : cell_owner) {
+    if (o == id) {
+      o = kNoBuilding;
+    } else if (o > id) {
+      --o;
+    }
+  }
+}
+
 int Zoo::adjacent_terrain(CellMask cells, Terrain t) const {
   CellMask near = neighbor_mask(cells);
   const MapDef& md = def();
