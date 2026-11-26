@@ -44,6 +44,9 @@ BONUSES = {None: "kPBNone", "money5": "kPBMoney5", "money10": "kPBMoney10", "xto
            "scavenging3": "kPBScavenging3"}
 KINDS = {"enclosure": "kEnclosure", "kiosk": "kKiosk"}
 MAX_AREAS = 5
+# The maps Board Game Arena deals (its map option; its maps 1-8 are the "a" sides): the self-play pool
+# of the arknova_bga variant.
+BGA_MAPS = {*(f"plan{i}a" for i in range(1, 9)), "plan11", "plan12", "plan13", "plan14", "plant1"}
 # Left-edge tokens whose reward is an animal ability, as Board Game Arena's MAPS_DATA has them:
 # the first token of every map is Snapping 1 (take any display card), Silver Lake's fourth is
 # Determination and Ice Cream Parlors' fourth is Pouch 2 (ark-nova-ai: a card from the deck or
@@ -132,6 +135,7 @@ def write(maps, index, source="ark-nova-ai (hexmap.MAP0, data/maps)"):
         m.setdefault("linked_slots", [None, None, None])
         m.setdefault("areas", [])
         m.setdefault("selfplay", True)
+        m["bga"] = m["key"] in BGA_MAPS
         need(len(m["worker_slots"]) == 4 and len(m["linked_slots"]) == 3 and len(m["areas"]) <= MAX_AREAS,
              f"{m['key']}: panel sizes")
         areas = [f"0x{mask([tuple(c) for c in cells], index):x}ull" for cells in m["areas"]]
@@ -153,7 +157,7 @@ def write(maps, index, source="ark-nova-ai (hexmap.MAP0, data/maps)"):
             "     {" + ", ".join(cpp_token(e, rep, m["token_abilities"].get(str(i)))
                                 for i, (e, rep) in enumerate(m["tokens"])) + "},",
             f"     {len(prebuilt)}, {{{', '.join(prebuilt)}}},",
-            f"     {len(m['areas'])}, {{{', '.join(areas)}}}, {1 if m['selfplay'] else 0}}},",
+            f"     {len(m['areas'])}, {{{', '.join(areas)}}}, {1 if m['selfplay'] else 0}, {1 if m['bga'] else 0}}},",
         ]
     lines.append("};")
     OUT_INC.write_text("\n".join(lines) + "\n")

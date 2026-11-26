@@ -135,6 +135,7 @@ board_ai::GameBundle make_arknova(const std::string& game_id, std::uint64_t seed
   board_ai::GameBundle b;
   b.game_id = game_id;
   auto s = std::make_unique<ArknovaState>();
+  s->bga_maps_only = game_id == "arknova_bga";
   s->reset_with_seed(seed);
   b.state = std::move(s);
   b.rules = std::make_unique<ArknovaRules>();
@@ -199,5 +200,7 @@ board_ai::GameBundle make_arknova(const std::string& game_id, std::uint64_t seed
 }
 
 board_ai::GameRegistrar reg_arknova("arknova", [](std::uint64_t seed) { return make_arknova("arknova", seed); });
+// The same game dealt only on Board Game Arena's maps (training for play there).
+board_ai::GameRegistrar reg_arknova_bga("arknova_bga", [](std::uint64_t seed) { return make_arknova("arknova_bga", seed); });
 
 }  // namespace

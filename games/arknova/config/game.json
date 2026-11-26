@@ -15,6 +15,13 @@
       "action_space": 1593,
       "belief_feature_dim": 1218,
       "belief_logit_count": 240
+    },
+    "arknova_bga": {
+      "num_players": 2,
+      "feature_dim": 0,
+      "action_space": 1593,
+      "belief_feature_dim": 1218,
+      "belief_logit_count": 240
     }
   }
 }

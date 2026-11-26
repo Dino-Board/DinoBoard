@@ -122,10 +122,13 @@ ArknovaState::ArknovaState() {
 
 void ArknovaState::reset_with_seed(std::uint64_t seed) {
   IGameState::reset_step_count_base();
+  const bool bga_only = bga_maps_only;
   *this = ArknovaState();
+  bga_maps_only = bga_only;
   std::mt19937_64 rng(seed);
-  // Both zoos use one map, drawn uniformly per game.
-  const int map = static_cast<int>(rng() % static_cast<std::uint64_t>(num_selfplay_maps()));
+  // Both zoos use one map, drawn uniformly per game from the variant's pool.
+  const std::vector<int>& pool = selfplay_maps(bga_maps_only);
+  const int map = pool[static_cast<std::size_t>(rng() % pool.size())];
   new_game(core, rng, map);
   viz::init_viz(*this, schema());
   absorb_step(*this);

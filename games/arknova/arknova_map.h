@@ -113,11 +113,12 @@ struct MapDef {
   Prebuilt prebuilt[2];
   std::int8_t n_areas = 0;
   CellMask areas[kMaxMapAreas] = {};
+  bool bga = false;  // one of Board Game Arena's maps
 };
 int num_maps();
-// Maps dealt in self-play (new_game without a map): the first ones; the Zoo Map Packs' join once
-// their rules are complete.
-int num_selfplay_maps();
+// The maps a self-play game is dealt one of: every map marked for self-play, or (the arknova_bga
+// variant) only those Board Game Arena deals.
+const std::vector<int>& selfplay_maps(bool bga_only);
 const MapDef& map_def(int m);
 int map_by_key(const std::string& key);  // -1 when unknown
 

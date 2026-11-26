@@ -95,6 +95,8 @@ class ArknovaState final : public CloneableState<ArknovaState> {
   std::int16_t final_known[kPlayers][kFinalKnown];
   std::int16_t stored[kPlayers][kMapPackSlots];
   std::vector<ActionId> prefix;
+  // The arknova_bga variant: reset_with_seed deals only Board Game Arena's maps.
+  bool bga_maps_only = false;
 
  private:
   mutable bool core_stale_ = false;

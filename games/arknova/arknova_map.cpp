@@ -69,6 +69,7 @@ struct MapSource {
   std::int8_t n_areas;
   CellMask areas[kMaxMapAreas];
   std::int8_t selfplay;  // dealt by new_game
+  std::int8_t bga;       // dealt by Board Game Arena
 };
 
 #include "arknova_maps_data.inc"
@@ -98,6 +99,7 @@ std::vector<MapDef> build_maps() {
     std::copy(src.prebuilt, src.prebuilt + src.n_prebuilt, m.prebuilt);
     m.n_areas = src.n_areas;
     std::copy(src.areas, src.areas + src.n_areas, m.areas);
+    m.bga = src.bga != 0;
     out.push_back(m);
   }
   return out;
@@ -108,13 +110,13 @@ const std::vector<MapDef>& all_maps() {
   return maps;
 }
 
-int count_selfplay_maps() {
-  int n = 0;
-  while (n < kNumMaps && kMapSources[n].selfplay) ++n;
-  for (int m = n; m < kNumMaps; ++m) {
-    if (kMapSources[m].selfplay) throw std::logic_error("arknova maps: the self-play maps must come first");
+std::vector<int> pool_of(bool bga_only) {
+  std::vector<int> out;
+  for (int m = 0; m < kNumMaps; ++m) {
+    if (kMapSources[m].selfplay && (!bga_only || kMapSources[m].bga)) out.push_back(m);
   }
-  return n;
+  if (out.empty()) throw std::logic_error("arknova maps: an empty self-play pool");
+  return out;
 }
 
 using ShapeKey = std::vector<std::pair<int, int>>;
@@ -232,9 +234,9 @@ const MapCell& map_cell(int i) { return map_data().cells.at(i); }
 
 int num_maps() { return static_cast<int>(all_maps().size()); }
 
-int num_selfplay_maps() {
-  static const int n = count_selfplay_maps();
-  return n;
+const std::vector<int>& selfplay_maps(bool bga_only) {
+  static const std::vector<int> all = pool_of(false), bga = pool_of(true);
+  return bga_only ? bga : all;
 }
 
 const MapDef& map_def(int m) { return all_maps().at(m); }

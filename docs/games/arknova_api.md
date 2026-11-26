@@ -844,3 +844,9 @@ the ark-nova-ai checkout:
 plies), `mcts.json`, `train.json` (token transformer with
 `relative_position_radius` 4, beam_2x3 guidance),
 `belief.json`, `heuristic.json`, `web.json`.
+
+Two game ids share these configs and the model folder. `arknova` deals every map in self-play;
+`arknova_bga` deals only the 13 maps Board Game Arena offers (`"bga": true` in
+`arknova_maps.json`): 1a-8a (BGA's maps 1-8 are these sides), 11, 12, 13, 14 and T1. The other 12
+(0, 1-8, A, 9, 10) are dealt only by `arknova`. To train for play on BGA, run with
+`--game arknova_bga`.

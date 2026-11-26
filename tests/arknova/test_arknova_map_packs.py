@@ -56,6 +56,25 @@ def _play(seed, check, max_options=4000):
     return n
 
 
+BGA_MAPS = {*(f"plan{i}a" for i in range(1, 9)), "plan11", "plan12", "plan13", "plan14", "plant1"}
+
+
+def test_bga_variant_deals_only_board_game_arenas_maps():
+    """The maps are in two groups: the 13 Board Game Arena deals (its maps 1-8 are the "a" sides) and
+    the others. arknova deals all 25, arknova_bga only BGA's; both share the base game's config."""
+    maps = json.loads((Path(__file__).resolve().parents[2] / "games/arknova/arknova_maps.json").read_text())["maps"]
+    assert {m["key"] for m in maps if m["bga"]} == BGA_MAPS and len(maps) == 25
+    dealt = {g: set() for g in (GAME, "arknova_bga")}
+    for g in dealt:
+        for seed in range(300):
+            dealt[g].add(_core(engine.GameSession(g, seed=seed))["map"])
+    assert dealt[GAME] == {m["key"] for m in maps}
+    assert dealt["arknova_bga"] == BGA_MAPS
+    assert engine.game_metadata("arknova_bga")["action_space"] == engine.game_metadata(GAME)["action_space"]
+    from training.cli import find_game_config
+    assert find_game_config("arknova_bga")["action_space"] == engine.game_metadata(GAME)["action_space"]
+
+
 def test_strength_of_the_action_cards():
     """Map 12 conceals slots 1, 2, 4, 5 in turn (a card there has the next visible number); Tournament 1
     adds 1 after a hand card discard. The turn's base strength is the card's (X-tokens aside)."""

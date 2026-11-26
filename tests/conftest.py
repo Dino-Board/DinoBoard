@@ -115,7 +115,7 @@ def load_game_config(game_id: str) -> dict:
     """Load a game's game.json plus C++-side metadata. Generic helper —
     works for any registered game, framework or per-game test."""
     import re
-    base = re.sub(r"(_v?tok)?(_\d+p)?$", "", game_id)
+    base = re.sub(r"(_bga)?(_v?tok)?(_\d+p)?$", "", game_id)
     config_path = PROJECT_ROOT / "games" / base / "config" / "game.json"
     with open(config_path, encoding="utf-8") as f:
         cfg = json.load(f)

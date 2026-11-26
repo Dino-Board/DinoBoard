@@ -38,8 +38,9 @@ struct MctsPvHeuristicConfig {
 };
 
 inline std::string base_game_id(std::string game_id) {
-  // `_tok` (`_rtok`, `_vtok`) marks a token-encoder variant sharing the base game's configs.
-  static const std::regex suffix_re(R"((_[rv]?tok)?(_\d+p)?$)");
+  // `_tok` (`_rtok`, `_vtok`) marks a token-encoder variant sharing the base game's configs; `_bga`
+  // (Ark Nova on Board Game Arena's maps only) too.
+  static const std::regex suffix_re(R"((_bga)?(_[rv]?tok)?(_\d+p)?$)");
   return std::regex_replace(game_id, suffix_re, "");
 }
 
