@@ -59,13 +59,16 @@ std::vector<Housing> housings(const Player& pl, CardIdx c) {
         break;
       }
     }
+    // Glossary, Flock Animal: it needs no enclosure of its own when another herbivore in the zoo
+    // requires an enclosure of at least the same size (that herbivore's card, not its enclosure).
     if (flock >= 0) {
       for (int b = 0; b < zoo.n_buildings; ++b) {
         const Building& bb = zoo.buildings[b];
-        if (bb.kind != BuildingKind::kEnclosure || !bb.occupied || bb.capacity() < flock || !terrain_ok(pl, bb, d)) continue;
+        if (bb.kind != BuildingKind::kEnclosure || !bb.occupied || !terrain_ok(pl, bb, d)) continue;
         bool herbivore = false;
         for (int h = 0; h < pl.n_housing; ++h) {
-          if (pl.housing[h].building == b && card(pl.housing[h].card).tags[kIcon_herbivore]) herbivore = true;
+          const CardDef& other = card(pl.housing[h].card);
+          if (pl.housing[h].building == b && other.tags[kIcon_herbivore] && other.enc_standard >= flock) herbivore = true;
         }
         if (herbivore) found.push_back({b, 0});
       }
