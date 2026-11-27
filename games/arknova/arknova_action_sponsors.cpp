@@ -47,10 +47,20 @@ void play_sponsor(State& s, int p, CardIdx c, Chance& ch) {
   const auto& ci = card_icons(c);
   for (int k = 0; k < kNumIcons; ++k) added[k] = ci[k];
   icons_played(s, p, added, before, ch);
-  if (has_immediate(c)) immediate_effect(s, c, p);
-  gain(s, p, EffectKind::kEffReputation, d.reputation);
-  gain(s, p, EffectKind::kEffConservation, d.conservation);
-  gain(s, p, EffectKind::kEffAppeal, d.appeal);
+  if (!g_upstream_rules) {
+    // Push conservation before reputation and immediate_effect so LIFO resolves immediate effects
+    // (e.g. Zoo School 254 take_card) and reputation bonuses before conservation_tile, matching
+    // play_animal and BGA.
+    gain(s, p, EffectKind::kEffAppeal, d.appeal);
+    gain(s, p, EffectKind::kEffConservation, d.conservation);
+    gain(s, p, EffectKind::kEffReputation, d.reputation);
+    if (has_immediate(c)) immediate_effect(s, c, p);
+  } else {
+    if (has_immediate(c)) immediate_effect(s, c, p);
+    gain(s, p, EffectKind::kEffReputation, d.reputation);
+    gain(s, p, EffectKind::kEffConservation, d.conservation);
+    gain(s, p, EffectKind::kEffAppeal, d.appeal);
+  }
   if (d.building.present) {
     int fi = push(s, FrameKind::sponsor_building, p);
     frame(s, fi).d[sponsor_building_card] = c;

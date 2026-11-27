@@ -118,7 +118,10 @@ void snap_apply(State& s, int fi, const Option& o, Chance& ch) {
     --f.d[fd::left];
     f.d[fd::snap_can_replenish] = f.d[fd::snap_replenish_between] && f.d[fd::left] > 0;
     f.d[fd::snap_replenish_between] = 0;
-    if (f.d[fd::left] <= 0) pop(s, fi);
+    if (f.d[fd::left] <= 0) {
+      pop(s, fi);
+      refill_display(s, ch);  // after the last snapped card the row slides; between two, the player chooses
+    }
   }
 }
 

@@ -500,7 +500,7 @@ inline void fill_cards(CardDef* c) {
   c[39].slots[0].required = 5; c[39].slots[0].size_min = -1; c[39].slots[0].size_max = -1;
   c[39].slots[0].rewards[0] = {Reward::kRewardConservation, 4, RewardReq::kRReqRock};
   c[39].slots[0].n_rewards = 1;
-  c[39].slots[1].required = 4; c[39].slots[1].size_min = -1; c[39].slots[1].size_max = -1;
+  c[39].slots[1].required = 3; c[39].slots[1].size_min = -1; c[39].slots[1].size_max = -1;
   c[39].slots[1].rewards[0] = {Reward::kRewardConservation, 3, RewardReq::kRReqRock};
   c[39].slots[1].n_rewards = 1;
   c[39].slots[2].required = 2; c[39].slots[2].size_min = -1; c[39].slots[2].size_max = -1;
@@ -1053,10 +1053,11 @@ inline void fill_cards(CardDef* c) {
   c[93].reputation = 0;
   c[93].level = 5;
   c[93].human = false;
+  c[93].enc_water = 1;
   ++c[93].tags[kIcon_bear];
   ++c[93].tags[kIcon_predator];
   c[93].lasting_effect = true;
-  c[93].building = {true, 4, {{0, 0}, {-1, 1}, {1, 0}, {2, -1}}, 4, 0, 0, 0, true};
+  c[93].building = {true, 4, {{0, 0}, {-1, 1}, {1, 0}, {2, -1}}, 4, 0, 1, 0, true};
   // 252 Spotted Hyena Compound
   c[94].id = 252; c[94].type = CardType::kSponsor; c[94].name = "Spotted Hyena Compound";
   c[94].appeal = 0;
@@ -2478,6 +2479,7 @@ inline void fill_cards(CardDef* c) {
   c[188].conservation = 0;
   c[188].reputation = 0;
   c[188].enc_standard = 2;
+  c[188].enc_water = 1;
   c[188].special[0] = {SpecialKind::kReptileHouse, 1};
   c[188].n_special = 1;
   ++c[188].tags[kIcon_reptile];

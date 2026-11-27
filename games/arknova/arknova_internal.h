@@ -212,6 +212,7 @@ int place_building(State& s, int p, BuildingKind kind, int size, CellMask cells,
 
 int map_condition_allowance(const Player& pl);  // Map 6: animal conditions that may be ignored
 int map_sponsor_level_delta(const Player& pl);  // Map 8: change to every sponsor's level
+int map_outdoor_extra_size(const Player& pl, BuildingKind kind, CellMask cells);  // Map 2: Outdoor Area +2 size
 void map_after_build(State& s, int p, int building, Chance& ch);  // Maps 8, 2 (AFTER_BUILD_HOOKS)
 void map_enclosure_filled(State& s, int p, int building);  // Map 1: an empty standard enclosure got an animal
 void map_break_income(State& s, int p);  // Maps 5, 7 (BREAK_INCOME_HOOKS)

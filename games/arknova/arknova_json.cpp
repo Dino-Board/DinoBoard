@@ -767,6 +767,7 @@ void read_player(Player& pl, const J& v, int map) {
     bb.occupied = b.at("occupied").boolean();
     bb.used = static_cast<std::int8_t>(b.at("used").i());
     bb.extra_size = static_cast<std::int8_t>(b.at("extra_size").i());
+    if (bb.extra_size == 0) bb.extra_size = static_cast<std::int8_t>(map_outdoor_extra_size(pl, bb.kind, bb.cells));
   }
 }
 

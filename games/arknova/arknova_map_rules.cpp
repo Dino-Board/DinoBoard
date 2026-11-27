@@ -88,15 +88,21 @@ int map_sponsor_level_delta(const Player& pl) {
   return rule_is(pl, MapRule::kHollywood) && all_rule_cells_covered(pl) ? -1 : 0;
 }
 
+int map_outdoor_extra_size(const Player& pl, BuildingKind kind, CellMask cells) {
+  return (rule_is(pl, MapRule::kOutdoorArea) && kind == BuildingKind::kEnclosure &&
+          (touching(cells) & pl.zoo.def().rule_cells))
+             ? kOutdoorExtraSize
+             : 0;
+}
+
 void map_after_build(State& s, int p, int building, Chance& ch) {
   Player& pl = s.players[p];
   Building& b = pl.zoo.buildings[building];
   if (rule_is(pl, MapRule::kHollywood)) {
     for (int i = popcount(b.cells & pl.zoo.def().rule_cells); i > 0; --i) sr::reveal_until(s, p, is_sponsor, ch);
   }
-  if (rule_is(pl, MapRule::kOutdoorArea) && b.kind == BuildingKind::kEnclosure &&
-      (touching(b.cells) & pl.zoo.def().rule_cells)) {
-    pl.zoo.buildings[building].extra_size = kOutdoorExtraSize;
+  if (int extra = map_outdoor_extra_size(pl, b.kind, b.cells); extra > 0) {
+    pl.zoo.buildings[building].extra_size = static_cast<std::int8_t>(extra);
   }
 }
 
@@ -124,6 +130,37 @@ void map_break_income(State& s, int p) { gain(s, p, EffectKind::kEffMoney, map_b
 
 bool harbor_active(const Player& pl) { return rule_is(pl, MapRule::kHarbor) && any_rule_cell_covered(pl); }
 
+namespace {
+bool harbor_allowed_frame(FrameKind k) {
+  switch (k) {
+    case FrameKind::turn:
+    case FrameKind::extra_action:
+    case FrameKind::multiplier_repeat:
+    case FrameKind::act_animals:
+    case FrameKind::act_association:
+    case FrameKind::act_build:
+    case FrameKind::free_build:
+    case FrameKind::sponsor_building:
+    case FrameKind::okapi_stable:
+    case FrameKind::act_sponsors:
+    case FrameKind::take_card:
+    case FrameKind::upgrade:
+    case FrameKind::upgrade_or_worker:
+    case FrameKind::conservation_tile:
+    case FrameKind::gain_partner_zoo:
+    case FrameKind::gain_university:
+    case FrameKind::waza_kind:
+    case FrameKind::move_animals:
+    case FrameKind::clever:
+    case FrameKind::ab_pouch:
+    case FrameKind::ab_project:
+      return true;
+    default:
+      return false;
+  }
+}
+}  // namespace
+
 void harbor_options(State& s, std::vector<Option>& out) {
   const int p = s.top().player;
   if (!harbor_active(s.players[p]) || p != s.current || s.harbor_used) return;
@@ -131,6 +168,7 @@ void harbor_options(State& s, std::vector<Option>& out) {
     FrameKind k = s.stack[i].kind;
     if (k == FrameKind::break_ || k == FrameKind::setup_keep || k == FrameKind::final_scoring) return;
   }
+  if (!g_upstream_rules && !harbor_allowed_frame(s.top().kind)) return;
   std::vector<Option> base = out;
   for (CardIdx c : s.players[p].hand_cards()) {
     if (harbor_leaves_options(s, base, c)) out.push_back(opt(Head::harbor, c));

@@ -44,7 +44,10 @@ void cards_apply(State& s, int fi, const Option& o, Chance& ch) {
   int p = f.player;
   if (o.head == Head::snap || o.head == Head::skip) {
     pop(s, fi);
-    if (o.head == Head::snap) to_hand(s, p, take_from_display(s, o.a[0]), true);
+    if (o.head == Head::snap) {
+      to_hand(s, p, take_from_display(s, o.a[0]), true);
+      refill_display(s, ch);  // the row slides and the deck fills the gap before anything else
+    }
     return;
   }
   if (o.head == Head::deck && !f.d[fd::cards_upgraded]) {
@@ -58,6 +61,7 @@ void cards_apply(State& s, int fi, const Option& o, Chance& ch) {
       to_hand(s, p, draw_from_deck(s, ch), false);
     } else {
       to_hand(s, p, take_from_display(s, o.a[0]), true);
+      refill_display(s, ch);  // BGA slides the row before the next card of this action
     }
     ++f.d[fd::cards_drawn];
   }
