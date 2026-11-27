@@ -1,4 +1,4 @@
-"""Pipeline orchestration tests: CLI config, batch functions, heuristic episodes, gating, scheduling."""
+"""Pipeline orchestration tests: CLI config, batch functions, heuristic episodes, eval, scheduling."""
 import json
 import math
 import tempfile
@@ -122,7 +122,7 @@ def test_selfplay_batch_passes_tail_solve_config():
         temperature_schedule_enabled=False,
         temperature_initial=0.0,
         temperature_final=0.0,
-        temperature_decay_plies=0,
+        temperature_halflife_plies=0.0,
     )
     results, _ = run_selfplay_batch(
         "quoridor", get_test_model("quoridor"), num_episodes=3, base_seed=42,
@@ -161,9 +161,9 @@ def test_selfplay_batch_passes_temperature_schedule():
     cfg = _selfplay_cfg(
         "tictactoe", simulations=10, max_game_plies=50,
         temperature_schedule_enabled=True,
-        temperature_initial=1.0,
+        temperature_initial=0.8,
         temperature_final=0.01,
-        temperature_decay_plies=10,
+        temperature_halflife_plies=1.5,
     )
     results, _ = run_selfplay_batch(
         "tictactoe", get_test_model("tictactoe"), num_episodes=3, base_seed=42,
@@ -174,7 +174,7 @@ def test_selfplay_batch_passes_temperature_schedule():
 
 
 # ---------------------------------------------------------------------------
-# Eval batch (gating + benchmark, both share the eval profile)
+# Eval batch (benchmark matches share the eval profile)
 # ---------------------------------------------------------------------------
 
 def _arena_eval_kwargs(game_id: str) -> dict:
@@ -580,9 +580,8 @@ def test_full_training_loop_with_eval(tmp_path):
     )
     assert ep["total_plies"] > 0
 
-    # eval ran at step 2 → model_best.onnx is the step-2 model, a copy that step 3 left alone
-    best = models_dir / "model_best.onnx"
-    assert best.read_bytes() != latest_bytes, "model_best should be a frozen copy, not track latest"
+    # No gating: model_best.onnx is not produced.
+    assert not (models_dir / "model_best.onnx").exists()
 
 
 def _onnx_float_types(path: Path) -> tuple[set, set]:
@@ -594,7 +593,7 @@ def _onnx_float_types(path: Path) -> tuple[set, set]:
 
 
 def test_training_loop_fp16_inference(tmp_path):
-    """inference_precision=fp16: selfplay/eval/gating use fp16 copies with fp32
+    """inference_precision=fp16: selfplay/eval use fp16 copies with fp32
     I/O under models/fp16/, while saved checkpoints stay fp32."""
     import onnx
     from training.cli import find_heuristic_config

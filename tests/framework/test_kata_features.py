@@ -4,9 +4,7 @@
   prior mass) instead of 0.
 - `training.score_head`: auxiliary per-seat final score-margin target from
   the game's `final_score_extractor`; training-only, never exported.
-- `training.opponent_policy_head`: auxiliary target = search policy of the
-  next ply acted by another seat; training-only, never exported.
-- `training.ema`: exported models (selfplay / eval / gating) use an
+- `training.ema`: exported models (selfplay / eval) use an
   exponential moving average of the PV weights.
 """
 import dinoboard_engine
@@ -20,7 +18,6 @@ from training.model import AuxHead, PVNet, import_pv_onnx_state_dict
 from training.pipeline import (
     build_pv_optimizer,
     ema_update,
-    next_opponent_indices,
     run_training_loop,
     score_margin_targets,
 )
@@ -136,8 +133,8 @@ def test_score_head_trains_and_survives_toggling_on_resume(tmp_path, caplog, sma
     ({"score_head": {"loss_weight": 0.5}}, "exactly"),
     ({"score_head": {"loss_weight": 0.0, "scale": 15.0}}, "loss_weight"),
     ({"ema": {"decay": 1.0}}, "decay"),
-    ({"opponent_policy_head": {"loss_weight": -1.0}}, "loss_weight"),
-    ({"opponent_policy_head": {"weight": 0.15}}, "exactly"),
+    ({"opponent_policy_head": {"loss_weight": 0.15}}, "removed"),
+    ({"gating_accept_win_rate": 0.55}, "removed"),
 ])
 def test_rejects_invalid_blocks(tmp_path, bad, match):
     with pytest.raises(ValueError, match=match):
@@ -164,19 +161,19 @@ def _step(opt, modules):
 
 
 def test_build_pv_optimizer_matches_groups_by_name():
-    net, score, opp = PVNet(4, 3, [8]), AuxHead(8, 2), AuxHead(8, 3)
-    full = build_pv_optimizer(net, {"score_head": score, "opponent_policy_head": opp}, 1e-3, 0.0, None)
-    _step(full, [net, score, opp])
+    net, score, breakdown = PVNet(4, 3, [8]), AuxHead(8, 2), AuxHead(8, 6)
+    full = build_pv_optimizer(net, {"score_head": score, "score_breakdown_head": breakdown}, 1e-3, 0.0, None)
+    _step(full, [net, score, breakdown])
     pv_moment = full.state_dict()["state"][0]["exp_avg"].clone()
 
-    only_opp = build_pv_optimizer(net, {"opponent_policy_head": opp}, 1e-3, 0.0, full.state_dict())
-    assert _group_names(only_opp) == ["pv", "opponent_policy_head"]
-    assert torch.equal(only_opp.state[next(net.parameters())]["exp_avg"], pv_moment)
-    assert only_opp.state[next(opp.parameters())]  # moments carried over by name
+    only_breakdown = build_pv_optimizer(net, {"score_breakdown_head": breakdown}, 1e-3, 0.0, full.state_dict())
+    assert _group_names(only_breakdown) == ["pv", "score_breakdown_head"]
+    assert torch.equal(only_breakdown.state[next(net.parameters())]["exp_avg"], pv_moment)
+    assert only_breakdown.state[next(breakdown.parameters())]  # moments carried over by name
 
-    back = build_pv_optimizer(net, {"score_head": score, "opponent_policy_head": opp},
-                              1e-3, 0.0, only_opp.state_dict())
-    assert sorted(_group_names(back)) == ["opponent_policy_head", "pv", "score_head"]
+    back = build_pv_optimizer(net, {"score_head": score, "score_breakdown_head": breakdown},
+                              1e-3, 0.0, only_breakdown.state_dict())
+    assert sorted(_group_names(back)) == ["pv", "score_breakdown_head", "score_head"]
     assert not back.state[next(score.parameters())]  # re-enabled head starts fresh
 
 
@@ -190,35 +187,30 @@ def test_build_pv_optimizer_reads_legacy_unnamed_groups():
     assert opt.state[next(score.parameters())]
 
 
-# ---------------------------------------------------------------------------
-# Opponent policy head
-# ---------------------------------------------------------------------------
-
-def test_next_opponent_indices():
-    assert next_opponent_indices([0, 1, 0, 1]) == [1, 2, 3, None]
-    assert next_opponent_indices([0, 0, 1, 1, 0]) == [2, 2, 4, 4, None]
-    assert next_opponent_indices([0, 1, 2]) == [1, 2, None]
-    assert next_opponent_indices([]) == []
-
-
-OPP = {"opponent_policy_head": {"loss_weight": 0.15}}
-
-
-def test_opponent_policy_head_trains_and_toggles_on_resume(tmp_path, caplog, small_search):
+def test_resume_drops_legacy_opponent_policy_head_checkpoint(tmp_path, caplog, small_search):
+    """Existing checkpoints saved before opponent_policy_head was removed
+    still carry its state_dict and optimizer group; --resume drops them."""
     caplog.set_level("INFO", logger="training.pipeline")
-    ckpt = _run("splendor", _splendor_train_cfg(**SCORE), tmp_path, 1)
-    assert "opponent_policy_head_state_dict" not in ckpt
+    ckpt = _run("splendor", _splendor_train_cfg(**SCORE, opponent_policy_head=None), tmp_path, 1)
+    legacy_head = AuxHead(32, dinoboard_engine.game_metadata("splendor")["action_space"])
+    legacy_opt = torch.optim.AdamW(
+        [{"params": list(legacy_head.parameters()), "name": "opponent_policy_head"}], lr=1e-3)
+    _step(legacy_opt, [legacy_head])
+    legacy_opt_sd = legacy_opt.state_dict()
+    offset = max(ckpt["optimizer_state_dict"]["state"], default=-1) + 1
+    remapped_ids = [offset + i for i in range(len(legacy_opt_sd["param_groups"][0]["params"]))]
+    ckpt["optimizer_state_dict"]["param_groups"].append(
+        {**legacy_opt_sd["param_groups"][0], "params": remapped_ids})
+    for old_id, new_id in zip(legacy_opt_sd["param_groups"][0]["params"], remapped_ids):
+        ckpt["optimizer_state_dict"]["state"][new_id] = legacy_opt_sd["state"][old_id]
+    ckpt["opponent_policy_head_state_dict"] = legacy_head.state_dict()
+    torch.save(ckpt, tmp_path / "checkpoint.pt")
 
-    ckpt = _run("splendor", _splendor_train_cfg(**SCORE, **OPP), tmp_path, 2, resume=True)
-    names = [g["name"] for g in ckpt["optimizer_state_dict"]["param_groups"]]
-    assert sorted(names) == ["opponent_policy_head", "pv", "score_head"]
-    head = ckpt["opponent_policy_head_state_dict"]
-    assert head["net.2.weight"].shape[0] == dinoboard_engine.game_metadata("splendor")["action_space"]
-
-    ckpt = _run("splendor", _splendor_train_cfg(**OPP), tmp_path, 3, resume=True)
-    assert "score_head_state_dict" not in ckpt
-    assert any(not torch.equal(head[k], ckpt["opponent_policy_head_state_dict"][k]) for k in head)
-    assert "o_loss=" in caplog.text
+    resumed = _run("splendor", _splendor_train_cfg(**SCORE), tmp_path, 2, resume=True)
+    assert resumed["step"] == 2
+    assert "opponent_policy_head_state_dict" not in resumed
+    assert sorted(g["name"] for g in resumed["optimizer_state_dict"]["param_groups"]) == ["pv", "score_head"]
+    assert "dropped optimizer state of disabled 'opponent_policy_head'" in caplog.text
 
 
 # ---------------------------------------------------------------------------

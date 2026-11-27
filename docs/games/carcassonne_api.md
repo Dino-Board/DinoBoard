@@ -326,7 +326,6 @@ differs from the Splendor one in these points:
 | `train_batches_per_step` | 12 | about 30 sample draws per game, as in Splendor; 28 gave about 70, because a Carcassonne game records twice as many positions that all share one win/loss label |
 | `replay_buffer_size` | 1500000 | about 40k games in the window instead of 8k |
 | `symmetry_augmentation` | true | four views of every position |
-| `opponent_policy_head` | absent | the opponent's next move depends on a tile nobody has drawn yet; its loss stayed flat for a thousand steps |
 
 Whether these are sufficient has not been measured yet.
 

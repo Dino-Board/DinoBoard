@@ -11,7 +11,7 @@ Three config files per game, one shared baseline plus two profile sets:
                                      a pair-wise tournament for win-rate.
   - `games/<g>/config/web.json`    — `<web_expert|web_casual|analysis>`: profile
                                      deltas applied on top of the baseline. The
-                                     web never injects noise.
+                                     web/REST AI never injects noise.
 
 `resolve_profile(game_id, profile_name)` dispatches: `{selfplay, eval}` →
 train.json's `mcts` block; `{web_expert, web_casual, analysis}` → web.json. All
@@ -68,6 +68,7 @@ _PROFILE_FIELDS = {
     "dirichlet_epsilon",
     "dirichlet_on_first_n_plies",
     "dirichlet_total_alpha",
+    "dirichlet_shaped",
     "root_policy_temperature",
     "opponent_selection",
     "tail_solve_enabled",
@@ -88,11 +89,15 @@ _TRAIN_PROFILE_ONLY_FIELDS = {"uct2_arrival_visits"}
 # Selfplay exploration knobs: only train.json's `mcts.selfplay` may set them.
 # Eval and the web AI never explore, and none of those paths forwards
 # these fields, so a value anywhere else would be silently ignored — rejected.
-_SELFPLAY_PROFILE_ONLY_FIELDS = {"dirichlet_total_alpha", "root_policy_temperature"}
+_SELFPLAY_PROFILE_ONLY_FIELDS = {
+    "dirichlet_total_alpha",
+    "dirichlet_shaped",
+    "root_policy_temperature",
+}
 
-_TEMPERATURE_SCHEDULE_FIELDS = {"enabled", "initial", "final", "decay_plies"}
+_TEMPERATURE_SCHEDULE_FIELDS = {"enabled", "initial", "final", "halflife_plies"}
 
-_ROOT_POLICY_TEMPERATURE_FIELDS = {"initial", "final", "decay_plies"}
+_ROOT_POLICY_TEMPERATURE_FIELDS = {"initial", "final", "halflife_plies"}
 
 
 @dataclass(frozen=True)
@@ -115,21 +120,25 @@ class MctsProfile:
     temperature_schedule_enabled: bool
     temperature_initial: float
     temperature_final: float
-    temperature_decay_plies: int
+    temperature_halflife_plies: float
 
     dirichlet_alpha: float
     dirichlet_epsilon: float
     dirichlet_on_first_n_plies: int
     # Selfplay only. Root noise sized by the number of legal actions:
-    # per-action alpha = dirichlet_total_alpha / N. 0 = off; exclusive with
-    # dirichlet_alpha. See NetMctsConfig::root_dirichlet_total_alpha.
+    # total concentration = dirichlet_total_alpha (uniformly divided across N
+    # legal actions when dirichlet_shaped=False, or KataGo 50% uniform + 50%
+    # excess-log-prior shaped when dirichlet_shaped=True). 0 = off; exclusive
+    # with dirichlet_alpha. See NetMctsConfig::root_dirichlet_total_alpha.
     dirichlet_total_alpha: float
-    # Selfplay only. Root policy temperature of full searches, linear in the
-    # ply index from `initial` (ply 0) to `final` (`decay_plies` and later).
+    dirichlet_shaped: bool
+    # Selfplay only. Root policy temperature of full searches, KataGo
+    # exponential decay in the ply index:
+    # `final + (initial - final) * 0.5^(ply / halflife_plies)`.
     # 1 / 1 = off. See NetMctsConfig::root_policy_temperature.
     root_policy_temperature_initial: float
     root_policy_temperature_final: float
-    root_policy_temperature_decay_plies: int
+    root_policy_temperature_halflife_plies: float
 
     opponent_selection: str
 
@@ -161,7 +170,7 @@ _BASE_DICT: dict[str, Any] = {
     "temperature_schedule_enabled": False,
     "temperature_initial": 0.0,
     "temperature_final": 0.0,
-    "temperature_decay_plies": 0,
+    "temperature_halflife_plies": 0.0,
     # Dirichlet root noise is off by default. Only train.json's selfplay
     # profile (and only that one) is expected to switch it on.
     "dirichlet_alpha": 0.0,
@@ -172,9 +181,10 @@ _BASE_DICT: dict[str, Any] = {
     # train.json::mcts.selfplay.
     "dirichlet_on_first_n_plies": -1,
     "dirichlet_total_alpha": 0.0,
+    "dirichlet_shaped": False,
     "root_policy_temperature_initial": 1.0,
     "root_policy_temperature_final": 1.0,
-    "root_policy_temperature_decay_plies": 0,
+    "root_policy_temperature_halflife_plies": 0.0,
     "opponent_selection": "puct",
     "tail_solve_enabled": False,
     "tail_solve_depth_limit": 10,
@@ -361,11 +371,19 @@ def _flatten_temperature_schedule(layer: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(
             f"temperature_schedule has unknown keys: {sorted(extra)}. "
             f"Allowed: {sorted(_TEMPERATURE_SCHEDULE_FIELDS)}.")
+    if not isinstance(schedule["enabled"], bool):
+        raise ValueError(
+            f"temperature_schedule.enabled must be a boolean, got {schedule['enabled']!r}.")
+    if not (_is_number(schedule["initial"]) and _is_number(schedule["final"])
+            and _is_number(schedule["halflife_plies"])):
+        raise ValueError(
+            f"temperature_schedule: initial / final / halflife_plies must be finite "
+            f"numbers, got {schedule!r}.")
     out = {k: v for k, v in layer.items() if k != "temperature_schedule"}
-    out["temperature_schedule_enabled"] = bool(schedule["enabled"])
+    out["temperature_schedule_enabled"] = schedule["enabled"]
     out["temperature_initial"] = float(schedule["initial"])
     out["temperature_final"] = float(schedule["final"])
-    out["temperature_decay_plies"] = int(schedule["decay_plies"])
+    out["temperature_halflife_plies"] = float(schedule["halflife_plies"])
     return out
 
 
@@ -378,8 +396,8 @@ def _flatten_root_policy_temperature(layer: dict[str, Any]) -> dict[str, Any]:
     """Expand `root_policy_temperature` into flat profile fields.
 
     Either one number T (the same temperature at every ply) or
-    `{"initial": T0, "final": T1, "decay_plies": n}` (linear from T0 at ply 0
-    to T1 at ply n and after)."""
+    `{"initial": T0, "final": T1, "halflife_plies": H}` (KataGo exponential
+    decay `T1 + (T0 - T1) * 0.5^(ply / H)`)."""
     if "root_policy_temperature" not in layer:
         return layer
     value = layer["root_policy_temperature"]
@@ -387,21 +405,21 @@ def _flatten_root_policy_temperature(layer: dict[str, Any]) -> dict[str, Any]:
     if _is_number(value):
         out["root_policy_temperature_initial"] = float(value)
         out["root_policy_temperature_final"] = float(value)
-        out["root_policy_temperature_decay_plies"] = 0
+        out["root_policy_temperature_halflife_plies"] = 0.0
         return out
     if not isinstance(value, dict) or set(value.keys()) != _ROOT_POLICY_TEMPERATURE_FIELDS:
         raise ValueError(
             f"root_policy_temperature must be a number or a JSON object with exactly "
             f"{sorted(_ROOT_POLICY_TEMPERATURE_FIELDS)}, got {value!r}.")
-    decay = value["decay_plies"]
+    halflife = value["halflife_plies"]
     if not (_is_number(value["initial"]) and _is_number(value["final"])
-            and isinstance(decay, int) and not isinstance(decay, bool)):
+            and _is_number(halflife)):
         raise ValueError(
-            f"root_policy_temperature: initial / final must be numbers and decay_plies "
-            f"an integer, got {value!r}.")
+            f"root_policy_temperature: initial / final / halflife_plies must be "
+            f"finite numbers, got {value!r}.")
     out["root_policy_temperature_initial"] = float(value["initial"])
     out["root_policy_temperature_final"] = float(value["final"])
-    out["root_policy_temperature_decay_plies"] = decay
+    out["root_policy_temperature_halflife_plies"] = float(halflife)
     return out
 
 
@@ -425,6 +443,17 @@ def _validate_resolved(name: str, game_id: str, merged: dict[str, Any]) -> None:
         raise ValueError(
             f"profile {name!r} for game {game_id!r}: uct2_arrival_visits must be "
             f"true or false, got {merged['uct2_arrival_visits']!r}.")
+    t_hl = merged["temperature_halflife_plies"]
+    if not (_is_number(t_hl) and t_hl >= 0):
+        raise ValueError(
+            f"profile {name!r} for game {game_id!r}: temperature_schedule.halflife_plies "
+            f"must be a finite number >= 0, got {t_hl!r}.")
+    if (merged["temperature_schedule_enabled"]
+            and merged["temperature_initial"] != merged["temperature_final"]
+            and t_hl <= 0):
+        raise ValueError(
+            f"profile {name!r} for game {game_id!r}: temperature_schedule.halflife_plies "
+            f"must be > 0 when enabled and initial != final, got {t_hl!r}.")
     total_alpha = merged["dirichlet_total_alpha"]
     if not (_is_number(total_alpha) and total_alpha >= 0):
         raise ValueError(
@@ -435,17 +464,26 @@ def _validate_resolved(name: str, game_id: str, merged: dict[str, Any]) -> None:
             f"profile {name!r} for game {game_id!r}: dirichlet_alpha "
             f"({merged['dirichlet_alpha']!r}) and dirichlet_total_alpha ({total_alpha!r}) "
             f"are two ways to size the same root noise; set only one of them.")
+    shaped = merged["dirichlet_shaped"]
+    if not isinstance(shaped, bool):
+        raise ValueError(
+            f"profile {name!r} for game {game_id!r}: dirichlet_shaped must be "
+            f"true or false, got {shaped!r}.")
+    if shaped and total_alpha <= 0:
+        raise ValueError(
+            f"profile {name!r} for game {game_id!r}: dirichlet_shaped=true "
+            f"requires dirichlet_total_alpha > 0, got {total_alpha!r}.")
     rpt_initial = merged["root_policy_temperature_initial"]
     rpt_final = merged["root_policy_temperature_final"]
-    rpt_decay = merged["root_policy_temperature_decay_plies"]
+    rpt_halflife = merged["root_policy_temperature_halflife_plies"]
     if not (rpt_initial > 0 and rpt_final > 0):
         raise ValueError(
             f"profile {name!r} for game {game_id!r}: root_policy_temperature must be "
             f"> 0 (1 = off), got initial={rpt_initial!r}, final={rpt_final!r}.")
-    if rpt_decay < 0 or (rpt_initial != rpt_final and rpt_decay == 0):
+    if rpt_halflife < 0 or (rpt_initial != rpt_final and rpt_halflife <= 0):
         raise ValueError(
-            f"profile {name!r} for game {game_id!r}: root_policy_temperature.decay_plies "
-            f"must be > 0 when initial != final (and never negative), got {rpt_decay!r}.")
+            f"profile {name!r} for game {game_id!r}: root_policy_temperature.halflife_plies "
+            f"must be > 0 when initial != final (and never negative), got {rpt_halflife!r}.")
     if merged["opponent_selection"] not in _VALID_OPPONENT_SELECTION:
         raise ValueError(
             f"profile {name!r} for game {game_id!r}: opponent_selection must be "
@@ -506,14 +544,15 @@ def resolve_profile(game_id: str, profile_name: str) -> MctsProfile:
         temperature_schedule_enabled=bool(merged["temperature_schedule_enabled"]),
         temperature_initial=float(merged["temperature_initial"]),
         temperature_final=float(merged["temperature_final"]),
-        temperature_decay_plies=int(merged["temperature_decay_plies"]),
+        temperature_halflife_plies=float(merged["temperature_halflife_plies"]),
         dirichlet_alpha=float(merged["dirichlet_alpha"]),
         dirichlet_epsilon=float(merged["dirichlet_epsilon"]),
         dirichlet_on_first_n_plies=int(merged["dirichlet_on_first_n_plies"]),
         dirichlet_total_alpha=float(merged["dirichlet_total_alpha"]),
+        dirichlet_shaped=bool(merged["dirichlet_shaped"]),
         root_policy_temperature_initial=float(merged["root_policy_temperature_initial"]),
         root_policy_temperature_final=float(merged["root_policy_temperature_final"]),
-        root_policy_temperature_decay_plies=int(merged["root_policy_temperature_decay_plies"]),
+        root_policy_temperature_halflife_plies=float(merged["root_policy_temperature_halflife_plies"]),
         opponent_selection=str(merged["opponent_selection"]),
         tail_solve_enabled=bool(merged["tail_solve_enabled"]),
         tail_solve_depth_limit=int(merged["tail_solve_depth_limit"]),
@@ -527,6 +566,18 @@ def resolve_profile(game_id: str, profile_name: str) -> MctsProfile:
     with _CACHE_LOCK:
         _PROFILE_CACHE[key] = profile
     return profile
+
+
+def apply_profile_overrides(game_id: str, profile: MctsProfile, overrides: dict[str, Any]) -> MctsProfile:
+    """`profile` with the fields of `overrides` (a profile block: same keys and
+    nested syntax as train.json's `mcts.<name>`) replaced, validated like a
+    resolved profile."""
+    _validate_profile_node(profile.name, game_id, overrides, "mcts_selfplay_overrides")
+    merged = dataclasses.asdict(profile)
+    del merged["name"]
+    merged.update(_flatten_layer(overrides))
+    _validate_resolved(profile.name, game_id, merged)
+    return dataclasses.replace(profile, **{k: merged[k] for k in merged})
 
 
 def max_game_plies(game_id: str) -> int:

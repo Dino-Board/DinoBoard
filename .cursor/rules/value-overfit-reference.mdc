@@ -95,9 +95,6 @@ explanation, not an isolated measurement.
   window from shrinking to a few dozen steps of games.
 - `symmetry_augmentation: true` when the encoder declares symmetries: each draw then
   sees a transformed sample, so the same game is not seen identically twice.
-- Turn off `opponent_policy_head` (`"opponent_policy_head": null` in an override) when
-  its loss sits at ln(number of choices) the whole run: it is not learning and only adds
-  gradient noise to the shared trunk.
 - Keep the guided phase: in Harmonies its checkpoints were healthy; overconfidence began
   when self-play data took over.
 - Leave the MCTS settings, opening exploration and learning rate schedule alone while

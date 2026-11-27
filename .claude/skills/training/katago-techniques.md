@@ -11,11 +11,11 @@ turn it on, and what it costs.
 | Playout cap randomization | `training.playout_cap` | C++ selfplay | off |
 | FPU reduction | MCTS profile `fpu_reduction` | C++ search (selfplay, eval, platform AI) | `null` (Q=0 for unvisited) |
 | Score-margin auxiliary head | `training.score_head` | Python training only | off |
-| Opponent-policy auxiliary head | `training.opponent_policy_head` | Python training only | off |
+| Score-breakdown auxiliary head | `training.score_breakdown_head` | Python training only | off |
 | Weight EMA for exported models | `training.ema` | Python export only | off |
 
-`games/splendor/config/train_transformer_kata.json` enables all of them on
-top of the Splendor transformer recipe and is the reference combination.
+`games/splendor/config/train_transformer_kata.json` enables PCR, FPU reduction,
+`score_head`, and `ema` on top of the Splendor transformer recipe.
 
 ---
 
@@ -72,29 +72,6 @@ head is not exported, so inference cost is unchanged.
   `loss_weight` 0.5 is a reasonable start.
 - Logged as `s_loss`.
 
-## Opponent-policy auxiliary head
-
-Another training-only head predicts the opponent's next move: the target is
-the normalized root visit distribution of the next ply acted by a different
-seat in the same game (fast-search plies included). Samples with no later
-opponent ply get weight 0. Forcing the trunk to model opponent intent is
-cheap and helps most in interactive games (racing for the same cards,
-blocking).
-
-- `loss_weight` 0.15 (KataGo's value).
-- The target comes from the opponent's own search, which saw its private
-  information. It is a training label only — inference never reads it — so
-  it does not violate the hidden-information rule, in the same way the value
-  target uses the final outcome.
-- Leave it off when the opponent's move depends on a chance event that
-  happens after the sampled position (Carcassonne: the opponent's tile is
-  drawn later, so the target is unpredictable; `o_loss` stayed flat over a
-  thousand steps). An `o_loss` that does not fall means the head teaches the
-  trunk nothing.
-- Exclusive with sample-dependent `symmetry_augmentation`
-  (`game-config/reference.md`).
-- Logged as `o_loss`.
-
 ## Weight EMA
 
 After every optimizer step an exponential moving average of the PV weights
@@ -112,15 +89,15 @@ slightly stronger, steadier model. The raw weights keep training as before.
 
 ## Resume behavior
 
-All three training-side options can be switched on or off when resuming:
+Training-side auxiliary heads and EMA can be switched on or off when resuming:
 
 - Heads and the EMA net are stored in `checkpoint.pt`
-  (`score_head_state_dict`, `opponent_policy_head_state_dict`,
+  (`score_head_state_dict`, `score_breakdown_head_state_dict`,
   `ema_state_dict`). A head enabled for the first time starts fresh; the EMA
   starts from the current weights.
 - The PV optimizer has one **named** param group per module (`pv`,
-  `score_head`, `opponent_policy_head`) and resume matches them by name: a
-  newly enabled head gets fresh Adam moments, a disabled one is dropped.
+  `score_head`, `score_breakdown_head`) and resume matches them by name: a
+  newly enabled head gets fresh Adam moments, a disabled or removed one is dropped.
 - `fpu_reduction` and `playout_cap` are read from config every run.
 
 Turning several on at once makes it impossible to attribute a change in

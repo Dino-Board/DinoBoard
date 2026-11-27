@@ -277,42 +277,30 @@ def test_different_seeds_produce_different_episodes():
 
 
 # ---------------------------------------------------------------------------
-# 7. Temperature schedule (linear decay)
+# 7. Temperature schedule (KataGo exponential halflife decay)
 # ---------------------------------------------------------------------------
 
 def test_temperature_schedule_decay():
-    """With temperature schedule decaying, late-game actions should be more greedy."""
-    early_entropies = []
-    late_entropies = []
+    """Exponential halflife temperature schedule runs cleanly across plies."""
     for seed in range(42, 72):
         ep = run_ep(
             game_id="tictactoe", seed=seed, simulations=50, temperature=1.0,
-            temperature_initial=2.0, temperature_final=0.01, temperature_decay_plies=6,
+            temperature_initial=2.0, temperature_final=0.01,
+            temperature_halflife_plies=1.5,
             max_game_plies=9,
         )
-        for s in ep["samples"]:
-            ent = visit_entropy(s["policy_action_ids"], s["policy_action_visits"])
-            if s["ply"] <= 1:
-                early_entropies.append(ent)
-            elif s["ply"] >= 6:
-                late_entropies.append(ent)
-    if not early_entropies or not late_entropies:
-        pytest.skip("not enough plies")
-    avg_early = sum(early_entropies) / len(early_entropies)
-    avg_late = sum(late_entropies) / len(late_entropies)
-    # Note: entropy here is of visit counts (from MCTS), not of the sampling.
-    # Temperature affects which action is *chosen*, not the visit counts themselves.
-    # So this test checks the action diversity across episodes instead.
+        assert ep["total_plies"] > 0
 
 
 def test_temperature_schedule_action_diversity():
-    """With decaying temperature, early actions should be more diverse than late."""
+    """With exponential halflife decay, early actions are more diverse than late."""
     early_actions = []
     late_actions = []
     for seed in range(42, 142):
         ep = run_ep(
             game_id="tictactoe", seed=seed, simulations=30, temperature=1.0,
-            temperature_initial=3.0, temperature_final=0.0, temperature_decay_plies=5,
+            temperature_initial=3.0, temperature_final=0.0,
+            temperature_halflife_plies=1.2,
             max_game_plies=9,
         )
         for s in ep["samples"]:
@@ -324,8 +312,6 @@ def test_temperature_schedule_action_diversity():
         pytest.skip("no late-ply samples")
     early_unique = len(set(early_actions))
     late_unique = len(set(late_actions))
-    # Early should have more diversity (higher temperature)
-    # Normalize by sample count
     early_ratio = early_unique / max(1, len(early_actions))
     late_ratio = late_unique / max(1, len(late_actions))
     assert early_ratio >= late_ratio * 0.8, (
@@ -333,25 +319,154 @@ def test_temperature_schedule_action_diversity():
     )
 
 
+def test_legacy_temperature_decay_plies_kwarg_rejected():
+    """Legacy linear temperature_decay_plies argument is completely removed."""
+    with pytest.raises(TypeError):
+        run_ep(game_id="tictactoe", seed=1, simulations=8, temperature_decay_plies=5)
+    gs = dinoboard_engine.GameSession("tictactoe", 1, get_test_model("tictactoe"), False, "")
+    with pytest.raises(TypeError):
+        gs.get_ai_action(simulations=8, temperature=1.0, temperature_decay_plies=5)
+
+
 # ---------------------------------------------------------------------------
 # 8. Heuristic guidance ratio
 # ---------------------------------------------------------------------------
 
 def test_heuristic_ratio_one_uses_no_mcts_quoridor():
-    """heuristic_guidance_ratio=1.0 should never run MCTS; visit patterns differ."""
+    """heuristic_guidance_ratio=1.0 should never run MCTS; multi-action plies
+    produce one-hot policy labels instead of MCTS visit counts."""
     ep_mcts = run_ep(game_id="quoridor", seed=42, simulations=30,
                      heuristic_guidance_ratio=0.0, max_game_plies=30)
     ep_heur = run_ep(game_id="quoridor", seed=42, simulations=30,
                      heuristic_guidance_ratio=1.0, heuristic_temperature=0.0,
                      heuristic_selector="simple_max",
                      max_game_plies=30)
-    # With heuristic ratio=1.0, visits should be concentrated (heuristic assigns
-    # 10000 fake visits proportionally to chosen actions)
-    if not ep_mcts["samples"] or not ep_heur["samples"]:
-        pytest.skip("no samples")
-    mcts_visits = ep_mcts["samples"][0]["policy_action_visits"]
-    heur_visits = ep_heur["samples"][0]["policy_action_visits"]
+    assert all(s["simulations"] == 0 for s in ep_heur["samples"])
+    mcts_multi = [s for s in ep_mcts["samples"] if len(s["policy_action_ids"]) > 1]
+    heur_multi = [s for s in ep_heur["samples"] if len(s["policy_action_ids"]) > 1]
+    assert mcts_multi and heur_multi
+    mcts_visits = mcts_multi[0]["policy_action_visits"]
+    heur_visits = heur_multi[0]["policy_action_visits"]
+    assert sum(mcts_visits) == 30
+    assert sum(heur_visits) == 1
     assert mcts_visits != heur_visits, "heuristic and MCTS should produce different visits"
+
+
+def test_rule_heuristic_guidance_produces_strict_one_hot_policy_labels():
+    """Rule-based teacher (no MCTS) must supervise a strict one-hot p label on
+    the chosen action — both at temperature=0 (even across tied rule scores)
+    and at temperature>0 (softmax action sampling)."""
+    from training.pipeline import normalize_policy
+
+    for temp in (0.0, 0.7):
+        ep = run_ep(
+            game_id="quoridor",
+            seed=101,
+            simulations=10,
+            heuristic_guidance_ratio=1.0,
+            heuristic_temperature=temp,
+            heuristic_selector="simple_max",
+            max_game_plies=16,
+        )
+        assert ep["samples"], "expected guided samples"
+        for s in ep["samples"]:
+            action_space = len(s["legal_mask"])
+            ids = s["policy_action_ids"]
+            visits = s["policy_action_visits"]
+            chosen = s["action_id"]
+            assert len(ids) == len(visits)
+            assert sum(visits) == 1, f"temp={temp}: rule guidance visits must sum to 1, got {visits}"
+            chosen_pos = ids.index(chosen)
+            assert visits[chosen_pos] == 1
+            assert all(v == 0 for idx, v in enumerate(visits) if idx != chosen_pos)
+
+            p = normalize_policy(ids, visits, action_space)
+            assert p[chosen] == pytest.approx(1.0)
+            assert sum(p) == pytest.approx(1.0)
+
+
+def test_pv_mcts_heuristic_guidance_produces_searched_visit_policy_labels():
+    """PV+MCTS teachers (both C++ PV evaluator + MCTS and ONNX PV + MCTS) must
+    supervise the teacher's post-search root visit distribution as p, matching
+    training-phase MCTS rather than collapsing to one-hot."""
+    from pathlib import Path
+    from training.pipeline import normalize_policy
+
+    # 1. C++ PV evaluator + MCTS teacher (jaipur rule_mcts, 1000 sims)
+    ep_cpp_pv = dinoboard_engine.run_selfplay_episode(
+        game_id="jaipur",
+        seed=7,
+        model_path=get_test_model("jaipur"),
+        simulations=8,
+        max_game_plies=6,
+        heuristic_guidance_ratio=1.0,
+        heuristic_temperature=0.0,
+        heuristic_selector="rule_mcts",
+    )
+    searched_cpp = [s for s in ep_cpp_pv["samples"] if len(s["policy_action_ids"]) > 1]
+    assert searched_cpp, "expected multi-action guided plies in jaipur"
+    saw_soft_cpp = False
+    for s in searched_cpp:
+        jaipur_space = len(s["legal_mask"])
+        visits = s["policy_action_visits"]
+        ids = s["policy_action_ids"]
+        assert sum(visits) == s["heuristic_simulations"] == 1000
+        # T=0 greedy move must be a max-visit root action
+        chosen_pos = ids.index(s["action_id"])
+        assert visits[chosen_pos] == max(visits)
+        p = normalize_policy(ids, visits, jaipur_space)
+        assert sum(p) == pytest.approx(1.0)
+        if sum(1 for v in visits if v > 0) > 1:
+            saw_soft_cpp = True
+    assert saw_soft_cpp, "expected non-one-hot post-search visit distribution from rule_mcts"
+
+    # 2. ONNX PV network + MCTS teacher (azul pv_512x4 if model file is present)
+    azul_onnx = Path("games/azul/model/azul_2p.onnx")
+    if azul_onnx.exists():
+        ep_onnx_pv = dinoboard_engine.run_selfplay_episode(
+            game_id="azul",
+            seed=11,
+            model_path=get_test_model("azul"),
+            simulations=8,
+            max_game_plies=4,
+            heuristic_guidance_ratio=1.0,
+            heuristic_temperature=0.0,
+            heuristic_selector="pv_512x4",
+        )
+        searched_onnx = [s for s in ep_onnx_pv["samples"] if len(s["policy_action_ids"]) > 1]
+        assert searched_onnx
+        for s in searched_onnx:
+            azul_space = len(s["legal_mask"])
+            visits = s["policy_action_visits"]
+            ids = s["policy_action_ids"]
+            assert sum(visits) == s["heuristic_simulations"] == 1000
+            chosen_pos = ids.index(s["action_id"])
+            assert visits[chosen_pos] == max(visits)
+            p = normalize_policy(ids, visits, azul_space)
+            assert sum(p) == pytest.approx(1.0)
+        assert any(sum(1 for v in s["policy_action_visits"] if v > 0) > 1 for s in searched_onnx)
+
+    # 3. Composite teacher (jaipur rule_smart): MCTS turn-start plies get
+    # post-search visit distributions, while rule-based trade-atom plies get
+    # strict one-hot labels.
+    ep_smart = dinoboard_engine.run_selfplay_episode(
+        game_id="jaipur",
+        seed=3,
+        model_path=get_test_model("jaipur"),
+        simulations=8,
+        max_game_plies=20,
+        heuristic_guidance_ratio=1.0,
+        heuristic_temperature=0.0,
+        heuristic_selector="rule_smart",
+    )
+    for s in ep_smart["samples"]:
+        visits = s["policy_action_visits"]
+        ids = s["policy_action_ids"]
+        if s["heuristic_simulations"] > 0:
+            assert sum(visits) == s["heuristic_simulations"]
+        else:
+            assert sum(visits) == 1
+            assert visits[ids.index(s["action_id"])] == 1
 
 
 def test_heuristic_ratio_zero_uses_mcts():

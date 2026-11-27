@@ -18,7 +18,7 @@ All config lives in `games/<id>/config/`. Six files, each with a distinct scope.
 | game_id | string | Canonical ID (matches manifest.json) |
 | display_name | string | Chinese display name for web UI |
 | display_name_en | string | English display name for web UI |
-| victory_mode | "winner_takes"\|"loser_pays" | Controls gating threshold variance formula. `winner_takes` (default): 1 winner, N-1 losers. `loser_pays`: 1 loser, N-1 winners. Does NOT affect C++ value model (which reads `winners()`/`losers()` from state). Only consumer: Python training pipeline gating threshold. |
+| victory_mode | "winner_takes"\|"loser_pays" | `winner_takes` (default): 1 winner, N-1 losers. `loser_pays`: 1 loser, N-1 winners. Does NOT affect C++ value model (which reads `winners()`/`losers()` from state). Only consumer: the web platform's game sessions (`platform/game_service/sessions.py`). |
 | players.min | int | Minimum player count |
 | players.max | int | Maximum player count |
 | max_game_plies | int | Maximum plies before forced termination (used by dirichlet_on_first_n_plies sentinel) |
@@ -42,7 +42,7 @@ Shared knobs every profile inherits. All fields are optional (fall back to _BASE
 | world_cap | int | 0 | 0=every sim its own world; >0 caps K outer determinizations |
 | c_puct | float | 1.4 | Exploration constant |
 | temperature | float | 0.0 | Action selection temperature |
-| temperature_schedule | object | (disabled) | {enabled, initial, final, decay_plies} |
+| temperature_schedule | object | (disabled) | `{enabled, initial, final, halflife_plies}` — KataGo exponential decay `final + (initial - final) * 0.5^(ply / halflife_plies)`; `halflife_plies > 0` when enabled and `initial != final` (legacy `decay_plies` is rejected) |
 | dirichlet_alpha | float | 0.0 | Root noise alpha (off by default) |
 | dirichlet_epsilon | float | 0.0 | Root noise weight |
 | dirichlet_on_first_n_plies | int | -1 | -1 = whole game (resolved to max_game_plies) |
@@ -70,7 +70,7 @@ Shared knobs every profile inherits. All fields are optional (fall back to _BASE
 | residual | bool | (mlp) Enable residual connections |
 | block_size | int | (mlp) Layers per residual block (typically 2) |
 | d_model / num_layers / num_heads / ffn_dim | int | (token_transformer) All four required; `d_model % num_heads == 0`. |
-| attention | "matmul" \| "fused" | (token_transformer, optional, default "matmul") Exported attention graph only; weights and training are identical. "fused" emits onnxruntime's `com.microsoft::MultiHeadAttention` (long token sets, see `training/performance.md`). |
+| attention | "matmul" \| "fused" | (token_transformer, optional, default "matmul") Exported attention graph only; weights and training are identical. "fused" emits onnxruntime's `com.microsoft::MultiHeadAttention` (long token sets, see `training-performance`). |
 | relative_position_radius | int ≥ 1 | (token_transformer) Required exactly when the token layout has `token_positions`, rejected otherwise. Attention adds a learned per-head bias per clipped offset (dx, dy) in [-R, R]² between positioned tokens, one table shared by all blocks. |
 | anchor_embedding | bool | (token_transformer, optional, default true) false drops the learned per-anchor embedding (needs a layout with anchors; anchors still bind actions), so with relative positions the network sees board positions only as offsets. |
 
@@ -101,17 +101,20 @@ are always resolved from the base file).
 | eval_benchmarks | string[] | Benchmark list, e.g. ["heuristic_free"] |
 | opponent_pool_enabled | bool | Enable past-model opponent pool |
 | opponent_pool_self_ratio | float | Fraction of games vs self (vs pool) |
-| gating_accept_win_rate | float | Override auto-computed gating threshold |
+| opponent_pool_sampling | string | `"quality"` (default): OpenAI Five quality scores, steered by the pool games' outcomes; `"uniform"`: every checkpoint in the window equally likely. See `training-hyperparams` |
+| opponent_pool_window | float | (0, 1], default 1. Only checkpoints from the last `window` fraction of the run so far are opponents |
+| opponent_pool_quality_lr | float | Default 0.01. Quality score lost per pool game the latest model wins (OpenAI Five's η) |
+| opponent_pool_uniform_mix | float | [0, 1], default 0.1. Share of the uniform distribution mixed into the quality draw |
 | playout_cap | object | KataGo playout cap randomization: `{"full_simulations": int, "fast_simulations": int, "full_search_prob": float}`. Each selfplay MCTS ply is a full search (root noise, training sample) with probability full_search_prob, else a fast search without noise whose sample is dropped. Replaces the profile's simulations; exclusive with simulations_start; requires selfplay_concurrency. Splendor transformer 800/150/0.25: 6.4x games/hour, 1.5x training samples/hour vs 2000 every ply |
 | score_head | object | Training-only auxiliary head predicting the final score margin: `{"loss_weight": float, "scale": float}`, both > 0. Target per seat = (own score − best other score) / scale, MSE weighted by loss_weight. Needs the game's `final_score_extractor` (`has_final_score_extractor` in metadata); not exported to ONNX. Can be toggled across resumes |
-| opponent_policy_head | object | Training-only auxiliary head predicting the opponent's next move: `{"loss_weight": float}` (> 0; KataGo uses 0.15). Target = normalized root visits of the next ply acted by a different seat (fast PCR searches included); samples with no later opponent ply get weight 0. Not exported to ONNX. Can be toggled across resumes (optimizer groups are matched by name) |
-| ema | object | `{"decay": float}`, 0 < decay < 1. Exported ONNX models (selfplay/eval/gating) use an exponential moving average of the weights, updated after every optimizer step; the checkpoint stores it as `ema_state_dict` |
+| ema | object | `{"decay": float}`, 0 < decay < 1. Exported ONNX models (selfplay/eval) use an exponential moving average of the weights, updated after every optimizer step; the checkpoint stores it as `ema_state_dict` |
 | compact_replay | object | `{"features_dtype": "float16" \| "float32"}`. Replay buffer keeps features as numpy arrays in that dtype and policies sparse (densified per batch); selfplay returns numpy samples. Requires selfplay_concurrency. For large feature vectors (carcassonne_tok: up to ~15k floats, ~30 KB/sample in fp16 vs ~0.45 MB as Python float lists) |
-| inference_precision | string | `"fp32"` (default) or `"fp16"`: selfplay/eval/gating run an fp16 copy under `models/fp16/` (fp32 I/O); checkpoints stay fp32. Worth it when GPU-bound (Splendor d128 transformer: +38% sims/s) |
+| inference_precision | string | `"fp32"` (default) or `"fp16"`: selfplay/eval run an fp16 copy under `models/fp16/` (fp32 I/O); checkpoints stay fp32. Worth it when GPU-bound (Splendor d128 transformer: +38% sims/s) |
 | opening_exploration | object | Random starting positions: `{"episode_ratio", "min_plies", "max_plies", "temperature", "uniform_mix"}`, all five required. With probability episode_ratio (in [0, 1]; 0 = off) an episode opens with uniform{min_plies..max_plies} unsearched plies sampled from the acting seat's raw policy P as `(1 − uniform_mix)·P^(1/temperature)/Z + uniform_mix/n`; those plies are never training samples. 1 ≤ min_plies ≤ max_plies < max_game_plies, temperature > 0, uniform_mix in [0, 1]. Works for every game. Logged as `expl_eps` / `expl_plies` |
-| symmetry_augmentation | bool | Default false. Each sampled training example gets a uniformly random board symmetry of the encoder (`IFeatureEncoder::symmetries`, `engine/core/feature_encoder.h`) applied at batch time to its features, policy target, legal mask and opponent-policy target (`training/symmetry.py`); the replay buffer is unchanged. Rejected when the encoder offers no symmetries. Encoders with static tables: Harmonies (4 per board side). Encoders with sample-dependent symmetries (`sample_symmetry_count` / `apply_sample_symmetry`): `carcassonne_tok` (4 quarter turns); these cannot transform an opponent-policy target, so the flag is rejected together with `opponent_policy_head`. How to give an encoder symmetries: `game-ai/encoder.md` |
+| midgame_start | object | KataGo-style fast midgame play-in + tournament fork: `{"episode_ratio", "min_plies", "max_plies", "temperature", "fork_min_choices", "fork_max_choices"}`, all six required. Mutually exclusive per episode with `opening_exploration` (`opening.episode_ratio + midgame.episode_ratio <= 1.0`; `0` = off). Prefix plies `0 .. K-2` sample from masked raw policy at `temperature > 0` (`uniform_mix = 0`); final prefix ply `K-1` (when `fork_max_choices > 0`) draws `k = uniform{fork_min_choices..fork_max_choices}` clamped to `[1, n-1]` distinct legal moves without replacement and plays the highest-prior one (`0, 0` disables fork). Prefix plies are never training samples. Logged as `mid_eps` / `mid_plies` |
+| symmetry_augmentation | bool | Default false. Each sampled training example gets a uniformly random board symmetry of the encoder (`IFeatureEncoder::symmetries`, `engine/core/feature_encoder.h`) applied at batch time to its features, policy target and legal mask (`training/symmetry.py`); the replay buffer is unchanged. Rejected when the encoder offers no symmetries. Encoders with static tables: Harmonies (4 per board side). Encoders with sample-dependent symmetries (`sample_symmetry_count` / `apply_sample_symmetry`): `carcassonne_tok` (4 quarter turns). How to give an encoder symmetries: `game-ai-encoder` |
 
-When to use `playout_cap`, `score_head`, `opponent_policy_head`, `ema` (and the MCTS `fpu_reduction`) and what they cost: `training/katago-techniques.md`. `opening_exploration` and the selfplay-only MCTS exploration fields: `training/exploration.md`. Throughput knobs (`inference_precision`, concurrency, providers): `training/performance.md`.
+When to use `playout_cap`, `score_head`, `ema` (and the MCTS `fpu_reduction`) and what they cost: `training-katago-techniques`. `opening_exploration`, `midgame_start`, and the selfplay-only MCTS exploration fields: `training-exploration` and `training-overconfidence`. Throughput knobs (`inference_precision`, concurrency, providers): `training-performance`.
 
 #### training.selfplay_concurrency
 | Field | Type | Description |
@@ -123,7 +126,7 @@ When to use `playout_cap`, `score_head`, `opponent_policy_head`, `ema` (and the 
 | evaluator.batch_timeout_us | int | Microseconds to wait for batch fill |
 | evaluator.max_queue_size | int | Max pending requests; must be >= workers * leaf_batch_size |
 | evaluator.intra_op_num_threads | int | ONNX intra-op threads |
-| evaluator.num_inference_threads | int | Inference threads, each with its own ONNX session. Required when enabled. 2 on a single GPU; keep `workers * leaf_batch_size >= num_inference_threads * batch_size` (see `training/performance.md`). |
+| evaluator.num_inference_threads | int | Inference threads, each with its own ONNX session. Required when enabled. 2 on a single GPU; keep `workers * leaf_batch_size >= num_inference_threads * batch_size` (see `training-performance`). |
 | evaluator.devices | list[int] | Optional GPU ids for the cuda/tensorrt providers (default device 0). Thread i uses `devices[i % n]`; `num_inference_threads` must be a multiple of n. CLI `--devices` overrides. |
 | evaluator.providers | string[] | ONNX execution providers (empty = CPU) |
 
@@ -131,15 +134,16 @@ When to use `playout_cap`, `score_head`, `opponent_policy_head`, `ema` (and the 
 Contains `selfplay` and `eval` profile deltas. Each overrides baseline fields.
 
 Selfplay is the ONLY place dirichlet non-zero values belong.
-Eval profile is used for both benchmark eval and latest-vs-best gating.
+Eval profile is used for the benchmark eval. There is no gating (AlphaZero): selfplay always plays the latest model (`models/model_latest.onnx`), and periodic checkpoints are saved as `models/model_step_*.onnx`.
 
-Two exploration fields may appear only in `selfplay` (rejected in mcts.json,
-web.json and `eval`); when and how to use them: `training/exploration.md`.
+Three exploration fields may appear only in `selfplay` (rejected in mcts.json,
+web.json and `eval`); when and how to use them: `training-exploration`.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| dirichlet_total_alpha | float ≥ 0 | 0.0 | Root noise sized by the position: per-action alpha = total / number of legal root moves. Exclusive with `dirichlet_alpha > 0`; uses the same `dirichlet_epsilon` and `dirichlet_on_first_n_plies` |
-| root_policy_temperature | float > 0, or `{"initial", "final", "decay_plies"}` | 1.0 | Root prior of full selfplay searches becomes P^(1/T) before noise. Object form: linear in the ply index from initial (ply 0) to final (decay_plies and later); decay_plies > 0 when the two differ. Fast `playout_cap` searches keep 1 |
+| dirichlet_total_alpha | float ≥ 0 | 0.0 | Root noise sized by the position: total concentration summed over legal root moves (`total / N` when unshaped). Exclusive with `dirichlet_alpha > 0`; uses the same `dirichlet_epsilon` and `dirichlet_on_first_n_plies` |
+| dirichlet_shaped | bool | false | KataGo shaped root Dirichlet (`computeDirichletAlphaDistribution`): requires `dirichlet_total_alpha > 0`. Splits `dirichlet_total_alpha` 50% uniformly (`1/N`) and 50% proportional to excess log-prior above mean capped at `max(0.01, 1/N)` |
+| root_policy_temperature | float > 0, or `{"initial", "final", "halflife_plies"}` | 1.0 | Root prior of full selfplay searches becomes P^(1/T) before noise. Object form: KataGo exponential decay `final + (initial - final) * 0.5^(ply / halflife_plies)`; `halflife_plies > 0` when `initial != final` (legacy `decay_plies` is rejected). Fast `playout_cap` searches keep 1 |
 
 With `--train-config` (e.g. `_tok` variants) these still go in the base
 `train.json`, because MCTS profiles are resolved from it.
@@ -152,7 +156,7 @@ incoming edge's visit count over all its outcomes (the behaviour before this
 key existed), which overstates the count at an outcome of probability p by
 1/p. Details: `UCT2 parent count` in engine/search/net_mcts.h.
 Set it to false in both profiles to resume a run started with the old
-behaviour unchanged. It reaches selfplay, eval vs heuristic, gating and
+behaviour unchanged. It reaches selfplay, eval vs heuristic and
 `scripts/eval_model.py`; the web platform always uses true, and the `mcts_pv`
 heuristic always uses false so its strength stays a fixed yardstick.
 
@@ -246,7 +250,7 @@ Only for games with a learned belief network (coup, liarsdice, maskmen, arknova,
 
 | Field | Type | Description |
 |-------|------|-------------|
-| type | "mlp"\|"per_entity"\|"autoregressive" | `mlp`: one MLP over the flat features. `per_entity`: one shared MLP scores each entity (needs the extractor's `entity_layout()`). `autoregressive`: a trunk over the features and a head over [trunk output, prefix] score the next element of a sorted hand (needs `sequence_layout()`). See game-ai belief-net.md |
+| type | "mlp"\|"per_entity"\|"autoregressive" | `mlp`: one MLP over the flat features. `per_entity`: one shared MLP scores each entity (needs the extractor's `entity_layout()`). `autoregressive`: a trunk over the features and a head over [trunk output, prefix] score the next element of a sorted hand (needs `sequence_layout()`). See `game-ai-belief-net` |
 | architecture | int[] | Hidden layer widths (`autoregressive`: of the trunk) |
 | head | int[] | `autoregressive` only: hidden layer widths of the per-step head |
 | activation | "relu" | Activation function. Only `"relu"` is implemented; other values are rejected. |

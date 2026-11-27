@@ -44,11 +44,21 @@ struct ArenaPlayerConfig {
 
   // Forwarded to NetMctsConfig.leaf_batch_size. 1 = unbatched search.
   int leaf_batch_size = 1;
+
+  // Forwarded to NetMctsConfig: wall-clock budget per move (0 = fixed
+  // budget) and the search algorithm with its parameters.
+  double time_limit_ms = 0.0;
+  search::SearchAlgorithm algorithm = search::SearchAlgorithm::kPuct;
+  search::GumbelConfig gumbel{};
+  search::RolloutConfig rollout{};
 };
 
 struct ArenaPlyStats {
   bool tail_solved = false;
   float tail_solve_value = 0.0f;
+  int simulations_done = 0;
+  std::int64_t network_evaluations = 0;
+  double search_ms = 0.0;
 };
 
 struct ArenaMatchResult {

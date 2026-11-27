@@ -94,39 +94,19 @@ def test_interrupted_checkpoint_save_leaves_a_resumable_checkpoint(tmp_path, mon
     assert not list(tmp_path.rglob("*.tmp"))
 
 
-def test_eval_plays_no_gating_match_and_best_follows_the_latest_model(tmp_path, monkeypatch):
+def test_eval_plays_no_gating_match_and_writes_no_model_best(tmp_path, monkeypatch):
     """No gating (AlphaZero): an eval step plays only the configured benchmarks
-    and model_best.onnx becomes the model it evaluated."""
+    and writes no model_best.onnx."""
     def no_match(*args, **kwargs):
         raise AssertionError("an eval step played a model-vs-model match")
 
     monkeypatch.setattr(pipeline, "run_eval_batch", no_match)
     _train(tmp_path, steps=1, eval_every=1)
-    best = tmp_path / "models" / "model_best.onnx"
-    step1 = best.read_bytes()
-    _train(tmp_path, steps=2, resume=True, eval_every=1)
-    assert best.read_bytes() == (tmp_path / "models" / "model_latest.onnx").read_bytes() != step1
-
-
-def test_interrupted_best_model_update_keeps_the_previous_best(tmp_path, monkeypatch):
-    """model_best.onnx, the latest model as of the last eval, is replaced atomically."""
-    _train(tmp_path, steps=1, eval_every=1)
-    best = tmp_path / "models" / "model_best.onnx"
     latest = tmp_path / "models" / "model_latest.onnx"
-    step1 = best.read_bytes()
-    assert step1 == latest.read_bytes()
-
-    def dying_copy(src, dst, *args, **kwargs):
-        with open(dst, "wb") as fh:
-            fh.write(b"\x08 truncated")
-        raise RuntimeError("killed mid-copy")
-
-    monkeypatch.setattr(pipeline.shutil, "copy2", dying_copy)
-    with pytest.raises(RuntimeError, match="killed mid-copy"):
-        _train(tmp_path, steps=2, resume=True, eval_every=1)
-    monkeypatch.undo()
-    assert best.read_bytes() == step1
+    step1 = latest.read_bytes()
+    assert not (tmp_path / "models" / "model_best.onnx").exists()
 
     _train(tmp_path, steps=2, resume=True, eval_every=1)
-    assert best.read_bytes() == latest.read_bytes() != step1
+    assert not (tmp_path / "models" / "model_best.onnx").exists()
+    assert latest.read_bytes() != step1
     assert not list(tmp_path.rglob("*.tmp"))

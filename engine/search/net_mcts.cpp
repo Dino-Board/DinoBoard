@@ -52,6 +52,9 @@ struct Node {
   float value_sum = 0.0f;
   std::vector<Edge> edges{};
   int virtual_loss = 0;
+  // Network value of the node for `to_play`, set at expansion (Gumbel's
+  // mixed-value completion of unvisited edges reads it).
+  float raw_value = 0.0f;
 };
 
 // One (edge, outcome) pair: the traversals of `edge` of node `parent` that
@@ -111,11 +114,61 @@ static void apply_root_policy_temperature(Node& root, float temperature) {
   }
 }
 
-// `total_alpha` > 0: per-action alpha = total_alpha / number of root actions
-// (NetMctsConfig::root_dirichlet_total_alpha); otherwise `alpha` as given.
+// `total_alpha` > 0: per-action concentration sums to `total_alpha`
+// (NetMctsConfig::root_dirichlet_total_alpha), either uniformly (`total_alpha / n`)
+// or KataGo-shaped (`shaped == true`: half uniform, half proportional to excess
+// log-prior above mean capped at max(0.01, 1/n)). Otherwise fixed `alpha`.
 static void apply_root_dirichlet_noise(Node& root, float alpha, float total_alpha,
-                                       float epsilon, std::uint64_t seed) {
+                                       bool shaped, float epsilon, std::uint64_t seed) {
   if (root.edges.empty()) return;
+  if (shaped) {
+    const std::size_t n = root.edges.size();
+    const double eps = std::max(0.0, std::min(1.0, static_cast<double>(epsilon)));
+    if (total_alpha <= 1e-8f || eps <= 1e-8) return;
+    const double uniform_prob = 1.0 / static_cast<double>(n);
+    const double cap = std::max(0.01, uniform_prob);
+    std::vector<double> alpha_prop(n, 0.0);
+    double log_sum = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+      const double p = std::max(0.0, static_cast<double>(root.edges[i].prior));
+      alpha_prop[i] = std::log(std::min(cap, p) + 1e-20);
+      log_sum += alpha_prop[i];
+    }
+    const double log_mean = log_sum / static_cast<double>(n);
+    double prop_sum = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+      alpha_prop[i] = std::max(0.0, alpha_prop[i] - log_mean);
+      prop_sum += alpha_prop[i];
+    }
+    if (prop_sum <= 1e-12) {
+      for (std::size_t i = 0; i < n; ++i) alpha_prop[i] = uniform_prob;
+    } else {
+      for (std::size_t i = 0; i < n; ++i) {
+        alpha_prop[i] = 0.5 * (alpha_prop[i] / prop_sum + uniform_prob);
+      }
+    }
+    SplitMix64Engine rng(seed);
+    std::vector<double> noise(n, 0.0);
+    double sum = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+      const double ai = alpha_prop[i] * static_cast<double>(total_alpha);
+      if (ai <= 1e-12) continue;
+      std::gamma_distribution<double> gamma(ai, 1.0);
+      const double g = std::max(0.0, gamma(rng));
+      if (std::isfinite(g)) {
+        noise[i] = g;
+        sum += g;
+      }
+    }
+    if (!(sum > 0.0) || !std::isfinite(sum)) return;
+    for (std::size_t i = 0; i < n; ++i) {
+      const double nd = noise[i] / sum;
+      const double p = std::max(0.0, static_cast<double>(root.edges[i].prior));
+      root.edges[i].prior = static_cast<float>((1.0 - eps) * p + eps * nd);
+    }
+    return;
+  }
+
   const float a = total_alpha > 0.0f
       ? total_alpha / static_cast<float>(root.edges.size())
       : std::max(0.0f, alpha);
@@ -187,7 +240,368 @@ static void validate_leaf_values(
   }
 }
 
+static float safe_log(float p) {
+  return std::log(std::max(p, std::numeric_limits<float>::min()));
+}
+
+// sigma(completedQ) for every edge of `node` (mctx
+// qtransform_completed_by_mix_value): visited edges keep their mean value,
+// unvisited ones take the mixed value
+//   (raw_value + sum_N * sum_{visited} p*q / sum_{visited} p) / (sum_N + 1),
+// the completed values are rescaled to [0, 1] over the node and scaled by
+// (c_visit + max N) * c_scale. Q reads backed-up visits only; `count_inflight`
+// adds in-flight descents to the max-N scale, matching the counts the caller
+// selects with.
+static void gumbel_sigma_q(const Node& node, const GumbelConfig& g,
+                           double value_clip, bool count_inflight,
+                           std::vector<float>* out) {
+  const size_t n = node.edges.size();
+  out->assign(n, 0.0f);
+  double sum_n = 0.0;
+  double visited_prior = 0.0;
+  double weighted_q = 0.0;
+  int max_n = 0;
+  for (const Edge& e : node.edges) {
+    max_n = std::max(max_n, e.visit_count + (count_inflight ? e.virtual_loss : 0));
+    if (e.visit_count > 0) {
+      const double q = static_cast<double>(e.value_sum) / e.visit_count;
+      sum_n += e.visit_count;
+      visited_prior += e.prior;
+      weighted_q += static_cast<double>(e.prior) * q;
+    }
+  }
+  const double v_mix = (sum_n > 0.0 && visited_prior > 0.0)
+      ? (static_cast<double>(node.raw_value) + sum_n * (weighted_q / visited_prior)) / (sum_n + 1.0)
+      : static_cast<double>(node.raw_value);
+  double lo = std::numeric_limits<double>::infinity();
+  double hi = -std::numeric_limits<double>::infinity();
+  std::vector<double> completed(n);
+  for (size_t i = 0; i < n; ++i) {
+    const Edge& e = node.edges[i];
+    completed[i] = e.visit_count > 0
+        ? static_cast<double>(e.value_sum) / e.visit_count : v_mix;
+    lo = std::min(lo, completed[i]);
+    hi = std::max(hi, completed[i]);
+  }
+  const double scale = (static_cast<double>(g.c_visit) + max_n) * g.c_scale;
+  const double span = g.rescale_values
+      ? std::max(hi - lo, 1e-8)
+      : std::max(2.0 * value_clip, 1e-6);
+  for (size_t i = 0; i < n; ++i) {
+    (*out)[i] = static_cast<float>(scale * (completed[i] - lo) / span);
+  }
+}
+
+// Gumbel interior selection: argmax pi'(a) - N(a) / (1 + sum N),
+// pi' = softmax(logits + sigma(completedQ)).
+static int gumbel_interior_edge(const Node& node, const GumbelConfig& g,
+                                double value_clip, std::vector<float>& scratch) {
+  gumbel_sigma_q(node, g, value_clip, true, &scratch);
+  const size_t n = node.edges.size();
+  double max_z = -std::numeric_limits<double>::infinity();
+  int total_n = 0;
+  for (size_t i = 0; i < n; ++i) {
+    const double z = safe_log(node.edges[i].prior) + scratch[i];
+    scratch[i] = static_cast<float>(z);
+    max_z = std::max(max_z, z);
+    total_n += node.edges[i].visit_count + node.edges[i].virtual_loss;
+  }
+  double sum = 0.0;
+  for (size_t i = 0; i < n; ++i) {
+    const double w = std::exp(static_cast<double>(scratch[i]) - max_z);
+    scratch[i] = static_cast<float>(w);
+    sum += w;
+  }
+  int best = -1;
+  double best_score = -std::numeric_limits<double>::infinity();
+  for (size_t i = 0; i < n; ++i) {
+    const Edge& e = node.edges[i];
+    const double score = static_cast<double>(scratch[i]) / sum -
+        static_cast<double>(e.visit_count + e.virtual_loss) / (1.0 + total_n);
+    if (score > best_score) {
+      best_score = score;
+      best = static_cast<int>(i);
+    }
+  }
+  return best;
+}
+
+static double softmax_into(const std::vector<double>& z, std::vector<float>* out) {
+  double max_z = -std::numeric_limits<double>::infinity();
+  for (double v : z) max_z = std::max(max_z, v);
+  double sum = 0.0;
+  out->assign(z.size(), 0.0f);
+  for (size_t i = 0; i < z.size(); ++i) {
+    if (!std::isfinite(z[i])) continue;
+    const double w = std::exp(z[i] - max_z);
+    (*out)[i] = static_cast<float>(w);
+    sum += w;
+  }
+  for (float& v : *out) v = static_cast<float>(v / sum);
+  return sum;
+}
+
+// kRollout. `root_node` is the expanded root (raw network priors on its
+// edges); the caller has already handled the forced move and the tail solver.
+static ActionId run_rollout_search(
+    const IGameState& root,
+    const IGameRules& rules,
+    const IStateValueModel& value_model,
+    const IPolicyValueEvaluator& evaluator,
+    const NetMctsConfig& cfg,
+    const Node& root_node,
+    std::uint64_t parent_seed,
+    std::chrono::steady_clock::time_point t0,
+    NetMctsStats* stats) {
+  const RolloutConfig& rc = cfg.rollout;
+  const int root_player = root.current_player();
+  const int np = root.num_players();
+  const size_t n_edges = root_node.edges.size();
+
+  std::vector<size_t> candidates(n_edges);
+  for (size_t i = 0; i < n_edges; ++i) candidates[i] = i;
+  if (rc.max_candidates > 0 && static_cast<size_t>(rc.max_candidates) < n_edges) {
+    std::stable_sort(candidates.begin(), candidates.end(), [&](size_t a, size_t b) {
+      return root_node.edges[a].prior > root_node.edges[b].prior;
+    });
+    candidates.resize(static_cast<size_t>(rc.max_candidates));
+  }
+  const size_t n_cand = candidates.size();
+
+  const bool timed = cfg.time_limit_ms > 0.0;
+  const auto deadline = t0 + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      std::chrono::duration<double, std::milli>(cfg.time_limit_ms));
+  const size_t chunk = static_cast<size_t>(std::max(1, cfg.leaf_batch_size));
+  const int worlds_per_wave = std::max(1, static_cast<int>(chunk / n_cand));
+  const double inv_temp = 1.0 / static_cast<double>(rc.policy_temperature);
+
+  struct Rollout {
+    size_t cand = 0;
+    std::unique_ptr<IGameState> state;
+    std::unique_ptr<IBeliefTracker> tracker;
+    std::mt19937_64 rng;
+    int plies_left = 0;
+    bool done = false;
+    std::vector<float> value;
+    std::unique_ptr<IGameState> masked;
+    std::vector<ActionId> legal;
+    std::vector<float> priors;
+  };
+
+  auto step = [&](Rollout& ro, ActionId action) {
+    const int actor = ro.state->current_player();
+    std::unique_ptr<IGameState> before;
+    if (ro.tracker && cfg.events_only_extractor) before = ro.state->clone_state();
+    rules.do_action_fast(*ro.state, action, ro.rng);
+    if (before) {
+      std::vector<PublicEvent> events = cfg.events_only_extractor(
+          *before, action, *ro.state, root_player);
+      ro.tracker->observe_public_event(
+          actor, rules.public_action(*before, action), events);
+    }
+  };
+
+  std::vector<std::vector<double>> value_sums(n_edges, std::vector<double>(static_cast<size_t>(np), 0.0));
+  std::vector<int> counts(n_edges, 0);
+  std::int64_t evaluations = 0;
+  int rollouts_done = 0;
+  int max_plies = 0;
+
+  // Timed: a wave starts only if one more wave as long as the last one still
+  // ends before the deadline.
+  std::chrono::steady_clock::duration last_wave{};
+  for (int r0 = 0; r0 < rc.rollouts_per_action; r0 += worlds_per_wave) {
+    const auto wave_t0 = std::chrono::steady_clock::now();
+    if (timed && r0 > 0 && wave_t0 + last_wave > deadline) break;
+    const int r1 = std::min(rc.rollouts_per_action, r0 + worlds_per_wave);
+    std::vector<Rollout> wave;
+    wave.reserve(static_cast<size_t>(r1 - r0) * n_cand);
+    for (int r = r0; r < r1; ++r) {
+      // One sampled world per rollout index, shared by every candidate
+      // (common random numbers: candidates differ only by their action).
+      std::mt19937_64 world_rng(board_ai::rng::derive_subseed(
+          parent_seed, "rollout.world", static_cast<std::uint64_t>(r)));
+      std::unique_ptr<IGameState> world = root.clone_state();
+      std::unique_ptr<IBeliefTracker> world_tracker;
+      if (cfg.root_belief_tracker) {
+        world_tracker = cfg.root_belief_tracker->clone();
+        world_tracker->randomize_unseen(*world, root_player, world_rng);
+      }
+      for (size_t c : candidates) {
+        Rollout ro;
+        ro.cand = c;
+        ro.state = world->clone_state();
+        if (world_tracker) ro.tracker = world_tracker->clone();
+        ro.rng = world_rng;
+        ro.plies_left = rc.depth;
+        step(ro, root_node.edges[c].action);
+        wave.push_back(std::move(ro));
+      }
+    }
+
+    int plies = 0;
+    while (true) {
+      std::vector<Rollout*> need_eval;
+      for (Rollout& ro : wave) {
+        if (ro.done) continue;
+        if (ro.state->is_terminal()) {
+          ro.value = value_model.terminal_values(*ro.state);
+          ro.done = true;
+          continue;
+        }
+        ro.legal = rules.legal_actions(*ro.state);
+        if (ro.legal.empty()) {
+          throw std::runtime_error(
+              "rollout search: legal_actions returned empty for non-terminal state");
+        }
+        ro.masked = make_masked_state(*ro.state, ro.state->schema_ref(),
+                                      ro.state->current_player());
+        need_eval.push_back(&ro);
+      }
+      if (need_eval.empty()) break;
+      for (size_t b0 = 0; b0 < need_eval.size(); b0 += chunk) {
+        const size_t b1 = std::min(need_eval.size(), b0 + chunk);
+        std::vector<IPolicyValueEvaluator::BatchItem> items;
+        items.reserve(b1 - b0);
+        for (size_t b = b0; b < b1; ++b) {
+          Rollout& ro = *need_eval[b];
+          IPolicyValueEvaluator::BatchItem item;
+          item.masked_state = ro.masked.get();
+          item.perspective_player = ro.state->current_player();
+          item.tracker = ro.tracker ? ro.tracker.get() : cfg.root_belief_tracker;
+          item.legal_actions = &ro.legal;
+          item.priors = &ro.priors;
+          item.values = &ro.value;
+          items.push_back(item);
+        }
+        evaluator.evaluate_batch(items);
+        evaluations += static_cast<std::int64_t>(items.size());
+      }
+      for (Rollout* rp : need_eval) {
+        Rollout& ro = *rp;
+        validate_leaf_values(ro.value, np, "rollout evaluation");
+        ro.masked.reset();
+        if (ro.plies_left <= 0) {
+          ro.done = true;
+          continue;
+        }
+        if (ro.priors.size() != ro.legal.size()) {
+          throw std::runtime_error(
+              "rollout search: evaluator returned " + std::to_string(ro.priors.size()) +
+              " priors for " + std::to_string(ro.legal.size()) + " actions");
+        }
+        std::vector<double> w(ro.priors.size());
+        for (size_t i = 0; i < w.size(); ++i) {
+          const double p = std::max(0.0, static_cast<double>(ro.priors[i]));
+          w[i] = inv_temp == 1.0 ? p : std::pow(p, inv_temp);
+        }
+        std::discrete_distribution<size_t> pick(w.begin(), w.end());
+        const ActionId a = ro.legal[pick(ro.rng)];
+        ro.value.clear();
+        step(ro, a);
+        ro.plies_left -= 1;
+      }
+      ++plies;
+    }
+    max_plies = std::max(max_plies, plies);
+
+    for (Rollout& ro : wave) {
+      auto& sum = value_sums[ro.cand];
+      for (int p = 0; p < np; ++p) {
+        sum[static_cast<size_t>(p)] += clip_value(ro.value[static_cast<size_t>(p)], cfg.value_clip);
+      }
+      counts[ro.cand] += 1;
+      ++rollouts_done;
+    }
+    last_wave = std::chrono::steady_clock::now() - wave_t0;
+  }
+
+  // One tabular MMD step over the candidates; non-candidates keep pi' = 0.
+  std::vector<double> z(n_edges, -std::numeric_limits<double>::infinity());
+  const double denom = 1.0 + static_cast<double>(rc.mmd_alpha) * rc.mmd_eta;
+  for (size_t c : candidates) {
+    const double q = value_sums[c][static_cast<size_t>(root_player)] / counts[c];
+    z[c] = (safe_log(root_node.edges[c].prior) + rc.mmd_eta * q) / denom;
+  }
+  std::vector<float> target;
+  softmax_into(z, &target);
+
+  size_t chosen = candidates.front();
+  if (rc.sample_action) {
+    std::mt19937_64 pick_rng(board_ai::rng::derive_subseed(parent_seed, "rollout.pick"));
+    std::discrete_distribution<size_t> pick(target.begin(), target.end());
+    chosen = pick(pick_rng);
+  } else {
+    for (size_t c : candidates) {
+      if (target[c] > target[chosen]) chosen = c;
+    }
+  }
+
+  if (stats) {
+    const double sec = std::max(1e-9, std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - t0).count());
+    stats->simulations_done = rollouts_done;
+    stats->expanded_nodes = 1;
+    stats->nodes_per_sec = static_cast<double>(evaluations) / sec;
+    stats->max_depth_reached = max_plies;
+    stats->network_evaluations = evaluations + 1;
+    stats->root_actions.clear();
+    stats->root_action_visits.clear();
+    stats->root_edge_values.assign(n_edges, std::vector<double>(static_cast<size_t>(np), 0.0));
+    for (size_t i = 0; i < n_edges; ++i) {
+      stats->root_actions.push_back(root_node.edges[i].action);
+      stats->root_action_visits.push_back(counts[i]);
+      if (counts[i] > 0) {
+        for (int p = 0; p < np; ++p) {
+          stats->root_edge_values[i][static_cast<size_t>(p)] =
+              value_sums[i][static_cast<size_t>(p)] / counts[i];
+        }
+      }
+    }
+    stats->root_values = stats->root_edge_values[chosen];
+    stats->best_action_value = stats->root_values[static_cast<size_t>(root_player)];
+    stats->root_policy_target = std::move(target);
+    stats->selected_action = root_node.edges[chosen].action;
+  }
+  return root_node.edges[chosen].action;
+}
+
 }  // namespace
+
+std::vector<int> gumbel_considered_visit_sequence(int num_considered,
+                                                  int num_simulations) {
+  std::vector<int> seq;
+  if (num_simulations <= 0) return seq;
+  seq.reserve(static_cast<size_t>(num_simulations));
+  if (num_considered <= 1) {
+    for (int i = 0; i < num_simulations; ++i) seq.push_back(i);
+    return seq;
+  }
+  const int log2max = static_cast<int>(std::ceil(std::log2(static_cast<double>(num_considered))));
+  std::vector<int> visits(static_cast<size_t>(num_considered), 0);
+  int considered = num_considered;
+  while (static_cast<int>(seq.size()) < num_simulations) {
+    const int extra = std::max(1, num_simulations / (log2max * considered));
+    for (int k = 0; k < extra; ++k) {
+      seq.insert(seq.end(), visits.begin(), visits.begin() + considered);
+      for (int i = 0; i < considered; ++i) visits[static_cast<size_t>(i)] += 1;
+    }
+    considered = std::max(2, considered / 2);
+  }
+  seq.resize(static_cast<size_t>(num_simulations));
+  return seq;
+}
+
+ActionId choose_root_action(
+    const NetMctsStats& stats,
+    double temperature,
+    std::uint64_t rng_seed,
+    int top_k,
+    ActionId fallback_action) {
+  if (stats.selected_action >= 0) return stats.selected_action;
+  return select_action_from_visits(stats.root_actions, stats.root_action_visits,
+                                   temperature, rng_seed, top_k, fallback_action);
+}
 
 NetMcts::NetMcts(NetMctsConfig cfg) : cfg_(cfg) {
   if (cfg_.fpu_reduction &&
@@ -212,6 +626,53 @@ NetMcts::NetMcts(NetMctsConfig cfg) : cfg_(cfg) {
     throw std::invalid_argument(
         "NetMctsConfig: root_dirichlet_alpha and root_dirichlet_total_alpha are "
         "two ways to size the same noise; set only one of them");
+  }
+  if (cfg_.root_dirichlet_shaped && cfg_.root_dirichlet_total_alpha <= 0.0f) {
+    throw std::invalid_argument(
+        "NetMctsConfig: root_dirichlet_shaped requires root_dirichlet_total_alpha > 0");
+  }
+  if (cfg_.algorithm != SearchAlgorithm::kPuct) {
+    const char* name = cfg_.algorithm == SearchAlgorithm::kGumbel ? "gumbel" : "rollout";
+    if (cfg_.root_dirichlet_alpha > 0.0f || cfg_.root_dirichlet_total_alpha > 0.0f ||
+        cfg_.root_dirichlet_shaped || cfg_.root_dirichlet_epsilon > 0.0f ||
+        cfg_.root_policy_temperature != 1.0f) {
+      throw std::invalid_argument(
+          std::string("NetMctsConfig: root Dirichlet noise and root policy temperature are "
+                      "PUCT exploration knobs; algorithm=") + name + " does not use them");
+    }
+    if (cfg_.cover_root_edges) {
+      throw std::invalid_argument(
+          std::string("NetMctsConfig: cover_root_edges is PUCT-only (algorithm=") + name + ")");
+    }
+  }
+  if (cfg_.algorithm == SearchAlgorithm::kGumbel) {
+    const GumbelConfig& g = cfg_.gumbel;
+    if (cfg_.time_limit_ms > 0.0) {
+      throw std::invalid_argument(
+          "NetMctsConfig: algorithm=gumbel needs a fixed simulation budget "
+          "(Sequential Halving schedules it up front); time_limit_ms must be 0");
+    }
+    if (cfg_.opponent_selection != OpponentSelection::kPuct) {
+      throw std::invalid_argument(
+          "NetMctsConfig: algorithm=gumbel selects interior edges itself; "
+          "opponent_selection must be puct");
+    }
+    if (g.num_considered < 1 || !(std::isfinite(g.c_visit) && g.c_visit >= 0.0f) ||
+        !(std::isfinite(g.c_scale) && g.c_scale > 0.0f)) {
+      throw std::invalid_argument(
+          "NetMctsConfig.gumbel: need num_considered >= 1, c_visit >= 0, c_scale > 0");
+    }
+  }
+  if (cfg_.algorithm == SearchAlgorithm::kRollout) {
+    const RolloutConfig& r = cfg_.rollout;
+    if (r.depth < 0 || r.rollouts_per_action < 1 || r.max_candidates < 0 ||
+        !(std::isfinite(r.mmd_eta) && r.mmd_eta > 0.0f) ||
+        !(std::isfinite(r.mmd_alpha) && r.mmd_alpha >= 0.0f) ||
+        !(std::isfinite(r.policy_temperature) && r.policy_temperature > 0.0f)) {
+      throw std::invalid_argument(
+          "NetMctsConfig.rollout: need depth >= 0, rollouts_per_action >= 1, "
+          "max_candidates >= 0, mmd_eta > 0, mmd_alpha >= 0, policy_temperature > 0");
+    }
   }
 }
 
@@ -576,6 +1037,12 @@ ActionId NetMcts::search_root(
   // active yet, so there's nothing to clone.
   const std::vector<float> root_net_values =
       expand_node(nodes[0], root, *root_masked, cfg_.root_belief_tracker);
+  if (!nodes[0].edges.empty()) {
+    validate_leaf_values(root_net_values, root.num_players(), "root evaluation");
+    nodes[0].raw_value = clip_value(
+        root_net_values[static_cast<size_t>(root_player)], cfg_.value_clip);
+  }
+  std::int64_t network_evaluations = 1;
 
   // The evaluator's own prior, kept for NetMctsStats::root_priors before the
   // root temperature and noise below reshape the edges.
@@ -609,8 +1076,15 @@ ActionId NetMcts::search_root(
       stats->best_action_value = rv[static_cast<size_t>(root_player)];
       stats->root_values = rv;
       stats->root_edge_values = {rv};
+      stats->network_evaluations = 1;
     }
     return nodes[0].edges[0].action;
+  }
+
+  if (cfg_.algorithm == SearchAlgorithm::kRollout) {
+    if (stats) stats->root_priors = raw_root_priors;
+    return run_rollout_search(root, rules, value_model, evaluator, cfg_, nodes[0],
+                              parent_seed, t0, stats);
   }
 
   const std::uint64_t dirichlet_seed = board_ai::rng::derive_subseed(
@@ -621,6 +1095,7 @@ ActionId NetMcts::search_root(
       nodes[0],
       cfg_.root_dirichlet_alpha,
       cfg_.root_dirichlet_total_alpha,
+      cfg_.root_dirichlet_shaped,
       cfg_.root_dirichlet_epsilon,
       dirichlet_seed);
 
@@ -629,6 +1104,57 @@ ActionId NetMcts::search_root(
       nodes[0].edges.size(), std::vector<double>(static_cast<size_t>(np), 0.0));
 
   const int simulations = std::max(1, cfg_.simulations);
+
+  // Gumbel root state: logits of the raw prior, the Gumbel draw per root
+  // action, and the Sequential Halving schedule (one entry per simulation).
+  const bool gumbel = cfg_.algorithm == SearchAlgorithm::kGumbel;
+  std::vector<double> gumbel_logits;
+  std::vector<double> gumbel_noise;
+  std::vector<int> gumbel_schedule;
+  std::vector<float> gumbel_scratch;
+  if (gumbel) {
+    const size_t n_root = nodes[0].edges.size();
+    gumbel_logits.resize(n_root);
+    gumbel_noise.assign(n_root, 0.0);
+    for (size_t i = 0; i < n_root; ++i) {
+      gumbel_logits[i] = safe_log(nodes[0].edges[i].prior);
+    }
+    if (cfg_.gumbel.noise) {
+      SplitMix64Engine grng(board_ai::rng::derive_subseed(parent_seed, "mcts.gumbel"));
+      std::uniform_real_distribution<double> u01(0.0, 1.0);
+      for (size_t i = 0; i < n_root; ++i) {
+        const double u = std::max(u01(grng), 1e-300);
+        gumbel_noise[i] = -std::log(-std::log(u));
+      }
+    }
+    const int m = std::min(cfg_.gumbel.num_considered, static_cast<int>(n_root));
+    gumbel_schedule = gumbel_considered_visit_sequence(m, simulations);
+  }
+  // Root action of simulation `sim_index`: among the root edges whose visit
+  // count (in-flight included) equals the schedule entry, the best
+  // gumbel + logit + sigma(completedQ). The first m simulations visit the
+  // Gumbel-Top-m; later entries implicitly halve that set.
+  auto gumbel_root_edge = [&](int sim_index) -> int {
+    const int target = gumbel_schedule[static_cast<size_t>(sim_index)];
+    gumbel_sigma_q(nodes[0], cfg_.gumbel, cfg_.value_clip, true, &gumbel_scratch);
+    int best = -1;
+    double best_score = -std::numeric_limits<double>::infinity();
+    for (size_t i = 0; i < nodes[0].edges.size(); ++i) {
+      const Edge& e = nodes[0].edges[i];
+      if (e.visit_count + e.virtual_loss != target) continue;
+      const double score = gumbel_noise[i] + gumbel_logits[i] + gumbel_scratch[i];
+      if (score > best_score) {
+        best_score = score;
+        best = static_cast<int>(i);
+      }
+    }
+    if (best < 0) {
+      throw std::runtime_error(
+          "MCTS gumbel: no root action has the scheduled visit count " +
+          std::to_string(target) + " at simulation " + std::to_string(sim_index));
+    }
+    return best;
+  };
 
   // ISMCTS K × M split (see NetMctsConfig::world_cap):
   //   K = number of distinct sampled worlds (outer loop)
@@ -737,9 +1263,13 @@ ActionId NetMcts::search_root(
       items.push_back(item);
     }
     evaluator.evaluate_batch(items);
+    network_evaluations += static_cast<std::int64_t>(pending.size());
     for (auto& p : pending) {
-      install_priors(nodes[static_cast<size_t>(p.node_idx)], p.legal, p.priors);
+      Node& leaf_node = nodes[static_cast<size_t>(p.node_idx)];
+      install_priors(leaf_node, p.legal, p.priors);
       validate_leaf_values(p.values, np, "leaf evaluation");
+      leaf_node.raw_value = clip_value(
+          p.values[static_cast<size_t>(leaf_node.to_play)], cfg_.value_clip);
       for (const auto& [pn, pe] : p.paths) {
         add_virtual_loss(pn, pe, -1);
         backup(pn, pe, p.values);
@@ -748,6 +1278,30 @@ ActionId NetMcts::search_root(
     pending.clear();
     pending_by_node.clear();
     inflight_sims = 0;
+  };
+
+  // Gumbel: a Sequential Halving phase (constant number of surviving actions,
+  // i.e. runs of equal schedule entries of one length) visits every survivor
+  // equally whatever the order, so its leaves can be evaluated in batches of
+  // up to leaf_batch_size; the halving at its end must see all of them backed up.
+  std::vector<char> gumbel_phase_end;
+  if (gumbel) {
+    const size_t n = gumbel_schedule.size();
+    std::vector<int> run_len(n, 0);
+    for (size_t i = 0; i < n;) {
+      size_t j = i;
+      while (j < n && gumbel_schedule[j] == gumbel_schedule[i]) ++j;
+      for (size_t k = i; k < j; ++k) run_len[k] = static_cast<int>(j - i);
+      i = j;
+    }
+    gumbel_phase_end.assign(n, 0);
+    for (size_t i = 0; i < n; ++i) {
+      gumbel_phase_end[i] = i + 1 == n ||
+          (gumbel_schedule[i + 1] != gumbel_schedule[i] && run_len[i + 1] != run_len[i]);
+    }
+  }
+  auto gumbel_round_ends = [&](int sim_index) {
+    return gumbel && gumbel_phase_end[static_cast<size_t>(sim_index)] != 0;
   };
 
   int sim = 0;
@@ -867,6 +1421,19 @@ ActionId NetMcts::search_root(
       if (!nodes[cur_idx].expanded) {
         auto pit = pending_by_node.find(cur_idx);
         if (pit != pending_by_node.end()) {
+          // In Gumbel with a large leaf_batch, hitting an already-pending leaf
+          // repeatedly wastes simulations and duplicates its single value
+          // backup. Flush once the pending batch is big enough to amortize GPU
+          // evaluation, then continue descending through the newly expanded node.
+          const int min_batch = std::min(leaf_batch, 32);
+          const int min_coll_batch = std::min(leaf_batch, 8);
+          if (gumbel &&
+              (static_cast<int>(pending.size()) >= min_batch ||
+               (static_cast<int>(pending.size()) >= min_coll_batch &&
+                inflight_sims >= static_cast<int>(pending.size()) * 2))) {
+            flush_pending();
+            continue;
+          }
           pending[pit->second].paths.emplace_back(path_nodes, path_edges);
         } else {
           if (!step_masked) step_masked = materialize_masked(*sim_state);
@@ -917,6 +1484,12 @@ ActionId NetMcts::search_root(
             break;
           }
         }
+      }
+
+      if (gumbel) {
+        best_edge = cur_idx == 0
+            ? gumbel_root_edge(sim)
+            : gumbel_interior_edge(nodes[cur_idx], cfg_.gumbel, cfg_.value_clip, gumbel_scratch);
       }
 
       if (best_edge < 0) {
@@ -1099,7 +1672,7 @@ ActionId NetMcts::search_root(
     if (depth > max_depth_reached_local) max_depth_reached_local = depth;
 
     if (leaf_pending) {
-      if (inflight_sims >= leaf_batch) flush_pending();
+      if (inflight_sims >= leaf_batch || gumbel_round_ends(sim)) flush_pending();
       continue;
     }
 
@@ -1116,6 +1689,7 @@ ActionId NetMcts::search_root(
     }
     validate_leaf_values(leaf_values, np, "leaf evaluation");
     backup(path_nodes, path_edges, leaf_values);
+    if (gumbel_round_ends(sim)) flush_pending();
     }  // inner M loop (sims sharing this world)
   }  // outer K loop (worlds)
   flush_pending();
@@ -1144,7 +1718,32 @@ ActionId NetMcts::search_root(
     best_edge = tied_edges[pick(tiebreak_rng)];
   }
 
+  // Gumbel decision: among the most-visited root actions (the survivors of
+  // Sequential Halving) the best gumbel + logit + sigma(completedQ); the
+  // training target is softmax(logit + sigma(completedQ)) over every root action.
+  std::vector<float> gumbel_target;
+  if (gumbel) {
+    gumbel_sigma_q(root_node, cfg_.gumbel, cfg_.value_clip, false, &gumbel_scratch);
+    double best_score = -std::numeric_limits<double>::infinity();
+    std::vector<double> z(root_node.edges.size());
+    for (size_t i = 0; i < root_node.edges.size(); ++i) {
+      z[i] = gumbel_logits[i] + gumbel_scratch[i];
+      if (root_node.edges[i].visit_count != best_visit) continue;
+      const double score = gumbel_noise[i] + z[i];
+      if (score > best_score) {
+        best_score = score;
+        best_edge = static_cast<int>(i);
+      }
+    }
+    softmax_into(z, &gumbel_target);
+  }
+
   if (stats) {
+    stats->network_evaluations = network_evaluations;
+    if (gumbel) {
+      stats->selected_action = root_node.edges[best_edge].action;
+      stats->root_policy_target = std::move(gumbel_target);
+    }
     const auto t1 = std::chrono::steady_clock::now();
     const double sec = std::max(1e-9, std::chrono::duration<double>(t1 - t0).count());
     stats->simulations_done = sim;

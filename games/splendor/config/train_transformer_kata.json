@@ -7,7 +7,7 @@
     "ffn_dim": 256
   },
   "training": {
-    "steps": 5000,
+    "steps": 15000,
     "episodes_per_step": 400,
     "batch_size": 1024,
     "learning_rate": 0.0002,
@@ -15,34 +15,56 @@
       "type": "cosine",
       "lr_min": 4e-06
     },
-    "train_batches_per_step": 12,
-    "replay_buffer_size": 200000,
+    "grad_clip_norm": 1.0,
+    "weight_decay": 0.0002,
+    "train_batches_per_step": 4,
+    "replay_buffer_size": 500000,
+    "compact_replay": {
+      "features_dtype": "float16"
+    },
+    "opponent_pool_enabled": true,
+    "opponent_pool_self_ratio": 0.75,
+    "opponent_pool_size": 20,
+    "opening_exploration": {
+      "episode_ratio": 0.25,
+      "min_plies": 2,
+      "max_plies": 6,
+      "temperature": 1.25,
+      "uniform_mix": 0.15
+    },
+    "midgame_start": {
+      "episode_ratio": 0.15,
+      "min_plies": 12,
+      "max_plies": 28,
+      "temperature": 0.7,
+      "fork_min_choices": 3,
+      "fork_max_choices": 8
+    },
     "playout_cap": {
       "full_simulations": 800,
       "fast_simulations": 150,
       "full_search_prob": 0.25
     },
     "score_head": {
-      "loss_weight": 0.5,
-      "scale": 15.0
-    },
-    "opponent_policy_head": {
-      "loss_weight": 0.15
+      "loss_weight": 0.4,
+      "scale": 8.0
     },
     "ema": {
       "decay": 0.99
     },
     "inference_precision": "fp16",
     "eval_benchmarks": [
-      "heuristic_free"
+      "heuristic_free",
+      "games/splendor/model/splendor_tok_2p.onnx"
     ],
     "selfplay_concurrency": {
       "enabled": true,
       "leaf_batch_size": 16,
+      "opponent_pool_max_distinct": 10,
       "evaluator": {
         "batch_size": 1024,
         "batch_timeout_us": 30,
-        "max_queue_size": 8192,
+        "max_queue_size": 16384,
         "intra_op_num_threads": 1,
         "num_inference_threads": 2,
         "providers": []
@@ -58,9 +80,9 @@
   },
   "runtime": {
     "workers": 400,
-    "eval_every": 50,
-    "eval_games": 100,
+    "eval_every": 100,
+    "eval_games": 200,
     "save_every": 50,
-    "seed": 20260514
+    "seed": 20261126
   }
 }

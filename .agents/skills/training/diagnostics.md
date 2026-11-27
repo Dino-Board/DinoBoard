@@ -16,8 +16,8 @@ Symptom-to-cause checklist, concurrent inference setup, config principles, and k
 | 6 | "Unknown game" error at startup | Game not in manifest.json or not compiled | Check games/manifest.json `enabled: true`; rebuild with `python3 setup.py build_ext --inplace` |
 | 7 | Value head outputs wrong shape | num_players mismatch | Verify game.json variants match C++ state's num_players |
 | 8 | "Tuned a config knob, no effect on training/eval" | Param defined in config/profile but never forwarded through one of the layers (CLI → pipeline → worker → binding → C++). Each layer's own default silently absorbs the missing arg. | See [Always verify param-flow](#always-verify-param-flow) below. `grep -rn '<param>'` and walk the chain before assuming the change took effect. |
-| 9 | Every selfplay game opens the same way / one pattern reused everywhere; `prior_ent` near 0, `prior_top1` near 1 while eval has stalled | Policy lock-in: PUCT keeps visiting what the prior already prefers, equally good alternatives never get searched | See [exploration.md](exploration.md): random starting positions, root policy temperature, Dirichlet noise by legal-action count; opponent pool |
-| 10 | In pure self-play `v_loss` keeps falling but eval stalls; on freshly generated games the value's error is higher than the logged `v_loss`, and higher than a small regression on scoreboard numbers | Value head memorises the outcomes of the games in the replay buffer (too many sample draws per game, window of too few games) | Fewer `train_batches_per_step` (draws per game, see [hyperparams.md](hyperparams.md)), larger `replay_buffer_size`, symmetry augmentation if the encoder offers it. Measure with fresh games, not `v_loss`; probe, recipe and restart policy: `value-overfit` skill |
+| 9 | Every selfplay game opens the same way / one pattern reused everywhere; `prior_ent` near 0, `prior_top1` near 1 while eval has stalled | Policy overconfidence / lock-in: PUCT keeps visiting what the prior already prefers, equally good alternatives never get searched | See [overconfidence.md](overconfidence.md) and [exploration.md](exploration.md): `opening_exploration` + `midgame_start` fork, exponential `root_policy_temperature`, shaped `dirichlet_total_alpha`, opponent pool |
+| 10 | In pure self-play `v_loss` keeps falling but eval stalls; on freshly generated games the value's error is higher than the logged `v_loss`, and higher than a small regression on scoreboard numbers | Value overconfidence: value head memorises the outcomes of the games in the replay buffer (too many sample draws per game, window of too few games) | Keep sample reuse `< 1.0` (fewer `train_batches_per_step`, see [overconfidence.md](overconfidence.md) and [hyperparams.md](hyperparams.md)), `replay_buffer_size` >= 100 steps, fast exponential `temperature_schedule`, `score_head`, symmetry augmentation; probe & rollback policy: `value-overfit` skill |
 
 ---
 
@@ -120,11 +120,12 @@ loaders reject legacy/decorative knobs. This prevents silent misconfiguration
 where you think a field is active but no runtime path consumes it.
 
 ### Banned legacy keys
-These keys in `train.json::training` cause hard ValueError:
-- `heuristic_guidance_name` (use top-level `heuristic_guidance.name`)
-- `heuristic_guidance_ratio` (use `heuristic_guidance.initial_ratio`)
-- `heuristic_guidance_steps` (use `heuristic_guidance.steps`)
-- `heuristic_temperature` (use `heuristic_guidance.temperature`)
+These legacy keys cause a hard `ValueError` / `TypeError`:
+- `heuristic_guidance_name` in `train.json::training` (use top-level `heuristic_guidance.name`)
+- `heuristic_guidance_ratio` in `train.json::training` (use `heuristic_guidance.initial_ratio`)
+- `heuristic_guidance_steps` in `train.json::training` (use `heuristic_guidance.steps`)
+- `heuristic_temperature` in `train.json::training` (use `heuristic_guidance.temperature`)
+- `decay_plies` in `temperature_schedule` or `root_policy_temperature` (linear decay was removed; use exponential `halflife_plies`)
 
 ### Independent selectors
 Three separate heuristic selectors exist, each picks independently:
@@ -217,4 +218,4 @@ Both bugs were invisible to every test, every metric, and every loss curve. Only
 **Decision**: Documented as normal behavior. Self-play loss is not a training quality signal because the opponent improves at the same rate. Eval win-rate vs fixed baseline is the correct metric.
 
 ### DEC-002: No gating
-**Decision**: Selfplay always plays the latest model (AlphaZero), and the pipeline plays no latest-vs-best match; `models/model_best.onnx` is the latest model as of the last eval. Gating never fed the training data (selfplay and the opponent pool use the latest model and the `model_step_*` checkpoints), cost 2-5% of a run, and late in runs sat near 50%, so it decided nothing. Measure progress with the benchmark eval and head-to-head games between checkpoints (`value-overfit` skill).
+**Decision**: Selfplay always plays the latest model (AlphaZero), and the pipeline plays no latest-vs-best match and writes no `model_best.onnx` (only `models/model_latest.onnx` and periodic `models/model_step_*.onnx`). Gating never fed the training data, cost 2-5% of a run, and late in runs sat near 50%, so it decided nothing. Measure progress with the benchmark eval and head-to-head games between checkpoints (`value-overfit` skill).

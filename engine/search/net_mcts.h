@@ -37,6 +37,69 @@ enum class OpponentSelection {
   kFrozenPrior = 1,
 };
 
+// Which search search_root runs. All three share the belief hook, the tail
+// solver, root expansion and the forced-move shortcut; they differ in how the
+// budget is spent and how the root action is chosen.
+//
+// kPuct (default): ISMCTS with UCT2/PUCT everywhere; the caller picks the
+//   action from the root visit counts.
+// kGumbel: Gumbel AlphaZero (Danihelka et al. 2022). Root: Gumbel-Top-k picks
+//   `gumbel.num_considered` actions, Sequential Halving spends the budget on
+//   them. Interior nodes: deterministic selection of
+//   argmax(pi'(a) - N(a) / (1 + sum N)), pi' = softmax(logits + sigma(completedQ)).
+//   The search chooses the action itself (NetMctsStats::selected_action) and
+//   returns the improved policy softmax(logits + sigma(completedQ)) over all
+//   root actions as NetMctsStats::root_policy_target.
+// kRollout: Ataraxos-style test-time search (arXiv 2511.07312). Each
+//   candidate root action is played out `rollout.rollouts_per_action` times,
+//   every rollout in a world sampled through the tracker, for `rollout.depth`
+//   plies with both sides sampling from the policy head; the candidate's Q is
+//   the mean value of the positions reached (terminal outcome when the game
+//   ends first). The root policy then takes one tabular magnetic-mirror-descent
+//   step, pi'(a) ∝ exp((log pi(a) + eta * Q(a)) / (1 + alpha * eta)) with a
+//   uniform magnet, and the action is argmax pi' (or a sample of it).
+enum class SearchAlgorithm {
+  kPuct = 0,
+  kGumbel = 1,
+  kRollout = 2,
+};
+
+struct GumbelConfig {
+  // m: actions kept by Gumbel-Top-k at the root (clamped to the legal count).
+  int num_considered = 16;
+  // sigma(q) = (c_visit + max_b N(b)) * c_scale * q. With rescale_values=false
+  // (default, matching mctx on bounded board-game values [-1, 1]), Q is mapped
+  // linearly by 1 / (2 * value_clip) so tiny noise cannot be blown up to [0, 1]
+  // at large simulation counts; rescale_values=true divides by per-node hi-lo.
+  float c_visit = 50.0f;
+  float c_scale = 0.1f;
+  bool rescale_values = false;
+  // Root Gumbel noise. Selfplay full searches turn it on (it is the
+  // exploration); evaluation leaves it off and plays the best considered
+  // action deterministically.
+  bool noise = false;
+};
+
+struct RolloutConfig {
+  // Plies played after the candidate action (0 = evaluate the position right
+  // after it). A rollout stops early at a terminal state.
+  int depth = 8;
+  // Rollouts (= sampled worlds) per candidate. With time_limit_ms > 0 this is
+  // a ceiling and rollouts run in waves while one more wave (as long as the
+  // previous one) still fits before the deadline.
+  int rollouts_per_action = 16;
+  // 0: every legal root action is a candidate; k > 0: the k highest priors.
+  int max_candidates = 0;
+  // MMD step size and magnet weight; see SearchAlgorithm::kRollout.
+  float mmd_eta = 10.0f;
+  float mmd_alpha = 0.0f;
+  // Policy temperature both sides sample with inside rollouts (1 = the
+  // policy as trained).
+  float policy_temperature = 1.0f;
+  // false: play argmax pi'; true: sample pi'.
+  bool sample_action = false;
+};
+
 // ISMCTS MCTS config. The hidden-info machinery is driven entirely by
 // root_belief_tracker:
 //   - If non-null, each sampled world clones the root state and calls
@@ -111,6 +174,12 @@ struct NetMctsConfig {
   // N and the noise turns into a near-uniform smear on wide roots. 0 = off;
   // > 0 replaces root_dirichlet_alpha (setting both is rejected).
   float root_dirichlet_total_alpha = 0.0f;
+  // KataGo shaped Dirichlet noise (requires root_dirichlet_total_alpha > 0 when
+  // true): half of total_alpha is distributed uniformly (1 / N) across legal
+  // root actions, and the other half is concentrated on plausible / blind-spot
+  // actions whose log-prior (capped at max(0.01, 1 / N) so the top move does
+  // not hog the shaped share) exceeds the mean log-prior.
+  bool root_dirichlet_shaped = false;
   // Root policy softmax temperature (KataGo / SAI). Root priors become
   // p^(1/T), renormalised, before the noise is mixed in. PUCT sharpens the
   // visit distribution even among moves of equal value, and the policy is
@@ -235,7 +304,19 @@ struct NetMctsConfig {
   // bit-identical to the unbatched search. Larger values trade a little
   // search sharpness for far fewer evaluator round-trips — the dominant
   // cost when a shared BatchedPolicyValueEvaluator serves many threads.
+  // kGumbel: a batch is also flushed at the end of every Sequential Halving
+  // phase (before the surviving set halves), so the eliminations always see
+  // fully backed-up Q values; within a phase leaf_batch_size trades batch
+  // throughput against search sharpness as it does for PUCT.
+  // kRollout: the most positions one evaluate_batch call carries (rollouts
+  // advance in lockstep, so a wave holds up to this many rollouts).
   int leaf_batch_size = 1;
+
+  // See SearchAlgorithm. `simulations` is the Gumbel budget n; kRollout
+  // ignores it (its budget is rollout.rollouts_per_action per candidate).
+  SearchAlgorithm algorithm = SearchAlgorithm::kPuct;
+  GumbelConfig gumbel{};
+  RolloutConfig rollout{};
 };
 
 struct NetMctsStats {
@@ -275,6 +356,15 @@ struct NetMctsStats {
   // max_depth at fixed total simulations is evidence the K×M reuse is
   // working.
   int max_depth_reached = 0;
+  // kGumbel / kRollout: the action the search decided on (-1 when the caller
+  // picks from root_action_visits: kPuct, forced moves, tail-solved roots).
+  ActionId selected_action = -1;
+  // kGumbel / kRollout: the improved root policy over root_actions (sums to
+  // 1); the selfplay training target. Empty otherwise.
+  std::vector<float> root_policy_target{};
+  // Network evaluations the search requested (leaves for the tree searches,
+  // rollout positions for kRollout). Root expansion included.
+  std::int64_t network_evaluations = 0;
 };
 
 ActionId select_action_from_visits(
@@ -284,6 +374,20 @@ ActionId select_action_from_visits(
     std::uint64_t rng_seed,
     int top_k,
     ActionId fallback_action);
+
+// The move to play after search_root: the search's own choice when it made
+// one (stats.selected_action), otherwise select_action_from_visits.
+ActionId choose_root_action(
+    const NetMctsStats& stats,
+    double temperature,
+    std::uint64_t rng_seed,
+    int top_k,
+    ActionId fallback_action);
+
+// Mctx's Sequential Halving schedule: entry i is the visit count the root
+// action chosen by simulation i must already have. Public for tests.
+std::vector<int> gumbel_considered_visit_sequence(int num_considered,
+                                                  int num_simulations);
 
 class IPolicyValueEvaluator {
  public:

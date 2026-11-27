@@ -25,6 +25,13 @@ struct HeuristicResult {
   // heuristics that do not search. Reporting only (throughput metrics) —
   // callers must not base the move choice on it.
   int simulations = 0;
+  // Non-empty when produced by a PV+MCTS heuristic (MctsPVHeuristic — either
+  // an ONNX PV network or a C++ PV evaluator): root visit counts aligned 1-to-1
+  // with `actions`. Selfplay guidance uses `action_visits` directly as the
+  // post-search policy target p (matching training-phase MCTS). Empty for
+  // rule-based heuristics, which have no searched policy distribution and
+  // supervise a one-hot policy target on the chosen action.
+  std::vector<int> action_visits{};
 };
 
 // Heuristic interface.

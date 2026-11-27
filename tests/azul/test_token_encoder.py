@@ -439,8 +439,9 @@ def test_train_config_builds_model(game, flat, players):
     assert find_train_config(game)[1] == find_train_config("azul")[1]
     # The old network is the guide.
     assert cfg["heuristic_guidance"]["name"] == "pv_512x4"
-    # The KataGo-style options of the recipe: four in this file, FPU in the MCTS profiles.
-    assert {"playout_cap", "score_head", "opponent_policy_head", "ema"} <= set(cfg["training"])
+    # The KataGo-style options of the recipe: three in this file, FPU in the MCTS profiles.
+    assert {"playout_cap", "score_head", "ema"} <= set(cfg["training"])
+    assert "opponent_policy_head" not in cfg["training"]
     from training import mcts_profile
     for name in ("selfplay", "eval"):
         assert mcts_profile.resolve_profile(game, name).fpu_reduction == 0.2
@@ -469,7 +470,7 @@ def test_training_loop_guided_by_the_old_network(tmp_path, caplog):
                       learning_rate=0.001, seed=5, save_every=0)
     steps = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Step ")]
     assert len(steps) == 2 and "h_ratio=1.00" in steps[0] and "h_ratio" not in steps[1]
-    assert all("o_loss=" in s and "s_loss=" in s for s in steps)
+    assert all("s_loss=" in s and "o_loss=" not in s for s in steps)
     latest = tmp_path / "models" / "model_latest.onnx"
     assert latest.exists()
     ep = engine.run_selfplay_episode(game_id=GAME, seed=3, model_path=str(latest), simulations=4, max_game_plies=30)

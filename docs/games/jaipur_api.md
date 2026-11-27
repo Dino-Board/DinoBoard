@@ -96,7 +96,6 @@
 |----|------|----|
 | 随机搜索量（playout cap） | `training.playout_cap` | 完整 800 / 快速 150 / 完整概率 0.25 |
 | 分差辅助头 | `training.score_head` | 权重 0.5，`scale` 50 |
-| 对手策略辅助头 | `training.opponent_policy_head` | 权重 0.15 |
 | 权重滑动平均 | `training.ema` | 0.99 |
 | FPU 降低 | `mcts.selfplay` / `mcts.eval` 的 `fpu_reduction` | 0.2 |
 

@@ -25,6 +25,21 @@
     "compact_replay": {
       "features_dtype": "float16"
     },
+    "opening_exploration": {
+      "episode_ratio": 0.25,
+      "min_plies": 4,
+      "max_plies": 18,
+      "temperature": 1.25,
+      "uniform_mix": 0.15
+    },
+    "midgame_start": {
+      "episode_ratio": 0.15,
+      "min_plies": 36,
+      "max_plies": 100,
+      "temperature": 0.7,
+      "fork_min_choices": 3,
+      "fork_max_choices": 10
+    },
     "playout_cap": {
       "full_simulations": 400,
       "fast_simulations": 80,
@@ -60,15 +75,22 @@
   },
   "mcts": {
     "selfplay": {
-      "dirichlet_alpha": 0.3,
+      "dirichlet_alpha": 0.0,
+      "dirichlet_total_alpha": 10.83,
+      "dirichlet_shaped": true,
       "dirichlet_epsilon": 0.25,
+      "root_policy_temperature": {
+        "initial": 1.25,
+        "final": 1.1,
+        "halflife_plies": 18
+      },
       "simulations": 400,
       "temperature": 1.0,
       "temperature_schedule": {
         "enabled": true,
-        "initial": 1.0,
-        "final": 0.3,
-        "decay_plies": 300
+        "initial": 0.8,
+        "final": 0.15,
+        "halflife_plies": 18
       }
     },
     "eval": {

@@ -65,11 +65,11 @@
 
 ## 训练
 
-`selfplay → 收集样本 → SGD → ONNX export → gating eval → 循环`
+`selfplay → 收集样本 → SGD → ONNX export → benchmark eval → 循环`
 
 全流程 C++（selfplay / 搜索 / eval），Python 只做训练循环和 SGD。配置驱动，不改代码调参。
 
-Value head N 维 perspective-relative（`values[0]`=当前玩家）。网络可选 MLP 或实体 token 的 set transformer；KataGo 式可选项（playout cap、FPU、分差/对手策略辅助头、EMA）、防策略锁死的 selfplay 探索选项（随机开局、根先验温度、按合法动作数缩放的 Dirichlet 噪声、训练日志里的策略多样性指标）和吞吐调优见 `/training` 技能。Selfplay 用叶子批处理 + 多线程批量推理，可跨多张 GPU（`--devices`）；启发式引导可按步数衰减或按胜率提前退出。
+Value head N 维 perspective-relative（`values[0]`=当前玩家）。网络可选 MLP 或实体 token 的 set transformer；KataGo 式可选项（playout cap、FPU、分差/分项得分辅助头、EMA）、防策略锁死的 selfplay 探索选项（随机开局、根先验温度、按合法动作数缩放的 Dirichlet 噪声、训练日志里的策略多样性指标）和吞吐调优见 `/training` 技能。Selfplay 用叶子批处理 + 多线程批量推理，可跨多张 GPU（`--devices`）；启发式引导可按步数衰减或按胜率提前退出。
 
 ---
 

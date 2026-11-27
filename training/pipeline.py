@@ -8,7 +8,6 @@ import logging
 import math
 import os
 import random
-import shutil
 import signal
 import threading
 import time
@@ -27,7 +26,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from .mcts_profile import MctsProfile, max_game_plies, profile_as_dict, resolve_profile
+from .mcts_profile import MctsProfile, apply_profile_overrides, max_game_plies, profile_as_dict, resolve_profile
 from .model import (
     BELIEF_SEQUENCE_LOSS,
     AuxHead,
@@ -40,6 +39,7 @@ from .model import (
     padded_token_count,
 )
 from .opponent_pool import OpponentPool, format_pool_step, parse_pool_config
+from .ppo import PpoTrainer, parse_ppo_config
 from .symmetry import parse_symmetry_augmentation
 
 logger = logging.getLogger(__name__)
@@ -74,6 +74,10 @@ def atomic_write(path: Path):
 
 
 _OPENING_EXPLORATION_KEYS = {"episode_ratio", "min_plies", "max_plies", "temperature", "uniform_mix"}
+_MIDGAME_START_KEYS = {
+    "episode_ratio", "min_plies", "max_plies", "temperature",
+    "fork_min_choices", "fork_max_choices",
+}
 
 
 def parse_opening_exploration(train_cfg: dict, game_max_plies: int) -> dict | None:
@@ -102,7 +106,7 @@ def parse_opening_exploration(train_cfg: dict, game_max_plies: int) -> dict | No
     min_plies, max_plies = block["min_plies"], block["max_plies"]
     temperature = float(block["temperature"])
     uniform_mix = float(block["uniform_mix"])
-    if not 0.0 <= ratio <= 1.0:
+    if not (math.isfinite(ratio) and 0.0 <= ratio <= 1.0):
         raise ValueError(f"training.opening_exploration.episode_ratio must be in [0, 1], got {ratio}")
     if not 1 <= min_plies <= max_plies:
         raise ValueError(
@@ -114,24 +118,120 @@ def parse_opening_exploration(train_cfg: dict, game_max_plies: int) -> dict | No
             f"game's max_game_plies ({game_max_plies}): the prefix would be the whole game")
     if not (math.isfinite(temperature) and temperature > 0):
         raise ValueError(f"training.opening_exploration.temperature must be > 0, got {temperature}")
-    if not 0.0 <= uniform_mix <= 1.0:
+    if not (math.isfinite(uniform_mix) and 0.0 <= uniform_mix <= 1.0):
         raise ValueError(f"training.opening_exploration.uniform_mix must be in [0, 1], got {uniform_mix}")
     return {"episode_ratio": ratio, "min_plies": min_plies, "max_plies": max_plies,
             "temperature": temperature, "uniform_mix": uniform_mix}
 
 
+def parse_midgame_start(train_cfg: dict, game_max_plies: int) -> dict | None:
+    """Validate `training.midgame_start` (midgame fast-forward + KataGo fork).
+
+    Absent block = disabled (None). With probability `episode_ratio` (drawn
+    mutually exclusively against `opening_exploration`), a selfplay episode
+    fast-forwards `uniform{min_plies..max_plies}` unsearched plies from the raw
+    policy at `temperature` (typically 0.65-0.8), optionally taking a tournament
+    fork move (`fork_min_choices..fork_max_choices`) on the final prefix ply,
+    and then runs normal MCTS selfplay from that midgame position. Prefix plies
+    are dropped from training. `episode_ratio: 0` disables the block.
+    """
+    block = train_cfg.get("midgame_start")
+    if block is None:
+        return None
+    if not isinstance(block, dict) or set(block) != _MIDGAME_START_KEYS:
+        raise ValueError(
+            f"training.midgame_start must be an object with exactly "
+            f"{sorted(_MIDGAME_START_KEYS)}, got {block!r}")
+    for key in ("min_plies", "max_plies", "fork_min_choices", "fork_max_choices"):
+        if isinstance(block[key], bool) or not isinstance(block[key], int):
+            raise ValueError(
+                f"training.midgame_start.{key} must be an integer, got {block[key]!r}")
+    ratio = float(block["episode_ratio"])
+    min_plies, max_plies = block["min_plies"], block["max_plies"]
+    temperature = float(block["temperature"])
+    fork_min, fork_max = block["fork_min_choices"], block["fork_max_choices"]
+    if not (math.isfinite(ratio) and 0.0 <= ratio <= 1.0):
+        raise ValueError(f"training.midgame_start.episode_ratio must be in [0, 1], got {ratio}")
+    if not 1 <= min_plies <= max_plies:
+        raise ValueError(
+            f"training.midgame_start needs 1 <= min_plies <= max_plies, "
+            f"got {min_plies}, {max_plies}")
+    if max_plies >= game_max_plies:
+        raise ValueError(
+            f"training.midgame_start.max_plies ({max_plies}) must be below the "
+            f"game's max_game_plies ({game_max_plies}): the prefix would be the whole game")
+    if not (math.isfinite(temperature) and temperature > 0):
+        raise ValueError(f"training.midgame_start.temperature must be > 0, got {temperature}")
+    fork_off = (fork_min == 0 and fork_max == 0)
+    fork_on = (1 <= fork_min <= fork_max)
+    if not (fork_off or fork_on):
+        raise ValueError(
+            f"training.midgame_start fork_min_choices / fork_max_choices must both "
+            f"be 0 or satisfy 1 <= fork_min_choices <= fork_max_choices, "
+            f"got {fork_min}, {fork_max}")
+    return {
+        "episode_ratio": ratio,
+        "min_plies": min_plies,
+        "max_plies": max_plies,
+        "temperature": temperature,
+        "fork_min_choices": fork_min,
+        "fork_max_choices": fork_max,
+    }
+
+
+_SELFPLAY_SEARCH_KEYS = {
+    "algorithm", "gumbel_num_considered", "gumbel_c_visit",
+    "gumbel_c_scale", "gumbel_rescale_values",
+}
+
+
+def parse_selfplay_search(train_cfg: dict) -> dict:
+    """training.selfplay_search: the search selfplay runs, forwarded to the
+    engine as the `search` dict. Absent = PUCT. Gumbel AlphaZero:
+    {"algorithm": "gumbel", "gumbel_num_considered": m, "gumbel_c_visit": c,
+    "gumbel_c_scale": s}, the budget n being mcts.selfplay.simulations (or
+    playout_cap.full_simulations); the search then picks the move and the
+    policy target is its improved policy, so root Dirichlet noise / root policy
+    temperature must stay off."""
+    block = train_cfg.get("selfplay_search")
+    if block is None:
+        return {}
+    if not isinstance(block, dict) or "algorithm" not in block or not set(block) <= _SELFPLAY_SEARCH_KEYS:
+        raise ValueError(
+            f"training.selfplay_search must be an object with 'algorithm' and keys from "
+            f"{sorted(_SELFPLAY_SEARCH_KEYS)}, got {block!r}")
+    if block["algorithm"] == "puct":
+        if set(block) != {"algorithm"}:
+            raise ValueError(f"training.selfplay_search: gumbel_* keys need algorithm 'gumbel', got {block!r}")
+    elif block["algorithm"] == "gumbel":
+        required = {"algorithm", "gumbel_num_considered", "gumbel_c_visit", "gumbel_c_scale"}
+        missing = required - set(block)
+        if missing:
+            raise ValueError(f"training.selfplay_search: algorithm 'gumbel' needs {sorted(missing)}")
+    else:
+        raise ValueError(
+            f"training.selfplay_search.algorithm must be 'puct' or 'gumbel', got {block['algorithm']!r}")
+    sc_block = train_cfg.get("selfplay_concurrency")
+    if not (sc_block and sc_block.get("enabled")):
+        raise ValueError("training.selfplay_search requires training.selfplay_concurrency.enabled=true")
+    return dict(block)
+
+
 def selfplay_exploration_args(cfg: dict) -> dict:
     """The `exploration` argument of the selfplay bindings, from a selfplay cfg
-    (the resolved selfplay MctsProfile as a dict, plus an optional
-    `opening_exploration` block as returned by parse_opening_exploration)."""
+    (the resolved selfplay MctsProfile as a dict, plus optional
+    `opening_exploration` / `midgame_start` blocks)."""
     out = {
         "dirichlet_total_alpha": cfg["dirichlet_total_alpha"],
+        "dirichlet_shaped": cfg["dirichlet_shaped"],
         "root_policy_temperature_initial": cfg["root_policy_temperature_initial"],
         "root_policy_temperature_final": cfg["root_policy_temperature_final"],
-        "root_policy_temperature_decay_plies": cfg["root_policy_temperature_decay_plies"],
+        "root_policy_temperature_halflife_plies": cfg["root_policy_temperature_halflife_plies"],
     }
     if "opening_exploration" in cfg:
         out["opening_exploration"] = cfg["opening_exploration"]
+    if "midgame_start" in cfg:
+        out["midgame_start"] = cfg["midgame_start"]
     return out
 
 
@@ -185,11 +285,11 @@ def _worker_selfplay_batch(args: tuple) -> list[dict[str, Any]]:
     if cfg["temperature_schedule_enabled"]:
         t_initial = cfg["temperature_initial"]
         t_final = cfg["temperature_final"]
-        t_decay = cfg["temperature_decay_plies"]
+        t_halflife = cfg["temperature_halflife_plies"]
     else:
         t_initial = -1.0
         t_final = -1.0
-        t_decay = 0
+        t_halflife = 0.0
     out = dinoboard_engine.run_selfplay_episodes_batch(
         game_id=game_id,
         seeds=seeds,
@@ -208,7 +308,7 @@ def _worker_selfplay_batch(args: tuple) -> list[dict[str, Any]]:
         tail_solve_auxiliary_weight=cfg["tail_solve_auxiliary_weight"],
         temperature_initial=t_initial,
         temperature_final=t_final,
-        temperature_decay_plies=t_decay,
+        temperature_halflife_plies=t_halflife,
         heuristic_guidance_ratio=cfg["heuristic_guidance_ratio"],
         heuristic_temperature=cfg["heuristic_temperature"],
         training_filter_ratio=cfg["training_filter_ratio"],
@@ -290,8 +390,8 @@ def _collect_pool_paths(models_dir: Path) -> list[tuple[str, str]]:
     belief_path is "" when the corresponding belief_step_*.onnx does not
     exist (games without belief, or steps before belief was enabled).
 
-    Excludes `model_latest.onnx`, `model_init.onnx`, `model_best.onnx`
-    by glob pattern. Returns [] before the first checkpoint is saved.
+    Excludes `model_latest.onnx` and `model_init.onnx` by glob pattern.
+    Returns [] before the first checkpoint is saved.
     """
     pv_paths = sorted(models_dir.glob("model_step_*.onnx"))
     result: list[tuple[str, str]] = []
@@ -435,22 +535,16 @@ def train_step(
     score_head: AuxHead | None = None,
     score_targets: torch.Tensor | None = None,
     score_loss_weight: float = 0.0,
-    opp_head: AuxHead | None = None,
-    opp_targets: torch.Tensor | None = None,
-    opp_weights: torch.Tensor | None = None,
-    opp_loss_weight: float = 0.0,
     breakdown_head: AuxHead | None = None,
     breakdown_targets: torch.Tensor | None = None,
     breakdown_loss_weight: float = 0.0,
 ) -> dict[str, float]:
     if (score_head is None) != (score_targets is None):
         raise ValueError("train_step: score_head and score_targets must be passed together")
-    if not ((opp_head is None) == (opp_targets is None) == (opp_weights is None)):
-        raise ValueError("train_step: opp_head, opp_targets and opp_weights must be passed together")
     if (breakdown_head is None) != (breakdown_targets is None):
         raise ValueError("train_step: breakdown_head and breakdown_targets must be passed together")
     net.train()
-    aux_heads = [h for h in (score_head, opp_head, breakdown_head) if h is not None]
+    aux_heads = [h for h in (score_head, breakdown_head) if h is not None]
     for h in aux_heads:
         h.train()
     if aux_heads:
@@ -468,11 +562,6 @@ def train_step(
     if score_head is not None:
         score_loss = torch.nn.functional.mse_loss(score_head(embedding), score_targets)
         loss = loss + score_loss_weight * score_loss
-    opp_loss = None
-    if opp_head is not None:
-        opp_ce = -(opp_targets * torch.nn.functional.log_softmax(opp_head(embedding), dim=-1)).sum(dim=-1)
-        opp_loss = (opp_ce * opp_weights).sum() / opp_weights.sum().clamp_min(1.0)
-        loss = loss + opp_loss_weight * opp_loss
     breakdown_loss = None
     if breakdown_head is not None:
         breakdown_loss = torch.nn.functional.mse_loss(breakdown_head(embedding), breakdown_targets)
@@ -493,8 +582,6 @@ def train_step(
     }
     if score_loss is not None:
         metrics["score_loss"] = score_loss.item()
-    if opp_loss is not None:
-        metrics["opp_loss"] = opp_loss.item()
     if breakdown_loss is not None:
         metrics["breakdown_loss"] = breakdown_loss.item()
     return metrics
@@ -529,18 +616,6 @@ def score_margin_targets(final_scores: list[float], player: int, num_players: in
     return rotate_z_values(margins, player, num_players)
 
 
-def next_opponent_indices(players: list[int]) -> list[int | None]:
-    """For each ply, the index of the next ply acted by a different seat
-    (None when no other seat moves again before the game ends)."""
-    out: list[int | None] = [None] * len(players)
-    nxt: int | None = None
-    for i in range(len(players) - 1, -1, -1):
-        if i + 1 < len(players) and players[i + 1] != players[i]:
-            nxt = i + 1
-        out[i] = nxt
-    return out
-
-
 @torch.no_grad()
 def ema_update(ema_net: torch.nn.Module, net: torch.nn.Module, decay: float) -> None:
     for e, p in zip(ema_net.parameters(), net.parameters()):
@@ -550,6 +625,99 @@ def ema_update(ema_net: torch.nn.Module, net: torch.nn.Module, decay: float) -> 
 
 
 _LEGACY_GROUP_NAMES = ("pv", "score_head")
+
+
+_OPTIMIZER_KEYS = {"type", "momentum", "ns_steps"}
+
+
+def parse_optimizer_config(train_cfg: dict) -> dict:
+    """training.optimizer: {"type": "adamw"} (default when absent) or
+    {"type": "muon", "momentum": m, "ns_steps": k}. Muon (Jordan et al. 2024)
+    updates the 2-D weight matrices of the transformer blocks with
+    orthogonalized momentum, its step scaled to AdamW's update RMS
+    (adjust_lr_fn="match_rms_adamw", Liu et al. 2025) so the run's
+    learning_rate, schedule and weight_decay apply unchanged; every other
+    parameter (embeddings, norms, biases, heads) stays on AdamW."""
+    block = train_cfg.get("optimizer", {"type": "adamw"})
+    if not isinstance(block, dict) or "type" not in block or not set(block) <= _OPTIMIZER_KEYS:
+        raise ValueError(f"training.optimizer must have 'type' and keys from {sorted(_OPTIMIZER_KEYS)}, got {block!r}")
+    if block["type"] == "adamw":
+        if set(block) != {"type"}:
+            raise ValueError(f"training.optimizer: momentum / ns_steps are Muon settings, got {block!r}")
+        return {"type": "adamw"}
+    if block["type"] != "muon":
+        raise ValueError(f"training.optimizer.type must be 'adamw' or 'muon', got {block['type']!r}")
+    if set(block) != _OPTIMIZER_KEYS:
+        raise ValueError(f"training.optimizer type 'muon' needs exactly {sorted(_OPTIMIZER_KEYS)}, got {block!r}")
+    if not 0.0 <= float(block["momentum"]) < 1.0 or int(block["ns_steps"]) < 1:
+        raise ValueError(f"training.optimizer: need 0 <= momentum < 1 and ns_steps >= 1, got {block!r}")
+    return {"type": "muon", "momentum": float(block["momentum"]), "ns_steps": int(block["ns_steps"])}
+
+
+def muon_parameter_names(net: torch.nn.Module) -> list[str]:
+    """The hidden-layer weight matrices Muon updates: 2-D weights inside the
+    transformer blocks."""
+    names = [n for n, p in net.named_parameters() if n.startswith("blocks.") and p.ndim == 2]
+    if not names:
+        raise ValueError("training.optimizer type 'muon' needs a network with transformer blocks "
+                         "(token_transformer); this one has no blocks.* weight matrices")
+    return names
+
+
+class MuonAdamW:
+    """torch.optim.Muon on muon_parameter_names(net), AdamW on everything else
+    (the PV net's remaining parameters as group "pv", each auxiliary head as
+    its own group). Exposes the Optimizer surface the pipeline uses:
+    param_groups (lr is set on all of them), zero_grad, step, state_dict."""
+
+    def __init__(self, net, aux_heads, learning_rate, weight_decay, cfg):
+        muon_names = set(muon_parameter_names(net))
+        muon_params = [p for n, p in net.named_parameters() if n in muon_names]
+        adam_params = [p for n, p in net.named_parameters() if n not in muon_names]
+        self.muon = torch.optim.Muon(
+            [{"params": muon_params, "name": "pv_matrices"}], lr=learning_rate, weight_decay=weight_decay,
+            momentum=cfg["momentum"], ns_steps=cfg["ns_steps"], adjust_lr_fn="match_rms_adamw")
+        self.adamw = torch.optim.AdamW(
+            [{"params": adam_params, "name": "pv"}]
+            + [{"params": list(m.parameters()), "name": n} for n, m in aux_heads.items()],
+            lr=learning_rate, weight_decay=weight_decay)
+
+    @property
+    def param_groups(self):
+        return self.muon.param_groups + self.adamw.param_groups
+
+    def zero_grad(self, set_to_none: bool = True):
+        self.muon.zero_grad(set_to_none=set_to_none)
+        self.adamw.zero_grad(set_to_none=set_to_none)
+
+    def step(self):
+        self.muon.step()
+        self.adamw.step()
+
+    def state_dict(self):
+        return {"type": "muon", "muon": self.muon.state_dict(), "adamw": self.adamw.state_dict()}
+
+    def load_state_dict(self, state):
+        self.muon.load_state_dict(state["muon"])
+        self.adamw.load_state_dict(state["adamw"])
+
+
+def build_optimizer(net: torch.nn.Module, aux_heads: dict[str, torch.nn.Module],
+                    learning_rate: float, weight_decay: float, saved_state: dict | None,
+                    optimizer_cfg: dict):
+    """AdamW (build_pv_optimizer) or Muon+AdamW per training.optimizer. A
+    checkpoint resumes only into the optimizer type that saved it."""
+    saved_muon = saved_state is not None and saved_state.get("type") == "muon"
+    if optimizer_cfg["type"] == "adamw":
+        if saved_muon:
+            raise ValueError("checkpoint optimizer state is Muon but training.optimizer is adamw")
+        return build_pv_optimizer(net, aux_heads, learning_rate, weight_decay, saved_state)
+    if saved_state is not None and not saved_muon:
+        raise ValueError("checkpoint optimizer state is AdamW but training.optimizer is muon")
+    optimizer = MuonAdamW(net, aux_heads, learning_rate, weight_decay, optimizer_cfg)
+    if saved_state is not None:
+        optimizer.load_state_dict(saved_state)
+    return optimizer
 
 
 def build_pv_optimizer(net: torch.nn.Module, aux_heads: dict[str, torch.nn.Module],
@@ -1146,11 +1314,11 @@ def _run_selfplay_batch_concurrent(
     if train_cfg["temperature_schedule_enabled"]:
         t_initial = train_cfg["temperature_initial"]
         t_final = train_cfg["temperature_final"]
-        t_decay = train_cfg["temperature_decay_plies"]
+        t_halflife = train_cfg["temperature_halflife_plies"]
     else:
         t_initial = -1.0
         t_final = -1.0
-        t_decay = 0
+        t_halflife = 0.0
 
     seeds = list(range(base_seed, base_seed + num_episodes))
     ev_cfg = sc_cfg["evaluator"]
@@ -1186,7 +1354,7 @@ def _run_selfplay_batch_concurrent(
         tail_solve_auxiliary_weight=train_cfg["tail_solve_auxiliary_weight"],
         temperature_initial=t_initial,
         temperature_final=t_final,
-        temperature_decay_plies=t_decay,
+        temperature_halflife_plies=t_halflife,
         # Guidance: forward the same fields the legacy ProcessPool path
         # forwarded to run_selfplay_episodes_batch. mcts_pv heuristics with
         # model_path get hot-swapped onto the shared BatchedEvaluator pool
@@ -1214,6 +1382,7 @@ def _run_selfplay_batch_concurrent(
         compact_samples=bool(train_cfg.get("compact_samples", False)),
         uct2_arrival_visits=train_cfg["uct2_arrival_visits"],
         exploration=selfplay_exploration_args(train_cfg),
+        search=train_cfg.get("search", {}),
     )
     episodes = out["episodes"]
     # Pipeline downstream expects latest_seat=None for mirror, int>=0 for pool.
@@ -1342,6 +1511,10 @@ def run_selfplay_batch(
             pool_size=pool_size,
             pool_enabled=pool_enabled,
         )
+    if train_cfg.get("search"):
+        raise ValueError(
+            "selfplay search options (gumbel / policy_sampling) need "
+            "training.selfplay_concurrency.enabled=true")
 
     rng = random.Random(base_seed)
     # Shared episode counters: each mode has its own remaining counter so
@@ -2087,6 +2260,10 @@ def run_training_loop(
     # max_game_plies is a game property shared across profiles.
     selfplay_profile = resolve_profile(game_id, "selfplay")
     eval_profile = resolve_profile(game_id, "eval")
+    if "mcts_selfplay_overrides" in train_cfg:
+        selfplay_profile = apply_profile_overrides(
+            game_id, selfplay_profile, train_cfg["mcts_selfplay_overrides"])
+        logger.info(f"mcts selfplay profile overrides: {train_cfg['mcts_selfplay_overrides']}")
     game_max_plies = max_game_plies(game_id)
     # Selfplay seeds are seed + step*10000 + i; eval seeds live in a
     # disjoint range so eval never replays a deal that was trained on.
@@ -2231,26 +2408,13 @@ def run_training_loop(
         else:
             logger.info("score_head: freshly initialized")
 
-    # Opponent-next-move auxiliary head (KataGo-style): predicts the search
-    # policy of the next ply acted by a different seat. Absent block = disabled.
-    opp_head_cfg = train_cfg.get("opponent_policy_head")
-    opp_head: AuxHead | None = None
-    opp_loss_weight = 0.0
-    if opp_head_cfg is not None:
-        if not isinstance(opp_head_cfg, dict) or set(opp_head_cfg) != {"loss_weight"}:
-            raise ValueError(
-                f"training.opponent_policy_head must be an object with exactly "
-                f"'loss_weight', got {opp_head_cfg!r}")
-        opp_loss_weight = float(opp_head_cfg["loss_weight"])
-        if not (math.isfinite(opp_loss_weight) and opp_loss_weight > 0):
-            raise ValueError(
-                f"training.opponent_policy_head.loss_weight must be > 0, got {opp_loss_weight}")
-        opp_head = AuxHead(net.embedding_dim, action_space).to(device)
-        if resume_ckpt is not None and "opponent_policy_head_state_dict" in resume_ckpt:
-            opp_head.load_state_dict(resume_ckpt["opponent_policy_head_state_dict"])
-            logger.info("Resume: opponent policy head restored")
-        else:
-            logger.info("opponent_policy_head: freshly initialized")
+    if train_cfg.get("opponent_policy_head") is not None:
+        raise ValueError(
+            "training.opponent_policy_head has been removed; remove it from the training config")
+    if train_cfg.get("gating_accept_win_rate") is not None:
+        raise ValueError(
+            "training.gating_accept_win_rate has been removed (there is no gating); "
+            "remove it from the training config")
     # Final points per scoring category and seat (the game's
     # final_score_breakdown_extractor). Absent block = disabled.
     breakdown_head_cfg = train_cfg.get("score_breakdown_head")
@@ -2282,7 +2446,6 @@ def run_training_loop(
         else:
             logger.info("score_breakdown_head: freshly initialized")
     aux_heads = {n: h for n, h in (("score_head", score_head),
-                                   ("opponent_policy_head", opp_head),
                                    ("score_breakdown_head", breakdown_head)) if h is not None}
 
     # EMA of the PV weights. When enabled, the averaged net (not the raw
@@ -2305,8 +2468,10 @@ def run_training_loop(
     export_net = ema_net if ema_net is not None else net
 
     weight_decay = train_cfg.get("weight_decay", 1e-4)
-    optimizer = build_pv_optimizer(net, aux_heads, learning_rate, weight_decay,
-                                   resume_pv_optimizer_state)
+    optimizer_cfg = parse_optimizer_config(train_cfg)
+    optimizer = build_optimizer(net, aux_heads, learning_rate, weight_decay,
+                                resume_pv_optimizer_state, optimizer_cfg)
+    logger.info(f"  optimizer: {optimizer_cfg}")
     if resume_pv_optimizer_state is not None:
         logger.info("Resume: PV optimizer state restored")
     lr_schedule = train_cfg.get("lr_schedule")  # None = constant lr
@@ -2395,11 +2560,20 @@ def run_training_loop(
             raise ValueError(f"training.playout_cap.full_search_prob must be in (0, 1), got {pc_prob}")
         simulations_start = simulations_full = pc_full
 
-    # Random starting positions for a share of the selfplay episodes. Absent
-    # block (or episode_ratio 0) = every episode starts from the initial state.
+    # Random / midgame starting positions for a share of the selfplay episodes.
+    # Absent block (or episode_ratio 0) = disabled.
     opening_exploration = parse_opening_exploration(train_cfg, game_max_plies)
+    midgame_start = parse_midgame_start(train_cfg, game_max_plies)
+    _oe_ratio = 0.0 if opening_exploration is None else opening_exploration["episode_ratio"]
+    _ms_ratio = 0.0 if midgame_start is None else midgame_start["episode_ratio"]
+    if _oe_ratio + _ms_ratio > 1.0 + 1e-12:
+        raise ValueError(
+            f"training.opening_exploration.episode_ratio ({_oe_ratio}) + "
+            f"training.midgame_start.episode_ratio ({_ms_ratio}) must be <= 1.0")
     if opening_exploration is not None and opening_exploration["episode_ratio"] == 0.0:
         opening_exploration = None
+    if midgame_start is not None and midgame_start["episode_ratio"] == 0.0:
+        midgame_start = None
 
     # Opponent pool — opt-in via train.json. Default off (mirror selfplay) so
     # adding the feature didn't change any existing game's training behavior.
@@ -2427,6 +2601,49 @@ def run_training_loop(
     augment_rng = np.random.default_rng(seed + 17)
     if augmenter is not None:
         logger.info(f"Symmetry augmentation: {augmenter.count} board symmetries, one drawn per sampled example")
+
+    selfplay_search = parse_selfplay_search(train_cfg)
+    ppo_cfg = parse_ppo_config(train_cfg)
+    ppo_trainer: PpoTrainer | None = None
+    if ppo_cfg is not None:
+        if selfplay_search:
+            raise ValueError("training.selfplay_search does not apply to training.algorithm='ppo'")
+        conflicts = [name for name, on in (
+            ("playout_cap", playout_cap is not None),
+            ("ema", ema_net is not None),
+            ("score_breakdown_head", breakdown_head is not None),
+            ("symmetry_augmentation", augmenter is not None),
+            ("tail_solve_enabled (mcts.selfplay)", selfplay_profile.tail_solve_enabled),
+        ) if on]
+        if conflicts:
+            raise ValueError(f"training.algorithm='ppo' does not support {conflicts}")
+        guidance = train_config["heuristic_guidance"]
+        if guidance["initial_ratio"] > 0 and (
+                "until_win_rate" in guidance or guidance["steps"] != guidance["hold_steps"] + 1):
+            raise ValueError(
+                "training.algorithm='ppo': heuristic guidance (the supervised warm start) must end "
+                "in one step (steps == hold_steps + 1, no until_win_rate); PPO cannot train on "
+                "guided plies")
+        sc_block = train_cfg.get("selfplay_concurrency")
+        if not (sc_block and sc_block.get("enabled")):
+            raise ValueError("training.algorithm='ppo' requires training.selfplay_concurrency.enabled=true")
+
+        def _ppo_features(rows: list) -> torch.Tensor:
+            if variable_token_dim:
+                return torch.from_numpy(pad_token_rows(rows, variable_token_dim))
+            return torch.from_numpy(np.asarray(rows, dtype=np.float32))
+
+        ppo_trainer = PpoTrainer(
+            ppo_cfg, num_players=num_players, action_space=action_space, device=device,
+            features_to_tensor=_ppo_features,
+            score_head=score_head, score_loss_weight=score_loss_weight,
+            score_targets=(lambda ep, seat: score_margin_targets(
+                ep["final_scores"], seat, num_players, score_scale)) if score_head is not None else None)
+        if resume_ckpt is not None and "ppo_state" in resume_ckpt:
+            ppo_trainer.load_state_dict(resume_ckpt["ppo_state"], net)
+            logger.info(f"Resume: PPO state restored (started at step {ppo_trainer.start_step})")
+    ppo_search = ({"policy_sampling": True, "policy_sampling_temperature": ppo_cfg.policy_temperature}
+                  if ppo_cfg is not None else {})
 
     # Belief net plumbing (Plan §2.2 / §2.3). Activated only when the game
     # registers a belief feature extractor AND a 'belief' block is present
@@ -2525,16 +2742,27 @@ def run_training_loop(
                 f"eval={eval_profile.uct2_arrival_visits} "
                 f"(mcts_pv heuristics are pinned to False, whatever this is)")
     logger.info(
+        f"  temperature_schedule (selfplay): "
+        f"enabled={selfplay_profile.temperature_schedule_enabled}, "
+        f"initial={selfplay_profile.temperature_initial}, "
+        f"final={selfplay_profile.temperature_final}, "
+        f"halflife_plies={selfplay_profile.temperature_halflife_plies} "
+        f"(fallback temperature={selfplay_profile.temperature})")
+    logger.info(
         f"  root noise (selfplay): dirichlet_alpha={selfplay_profile.dirichlet_alpha}, "
         f"dirichlet_total_alpha={selfplay_profile.dirichlet_total_alpha}, "
+        f"shaped={selfplay_profile.dirichlet_shaped}, "
         f"epsilon={selfplay_profile.dirichlet_epsilon}, "
         f"first_n_plies={selfplay_profile.dirichlet_on_first_n_plies}")
     logger.info(
         f"  root_policy_temperature (selfplay): "
         f"initial={selfplay_profile.root_policy_temperature_initial}, "
         f"final={selfplay_profile.root_policy_temperature_final}, "
-        f"decay_plies={selfplay_profile.root_policy_temperature_decay_plies}")
+        f"halflife_plies={selfplay_profile.root_policy_temperature_halflife_plies}")
     logger.info(f"  opening_exploration: {opening_exploration or 'disabled'}")
+    logger.info(f"  midgame_start: {midgame_start or 'disabled'}")
+    logger.info(f"  selfplay_search: {selfplay_search or 'puct'}")
+    logger.info(f"  algorithm: {'ppo ' + str(ppo_cfg) if ppo_cfg is not None else 'alphazero'}")
     logger.info(f"  tail_solve (selfplay): enabled={selfplay_profile.tail_solve_enabled}")
     logger.info(f"  opponent_selection (selfplay): {selfplay_profile.opponent_selection}")
     logger.info(
@@ -2549,7 +2777,6 @@ def run_training_loop(
     logger.info(f"  score_breakdown_head: "
                 f"{breakdown_head_cfg if breakdown_head is not None else 'disabled'}"
                 + (f" ({breakdown_categories} categories per seat)" if breakdown_head is not None else ""))
-    logger.info(f"  opponent_policy_head: {opp_head_cfg if opp_head is not None else 'disabled'}")
     logger.info(f"  ema: {ema_cfg if ema_net is not None else 'disabled'}")
     if lr_schedule:
         logger.info(f"  lr_schedule: {lr_schedule} (base_lr={learning_rate})")
@@ -2675,6 +2902,10 @@ def run_training_loop(
                 selfplay_cfg["full_search_prob"] = pc_prob
             if opening_exploration is not None:
                 selfplay_cfg["opening_exploration"] = opening_exploration
+            if midgame_start is not None:
+                selfplay_cfg["midgame_start"] = midgame_start
+            ppo_step = ppo_trainer is not None and heuristic_ratio == 0.0
+            selfplay_cfg["search"] = ppo_search if ppo_step else selfplay_search
             # Phase 1 batched/threaded path opt-in: forward the
             # selfplay_concurrency block from train.json so run_selfplay_batch
             # can short-circuit to the C++ batched runner when enabled=true.
@@ -2720,91 +2951,77 @@ def run_training_loop(
             step_samples = 0
             belief_step_samples = 0
             trained_samples: list[dict[str, Any]] = []  # sample dicts that entered the replay buffer
-            for ep in episodes:
-                latest_seat = ep["latest_seat"]  # int for pool, None for mirror
-                # Belief samples (Plan §2.2). One per ply per observer; pool-mode
-                # filter applies — only keep observer == latest_seat. (The latest
-                # net's belief is what we're training; freezing the pool's net
-                # means its belief samples would train against the frozen weights.)
-                if belief_enabled:
-                    for bs in ep.get("belief_samples", []):
-                        if latest_seat is not None and bs["observer"] != latest_seat:
-                            continue
-                        belief_buffer.append((
-                            bs["features"],
-                            bs["hand_counts"],   # [N-1][K]
-                            bs["remaining"],     # [K]
-                            bs["alive_per_opp"], # [N-1]
-                        ))
-                        belief_step_samples += 1
-                if score_head is not None and "final_scores" not in ep:
-                    raise ValueError(
-                        f"step {step}: training.score_head is enabled but a selfplay "
-                        f"episode carries no 'final_scores'")
-                if breakdown_head is not None and "final_score_breakdown" not in ep:
-                    raise ValueError(
-                        f"step {step}: training.score_breakdown_head is enabled but a selfplay "
-                        f"episode carries no 'final_score_breakdown'")
-                ep_samples = ep["samples"]
-                next_opp = (next_opponent_indices([s["player"] for s in ep_samples])
-                            if opp_head is not None else None)
-                for si, sample in enumerate(ep_samples):
-                    # Pool-mode: keep only the latest model's seat samples — the
-                    # opp's seat was driven by a frozen historical net and would
-                    # train against itself if we kept it.
-                    if latest_seat is not None and sample["player"] != latest_seat:
-                        continue
-                    if not sample["full_search"]:
-                        continue
-                    feats = sample["features"]
-                    if not valid_feature_length(len(feats), feature_dim, variable_token_dim):
+            if not ppo_step:
+                for ep in episodes:
+                    latest_seat = ep["latest_seat"]  # int for pool, None for mirror
+                    # Belief samples (Plan §2.2). One per ply per observer; pool-mode
+                    # filter applies — only keep observer == latest_seat. (The latest
+                    # net's belief is what we're training; freezing the pool's net
+                    # means its belief samples would train against the frozen weights.)
+                    if belief_enabled:
+                        for bs in ep.get("belief_samples", []):
+                            if latest_seat is not None and bs["observer"] != latest_seat:
+                                continue
+                            belief_buffer.append((
+                                bs["features"],
+                                bs["hand_counts"],   # [N-1][K]
+                                bs["remaining"],     # [K]
+                                bs["alive_per_opp"], # [N-1]
+                            ))
+                            belief_step_samples += 1
+                    if score_head is not None and "final_scores" not in ep:
                         raise ValueError(
-                            f"step {step}: feature length {len(feats)} is not a whole encoding "
-                            f"(feature_dim {feature_dim}, variable token_dim {variable_token_dim})")
-                    to_policy = sparse_policy if compact_dtype is not None else normalize_policy
-                    if compact_dtype is not None:
-                        feats = feats.astype(compact_dtype)
-                    policy = to_policy(
-                        sample["policy_action_ids"],
-                        sample["policy_action_visits"],
-                        action_space,
-                    )
-                    z_vals = sample["z_values"]
-                    player = sample["player"]
-                    z_rotated = rotate_z_values(z_vals, player, num_players)
-                    mask = sample["legal_mask"]
-                    score_target = (
-                        score_margin_targets(ep["final_scores"], player, num_players, score_scale)
-                        if score_head is not None else None)
-                    opp_target = None
-                    if opp_head is not None:
-                        j = next_opp[si]
-                        if j is None:
-                            opp_target = (to_policy([], [], action_space), 0.0)
-                        else:
-                            opp_policy = to_policy(
-                                ep_samples[j]["policy_action_ids"],
-                                ep_samples[j]["policy_action_visits"],
-                                action_space,
-                            )
-                            has_target = (len(opp_policy[0]) > 0 if compact_dtype is not None
-                                          else any(opp_policy))
-                            opp_target = (opp_policy, 1.0 if has_target else 0.0)
-                    breakdown_target = (
-                        score_breakdown_targets(ep["final_score_breakdown"], player, num_players,
-                                                breakdown_categories, breakdown_scale)
-                        if breakdown_head is not None else None)
-                    replay_buffer.append((feats, policy, z_rotated, mask, score_target, opp_target,
-                                          breakdown_target))
-                    step_samples += 1
-                    trained_samples.append(sample)
-
+                            f"step {step}: training.score_head is enabled but a selfplay "
+                            f"episode carries no 'final_scores'")
+                    if breakdown_head is not None and "final_score_breakdown" not in ep:
+                        raise ValueError(
+                            f"step {step}: training.score_breakdown_head is enabled but a selfplay "
+                            f"episode carries no 'final_score_breakdown'")
+                    ep_samples = ep["samples"]
+                    for sample in ep_samples:
+                        # Pool-mode: keep only the latest model's seat samples — the
+                        # opp's seat was driven by a frozen historical net and would
+                        # train against itself if we kept it.
+                        if latest_seat is not None and sample["player"] != latest_seat:
+                            continue
+                        if not sample["full_search"]:
+                            continue
+                        feats = sample["features"]
+                        if not valid_feature_length(len(feats), feature_dim, variable_token_dim):
+                            raise ValueError(
+                                f"step {step}: feature length {len(feats)} is not a whole encoding "
+                                f"(feature_dim {feature_dim}, variable token_dim {variable_token_dim})")
+                        to_policy = sparse_policy if compact_dtype is not None else normalize_policy
+                        if compact_dtype is not None:
+                            feats = feats.astype(compact_dtype)
+                        policy = to_policy(
+                            sample["policy_action_ids"],
+                            sample["policy_action_visits"],
+                            action_space,
+                        )
+                        z_vals = sample["z_values"]
+                        player = sample["player"]
+                        z_rotated = rotate_z_values(z_vals, player, num_players)
+                        mask = sample["legal_mask"]
+                        score_target = (
+                            score_margin_targets(ep["final_scores"], player, num_players, score_scale)
+                            if score_head is not None else None)
+                        breakdown_target = (
+                            score_breakdown_targets(ep["final_score_breakdown"], player, num_players,
+                                                    breakdown_categories, breakdown_scale)
+                            if breakdown_head is not None else None)
+                        replay_buffer.append((feats, policy, z_rotated, mask, score_target,
+                                              breakdown_target))
+                        step_samples += 1
+                        trained_samples.append(sample)
             # Search diversity of the plies that became training samples: is
             # the policy collapsing onto single moves (prior_ent falling,
             # prior_top1 -> 1) and is search still correcting it (policy_kl)?
             diversity = policy_diversity_stats(trained_samples)
             explored_plies = [ep["opening_exploration_plies"] for ep in episodes
                               if ep["opening_exploration_plies"] > 0]
+            midgame_plies_list = [ep["midgame_start_plies"] for ep in episodes
+                                  if ep["midgame_start_plies"] > 0]
 
             # `pX=...` log column: per-seat win-share accumulated over
             # the step's episodes. Each episode contributes share =
@@ -2832,122 +3049,110 @@ def run_training_loop(
             ts_completed = sum(ep["tail_solve_completed"] for ep in episodes)
             ts_successes = sum(ep["tail_solve_successes"] for ep in episodes)
 
-            if not replay_buffer:
+            if not ppo_step and not replay_buffer:
                 logger.warning(f"Step {step}: no training samples, skipping")
                 continue
 
-            # Sample-then-tensorize: convert ONLY the sampled minibatch to
-            # tensors each step, not the whole replay buffer. Tensorizing all
-            # ~replay_buffer_size rows per step — when only train_batches×
-            # batch_size of them are ever used — made step time scale with
-            # buffer occupancy (near-instant while the buffer was small,
-            # seconds once it filled to maxlen). `list(buffer)` is a cheap
-            # shallow copy that gives O(1) indexing (deque indexing is O(n)).
-            buf = list(replay_buffer)
-            n = len(buf)
-            grad_clip = train_cfg.get("grad_clip_norm", 1.0)
-            train_batches = train_cfg["train_batches_per_step"]
-            total_loss = 0.0
-            total_policy_loss = 0.0
-            total_value_loss = 0.0
-            total_score_loss = 0.0
-            total_opp_loss = 0.0
-            total_breakdown_loss = 0.0
-            t_train_start = time.perf_counter()
-            for b in range(train_batches):
-                idx = torch.randint(n, (min(batch_size, n),)).tolist()
-                batch = [buf[i] for i in idx]
-                # One random board symmetry per example, applied to its
-                # features and to every action-indexed row (policy, legal
-                # mask, opponent policy); values and scores are invariant.
-                sym = augmenter.sample(augment_rng, len(batch)) if augmenter is not None else None
-                as_arrays = compact_dtype is not None or sym is not None
-                feats_np = policy_np = mask_np = opp_np = None
-                if variable_token_dim:
-                    feats_np = pad_token_rows([s[0] for s in batch], variable_token_dim)
-                elif compact_dtype is not None:
-                    feats_np = np.stack([s[0] for s in batch])
-                elif sym is not None:
-                    feats_np = np.asarray([s[0] for s in batch], dtype=np.float32)
-                opp_rows = [s[5][0] for s in batch] if opp_head is not None else None
-                if compact_dtype is not None:
-                    policy_np = densify_policies([s[1] for s in batch], action_space)
-                    mask_np = np.stack([s[3] for s in batch])
-                    if opp_rows is not None:
-                        opp_np = densify_policies(opp_rows, action_space)
-                elif sym is not None:
-                    policy_np = np.asarray([s[1] for s in batch], dtype=np.float32)
-                    mask_np = np.asarray([s[3] for s in batch], dtype=np.float32)
-                    if opp_rows is not None:
-                        opp_np = np.asarray(opp_rows, dtype=np.float32)
-                if sym is not None:
-                    action_rows = [policy_np, mask_np] + ([opp_np] if opp_np is not None else [])
-                    feats_np, action_rows = augmenter.transform(feats_np, action_rows, sym)
-                    policy_np, mask_np = action_rows[0], action_rows[1]
-                    if opp_np is not None:
-                        opp_np = action_rows[2]
-                if feats_np is not None:
-                    feat_tensor = rows_to_tensor(feats_np, device)
-                else:
-                    feat_tensor = torch.tensor(
-                        [s[0] for s in batch], dtype=torch.float32, device=device)
-                if as_arrays:
-                    policy_tensor = rows_to_tensor(policy_np, device)
-                    mask_tensor = rows_to_tensor(mask_np, device)
-                else:
-                    policy_tensor = torch.tensor(
-                        [s[1] for s in batch], dtype=torch.float32, device=device)
-                    mask_tensor = torch.tensor(
-                        [s[3] for s in batch], dtype=torch.float32, device=device)
-                value_tensor = torch.tensor(
-                    [s[2] for s in batch], dtype=torch.float32, device=device)
-                score_tensor = None
-                if score_head is not None:
-                    score_tensor = torch.tensor(
-                        [s[4] for s in batch], dtype=torch.float32, device=device)
-                opp_tensor = opp_weight_tensor = None
-                if opp_head is not None:
-                    if as_arrays:
-                        opp_tensor = rows_to_tensor(opp_np, device)
+            ppo_metrics = None
+            if not ppo_step:
+                # Sample-then-tensorize: convert ONLY the sampled minibatch to
+                # tensors each step, not the whole replay buffer. Tensorizing all
+                # ~replay_buffer_size rows per step — when only train_batches×
+                # batch_size of them are ever used — made step time scale with
+                # buffer occupancy (near-instant while the buffer was small,
+                # seconds once it filled to maxlen). `list(buffer)` is a cheap
+                # shallow copy that gives O(1) indexing (deque indexing is O(n)).
+                buf = list(replay_buffer)
+                n = len(buf)
+                grad_clip = train_cfg.get("grad_clip_norm", 1.0)
+                train_batches = train_cfg["train_batches_per_step"]
+                total_loss = 0.0
+                total_policy_loss = 0.0
+                total_value_loss = 0.0
+                total_score_loss = 0.0
+                total_breakdown_loss = 0.0
+                t_train_start = time.perf_counter()
+                for b in range(train_batches):
+                    idx = torch.randint(n, (min(batch_size, n),)).tolist()
+                    batch = [buf[i] for i in idx]
+                    # One random board symmetry per example, applied to its
+                    # features and to every action-indexed row (policy, legal
+                    # mask); values and scores are invariant.
+                    sym = augmenter.sample(augment_rng, len(batch)) if augmenter is not None else None
+                    as_arrays = compact_dtype is not None or sym is not None
+                    feats_np = policy_np = mask_np = None
+                    if variable_token_dim:
+                        feats_np = pad_token_rows([s[0] for s in batch], variable_token_dim)
+                    elif compact_dtype is not None:
+                        feats_np = np.stack([s[0] for s in batch])
+                    elif sym is not None:
+                        feats_np = np.asarray([s[0] for s in batch], dtype=np.float32)
+                    if compact_dtype is not None:
+                        policy_np = densify_policies([s[1] for s in batch], action_space)
+                        mask_np = np.stack([s[3] for s in batch])
+                    elif sym is not None:
+                        policy_np = np.asarray([s[1] for s in batch], dtype=np.float32)
+                        mask_np = np.asarray([s[3] for s in batch], dtype=np.float32)
+                    if sym is not None:
+                        feats_np, (policy_np, mask_np) = augmenter.transform(
+                            feats_np, [policy_np, mask_np], sym)
+                    if feats_np is not None:
+                        feat_tensor = rows_to_tensor(feats_np, device)
                     else:
-                        opp_tensor = torch.tensor(opp_rows, dtype=torch.float32, device=device)
-                    opp_weight_tensor = torch.tensor(
-                        [s[5][1] for s in batch], dtype=torch.float32, device=device)
-                breakdown_tensor = None
-                if breakdown_head is not None:
-                    breakdown_tensor = torch.tensor(
-                        [s[6] for s in batch], dtype=torch.float32, device=device)
-                metrics = train_step(
-                    net, optimizer,
-                    feat_tensor, policy_tensor, value_tensor,
-                    legal_mask=mask_tensor,
-                    grad_clip_norm=grad_clip,
-                    score_head=score_head,
-                    score_targets=score_tensor,
-                    score_loss_weight=score_loss_weight,
-                    opp_head=opp_head,
-                    opp_targets=opp_tensor,
-                    opp_weights=opp_weight_tensor,
-                    opp_loss_weight=opp_loss_weight,
-                    breakdown_head=breakdown_head,
-                    breakdown_targets=breakdown_tensor,
-                    breakdown_loss_weight=breakdown_loss_weight,
-                )
-                if ema_net is not None:
-                    ema_update(ema_net, net, ema_decay)
-                total_loss += metrics["loss"]
-                total_policy_loss += metrics["policy_loss"]
-                total_value_loss += metrics["value_loss"]
-                total_score_loss += metrics.get("score_loss", 0.0)
-                total_opp_loss += metrics.get("opp_loss", 0.0)
-                total_breakdown_loss += metrics.get("breakdown_loss", 0.0)
-            avg_loss = total_loss / max(1, train_batches)
-            avg_opp_loss = total_opp_loss / max(1, train_batches)
-            avg_breakdown_loss = total_breakdown_loss / max(1, train_batches)
-            avg_policy_loss = total_policy_loss / max(1, train_batches)
-            avg_value_loss = total_value_loss / max(1, train_batches)
-            avg_score_loss = total_score_loss / max(1, train_batches)
-
+                        feat_tensor = torch.tensor(
+                            [s[0] for s in batch], dtype=torch.float32, device=device)
+                    if as_arrays:
+                        policy_tensor = rows_to_tensor(policy_np, device)
+                        mask_tensor = rows_to_tensor(mask_np, device)
+                    else:
+                        policy_tensor = torch.tensor(
+                            [s[1] for s in batch], dtype=torch.float32, device=device)
+                        mask_tensor = torch.tensor(
+                            [s[3] for s in batch], dtype=torch.float32, device=device)
+                    value_tensor = torch.tensor(
+                        [s[2] for s in batch], dtype=torch.float32, device=device)
+                    score_tensor = None
+                    if score_head is not None:
+                        score_tensor = torch.tensor(
+                            [s[4] for s in batch], dtype=torch.float32, device=device)
+                    breakdown_tensor = None
+                    if breakdown_head is not None:
+                        breakdown_tensor = torch.tensor(
+                            [s[5] for s in batch], dtype=torch.float32, device=device)
+                    metrics = train_step(
+                        net, optimizer,
+                        feat_tensor, policy_tensor, value_tensor,
+                        legal_mask=mask_tensor,
+                        grad_clip_norm=grad_clip,
+                        score_head=score_head,
+                        score_targets=score_tensor,
+                        score_loss_weight=score_loss_weight,
+                        breakdown_head=breakdown_head,
+                        breakdown_targets=breakdown_tensor,
+                        breakdown_loss_weight=breakdown_loss_weight,
+                    )
+                    if ema_net is not None:
+                        ema_update(ema_net, net, ema_decay)
+                    total_loss += metrics["loss"]
+                    total_policy_loss += metrics["policy_loss"]
+                    total_value_loss += metrics["value_loss"]
+                    total_score_loss += metrics.get("score_loss", 0.0)
+                    total_breakdown_loss += metrics.get("breakdown_loss", 0.0)
+                avg_loss = total_loss / max(1, train_batches)
+                avg_breakdown_loss = total_breakdown_loss / max(1, train_batches)
+                avg_policy_loss = total_policy_loss / max(1, train_batches)
+                avg_value_loss = total_value_loss / max(1, train_batches)
+                avg_score_loss = total_score_loss / max(1, train_batches)
+            else:
+                grad_clip = train_cfg.get("grad_clip_norm", 1.0)
+                t_train_start = time.perf_counter()
+                ppo_metrics = ppo_trainer.update(net, optimizer, episodes, step, steps, grad_clip)
+                n = step_samples = int(ppo_metrics["samples"])
+                avg_policy_loss = ppo_metrics["policy_loss"]
+                avg_value_loss = ppo_metrics["value_loss"]
+                avg_score_loss = ppo_metrics["score_loss"] if score_head is not None else 0.0
+                avg_breakdown_loss = 0.0
+                avg_loss = avg_policy_loss + avg_value_loss
             latest_onnx = models_dir / "model_latest.onnx"
             export_onnx(export_net, latest_onnx, feature_dim)
             current_model_path = str(latest_onnx)
@@ -3010,7 +3215,6 @@ def run_training_loop(
                 f"Step {step}/{steps}: p_loss={avg_policy_loss:.4f}, "
                 f"v_loss={avg_value_loss:.4f}"
                 + (f", s_loss={avg_score_loss:.4f}" if score_head is not None else "")
-                + (f", o_loss={avg_opp_loss:.4f}" if opp_head is not None else "")
                 + (f", sb_loss={avg_breakdown_loss:.4f}" if breakdown_head is not None else ""),
                 f"episodes={len(episodes)}, samples={n}",
                 # pX = (z+1)/N share accumulated over episodes; total over p
@@ -3050,11 +3254,21 @@ def run_training_loop(
                     f"prior_top1={diversity['prior_top1']:.3f}, "
                     f"search_ent={diversity['search_ent']:.3f}, "
                     f"policy_kl={diversity['policy_kl']:.3f}")
+            if ppo_metrics is not None:
+                log_parts.append(
+                    f"ppo: ent={ppo_metrics['entropy']:.3f}, kl={ppo_metrics['approx_kl']:.4f}, "
+                    f"clip={ppo_metrics['clip_frac']:.3f}, magnet_kl={ppo_metrics['magnet_kl']:.3f} "
+                    f"(coef={ppo_metrics['magnet_coef']:.4f}), ev={ppo_metrics['explained_var']:.3f}, "
+                    f"mb={ppo_metrics['minibatches']:.0f}")
             if opening_exploration is not None:
                 # Episodes that opened with a random prefix, and its mean length.
                 avg_prefix = sum(explored_plies) / max(1, len(explored_plies))
                 log_parts.append(
                     f"expl_eps={len(explored_plies)}, expl_plies={avg_prefix:.1f}")
+            if midgame_start is not None:
+                avg_mid = sum(midgame_plies_list) / max(1, len(midgame_plies_list))
+                log_parts.append(
+                    f"mid_eps={len(midgame_plies_list)}, mid_plies={avg_mid:.1f}")
             if belief_enabled:
                 buf_n = len(belief_buffer) if belief_buffer is not None else 0
                 if belief_loss_val is not None:
@@ -3185,14 +3399,6 @@ def run_training_loop(
                         f"{guidance_until['threshold']:.0%} at step {step}; decaying over "
                         f"{guidance_until['decay_steps']} steps")
 
-                # No gating (AlphaZero): selfplay always plays the latest model, so
-                # model_best.onnx is just the latest model as of the last eval.
-                with atomic_write(models_dir / "model_best.onnx") as tmp:
-                    shutil.copy2(eval_model, tmp)
-                if belief_enabled:
-                    with atomic_write(models_dir / "belief_best.onnx") as tmp:
-                        shutil.copy2(belief_latest, tmp)
-
             checkpoint = {
                 "step": step,
                 "model_state_dict": net.state_dict(),
@@ -3201,12 +3407,12 @@ def run_training_loop(
             }
             if score_head is not None:
                 checkpoint["score_head_state_dict"] = score_head.state_dict()
-            if opp_head is not None:
-                checkpoint["opponent_policy_head_state_dict"] = opp_head.state_dict()
             if breakdown_head is not None:
                 checkpoint["score_breakdown_head_state_dict"] = breakdown_head.state_dict()
             if ema_net is not None:
                 checkpoint["ema_state_dict"] = ema_net.state_dict()
+            if ppo_trainer is not None:
+                checkpoint["ppo_state"] = ppo_trainer.state_dict()
             # Rewritten every step and required by --resume: never write in place.
             with atomic_write(output_dir / "checkpoint.pt") as tmp:
                 torch.save(checkpoint, tmp)

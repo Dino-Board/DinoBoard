@@ -165,7 +165,7 @@ _FULL_BASELINE = {
     "c_puct": 1.4,
     "temperature": 1.0,
     "temperature_schedule": {
-        "enabled": False, "initial": 1.0, "final": 0.1, "decay_plies": 0,
+        "enabled": False, "initial": 0.8, "final": 0.1, "halflife_plies": 0,
     },
     "opponent_selection": "puct",
     "tail_solve_enabled": False,
@@ -292,7 +292,7 @@ def test_tail_solve_enabled_without_trigger_raises(tmp_path, monkeypatch):
 
 def test_temperature_schedule_flat_form_rejected(tmp_path, monkeypatch):
     """The flat `temperature_initial` field must be rejected — schedule
-    must be the nested `temperature_schedule.{enabled,initial,final,decay_plies}`."""
+    must be the nested `temperature_schedule.{enabled,initial,final,halflife_plies}`."""
     bad_baseline = dict(_FULL_BASELINE)
     bad_baseline.pop("temperature_schedule")
     bad_baseline["temperature_initial"] = 1.0
@@ -302,6 +302,21 @@ def test_temperature_schedule_flat_form_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr(mp, "_PROJECT_ROOT", tmp_path)
     clear_cache()
     with pytest.raises(ValueError):
+        mp.resolve_profile("fakegame", "selfplay")
+
+
+def test_temperature_schedule_legacy_decay_plies_rejected(tmp_path, monkeypatch):
+    """Legacy linear `decay_plies` key inside temperature_schedule must raise."""
+    bad_baseline = dict(_FULL_BASELINE)
+    bad_baseline["temperature_schedule"] = {
+        "enabled": True, "initial": 0.8, "final": 0.1, "decay_plies": 12,
+    }
+    _write_fake_game(tmp_path, "fakegame", baseline=bad_baseline)
+
+    from training import mcts_profile as mp
+    monkeypatch.setattr(mp, "_PROJECT_ROOT", tmp_path)
+    clear_cache()
+    with pytest.raises(ValueError, match="halflife_plies|missing|unknown"):
         mp.resolve_profile("fakegame", "selfplay")
 
 

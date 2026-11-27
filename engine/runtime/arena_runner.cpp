@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <random>
 #include <stdexcept>
@@ -131,6 +132,10 @@ ArenaMatchResult run_arena_match(
     mcts_cfg.opponent_selection = pcfg.opponent_selection;
     mcts_cfg.safe_mode = pcfg.safe_mode;
     mcts_cfg.leaf_batch_size = pcfg.leaf_batch_size;
+    mcts_cfg.time_limit_ms = pcfg.time_limit_ms;
+    mcts_cfg.algorithm = pcfg.algorithm;
+    mcts_cfg.gumbel = pcfg.gumbel;
+    mcts_cfg.rollout = pcfg.rollout;
     if (mcts_tracker) {
       mcts_cfg.root_belief_tracker = mcts_tracker;
     }
@@ -169,16 +174,20 @@ ArenaMatchResult run_arena_match(
     search::NetMctsStats stats{};
     const std::uint64_t mcts_seed = board_ai::rng::derive_subseed(
         match_seed, "arena.mcts", static_cast<std::uint64_t>(ply));
+    const auto search_t0 = std::chrono::steady_clock::now();
     mcts.search_root(ai_view, rules, value_model, eval, &stats, mcts_seed);
+    const double search_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - search_t0).count();
 
     const std::uint64_t action_seed = board_ai::rng::derive_subseed(
         match_seed, "arena.action_pick", static_cast<std::uint64_t>(ply));
-    const ActionId chosen = search::select_action_from_visits(
-        stats.root_actions, stats.root_action_visits, pcfg.temperature, action_seed,
-        pcfg.top_k, legal[0]);
+    const ActionId chosen = search::choose_root_action(
+        stats, pcfg.temperature, action_seed, pcfg.top_k, legal[0]);
 
     result.action_history.push_back(chosen);
-    result.ply_stats.push_back({stats.tail_solved, stats.tail_solve_value});
+    result.ply_stats.push_back({stats.tail_solved, stats.tail_solve_value,
+                                stats.simulations_done, stats.network_evaluations,
+                                search_ms});
     std::unique_ptr<IGameState> state_before = state->clone_state();
     const ActionId observed = rules.public_action(*state_before, chosen);
     rules.do_action_fast(*state, chosen, step_rng);

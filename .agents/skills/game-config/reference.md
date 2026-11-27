@@ -35,7 +35,7 @@ Shared knobs every profile inherits. All fields are optional (fall back to _BASE
 | world_cap | int | 0 | 0=every sim its own world; >0 caps K outer determinizations |
 | c_puct | float | 1.4 | Exploration constant |
 | temperature | float | 0.0 | Action selection temperature |
-| temperature_schedule | object | (disabled) | {enabled, initial, final, decay_plies} |
+| temperature_schedule | object | (disabled) | `{enabled, initial, final, halflife_plies}` — KataGo exponential decay `final + (initial - final) * 0.5^(ply / halflife_plies)`; `halflife_plies > 0` when enabled and `initial != final` (legacy `decay_plies` is rejected) |
 | dirichlet_alpha | float | 0.0 | Root noise alpha (off by default) |
 | dirichlet_epsilon | float | 0.0 | Root noise weight |
 | dirichlet_on_first_n_plies | int | -1 | -1 = whole game (resolved to max_game_plies) |
@@ -100,14 +100,14 @@ are always resolved from the base file).
 | opponent_pool_uniform_mix | float | [0, 1], default 0.1. Share of the uniform distribution mixed into the quality draw |
 | playout_cap | object | KataGo playout cap randomization: `{"full_simulations": int, "fast_simulations": int, "full_search_prob": float}`. Each selfplay MCTS ply is a full search (root noise, training sample) with probability full_search_prob, else a fast search without noise whose sample is dropped. Replaces the profile's simulations; exclusive with simulations_start; requires selfplay_concurrency. Splendor transformer 800/150/0.25: 6.4x games/hour, 1.5x training samples/hour vs 2000 every ply |
 | score_head | object | Training-only auxiliary head predicting the final score margin: `{"loss_weight": float, "scale": float}`, both > 0. Target per seat = (own score − best other score) / scale, MSE weighted by loss_weight. Needs the game's `final_score_extractor` (`has_final_score_extractor` in metadata); not exported to ONNX. Can be toggled across resumes |
-| opponent_policy_head | object | Training-only auxiliary head predicting the opponent's next move: `{"loss_weight": float}` (> 0; KataGo uses 0.15). Target = normalized root visits of the next ply acted by a different seat (fast PCR searches included); samples with no later opponent ply get weight 0. Not exported to ONNX. Can be toggled across resumes (optimizer groups are matched by name) |
 | ema | object | `{"decay": float}`, 0 < decay < 1. Exported ONNX models (selfplay/eval) use an exponential moving average of the weights, updated after every optimizer step; the checkpoint stores it as `ema_state_dict` |
 | compact_replay | object | `{"features_dtype": "float16" \| "float32"}`. Replay buffer keeps features as numpy arrays in that dtype and policies sparse (densified per batch); selfplay returns numpy samples. Requires selfplay_concurrency. For large feature vectors (carcassonne_tok: up to ~15k floats, ~30 KB/sample in fp16 vs ~0.45 MB as Python float lists) |
 | inference_precision | string | `"fp32"` (default) or `"fp16"`: selfplay/eval run an fp16 copy under `models/fp16/` (fp32 I/O); checkpoints stay fp32. Worth it when GPU-bound (Splendor d128 transformer: +38% sims/s) |
 | opening_exploration | object | Random starting positions: `{"episode_ratio", "min_plies", "max_plies", "temperature", "uniform_mix"}`, all five required. With probability episode_ratio (in [0, 1]; 0 = off) an episode opens with uniform{min_plies..max_plies} unsearched plies sampled from the acting seat's raw policy P as `(1 − uniform_mix)·P^(1/temperature)/Z + uniform_mix/n`; those plies are never training samples. 1 ≤ min_plies ≤ max_plies < max_game_plies, temperature > 0, uniform_mix in [0, 1]. Works for every game. Logged as `expl_eps` / `expl_plies` |
-| symmetry_augmentation | bool | Default false. Each sampled training example gets a uniformly random board symmetry of the encoder (`IFeatureEncoder::symmetries`, `engine/core/feature_encoder.h`) applied at batch time to its features, policy target, legal mask and opponent-policy target (`training/symmetry.py`); the replay buffer is unchanged. Rejected when the encoder offers no symmetries. Encoders with static tables: Harmonies (4 per board side). Encoders with sample-dependent symmetries (`sample_symmetry_count` / `apply_sample_symmetry`): `carcassonne_tok` (4 quarter turns); these cannot transform an opponent-policy target, so the flag is rejected together with `opponent_policy_head`. How to give an encoder symmetries: `game-ai/encoder.md` |
+| midgame_start | object | KataGo-style fast midgame play-in + tournament fork: `{"episode_ratio", "min_plies", "max_plies", "temperature", "fork_min_choices", "fork_max_choices"}`, all six required. Mutually exclusive per episode with `opening_exploration` (`opening.episode_ratio + midgame.episode_ratio <= 1.0`; `0` = off). Prefix plies `0 .. K-2` sample from masked raw policy at `temperature > 0` (`uniform_mix = 0`); final prefix ply `K-1` (when `fork_max_choices > 0`) draws `k = uniform{fork_min_choices..fork_max_choices}` clamped to `[1, n-1]` distinct legal moves without replacement and plays the highest-prior one (`0, 0` disables fork). Prefix plies are never training samples. Logged as `mid_eps` / `mid_plies` |
+| symmetry_augmentation | bool | Default false. Each sampled training example gets a uniformly random board symmetry of the encoder (`IFeatureEncoder::symmetries`, `engine/core/feature_encoder.h`) applied at batch time to its features, policy target and legal mask (`training/symmetry.py`); the replay buffer is unchanged. Rejected when the encoder offers no symmetries. Encoders with static tables: Harmonies (4 per board side). Encoders with sample-dependent symmetries (`sample_symmetry_count` / `apply_sample_symmetry`): `carcassonne_tok` (4 quarter turns). How to give an encoder symmetries: `game-ai/encoder.md` |
 
-When to use `playout_cap`, `score_head`, `opponent_policy_head`, `ema` (and the MCTS `fpu_reduction`) and what they cost: `training/katago-techniques.md`. `opening_exploration` and the selfplay-only MCTS exploration fields: `training/exploration.md`. Throughput knobs (`inference_precision`, concurrency, providers): `training/performance.md`.
+When to use `playout_cap`, `score_head`, `ema` (and the MCTS `fpu_reduction`) and what they cost: `training/katago-techniques.md`. `opening_exploration`, `midgame_start`, and the selfplay-only MCTS exploration fields: `training/exploration.md` and `training/overconfidence.md`. Throughput knobs (`inference_precision`, concurrency, providers): `training/performance.md`.
 
 #### training.selfplay_concurrency
 | Field | Type | Description |
@@ -127,15 +127,16 @@ When to use `playout_cap`, `score_head`, `opponent_policy_head`, `ema` (and the 
 Contains `selfplay` and `eval` profile deltas. Each overrides baseline fields.
 
 Selfplay is the ONLY place dirichlet non-zero values belong.
-Eval profile is used for the benchmark eval. There is no gating (AlphaZero): selfplay always plays the latest model, and `models/model_best.onnx` is the latest model as of the last eval.
+Eval profile is used for the benchmark eval. There is no gating (AlphaZero): selfplay always plays the latest model (`models/model_latest.onnx`), and periodic checkpoints are saved as `models/model_step_*.onnx`.
 
-Two exploration fields may appear only in `selfplay` (rejected in mcts.json,
+Three exploration fields may appear only in `selfplay` (rejected in mcts.json,
 web.json and `eval`); when and how to use them: `training/exploration.md`.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| dirichlet_total_alpha | float ≥ 0 | 0.0 | Root noise sized by the position: per-action alpha = total / number of legal root moves. Exclusive with `dirichlet_alpha > 0`; uses the same `dirichlet_epsilon` and `dirichlet_on_first_n_plies` |
-| root_policy_temperature | float > 0, or `{"initial", "final", "decay_plies"}` | 1.0 | Root prior of full selfplay searches becomes P^(1/T) before noise. Object form: linear in the ply index from initial (ply 0) to final (decay_plies and later); decay_plies > 0 when the two differ. Fast `playout_cap` searches keep 1 |
+| dirichlet_total_alpha | float ≥ 0 | 0.0 | Root noise sized by the position: total concentration summed over legal root moves (`total / N` when unshaped). Exclusive with `dirichlet_alpha > 0`; uses the same `dirichlet_epsilon` and `dirichlet_on_first_n_plies` |
+| dirichlet_shaped | bool | false | KataGo shaped root Dirichlet (`computeDirichletAlphaDistribution`): requires `dirichlet_total_alpha > 0`. Splits `dirichlet_total_alpha` 50% uniformly (`1/N`) and 50% proportional to excess log-prior above mean capped at `max(0.01, 1/N)` |
+| root_policy_temperature | float > 0, or `{"initial", "final", "halflife_plies"}` | 1.0 | Root prior of full selfplay searches becomes P^(1/T) before noise. Object form: KataGo exponential decay `final + (initial - final) * 0.5^(ply / halflife_plies)`; `halflife_plies > 0` when `initial != final` (legacy `decay_plies` is rejected). Fast `playout_cap` searches keep 1 |
 
 With `--train-config` (e.g. `_tok` variants) these still go in the base
 `train.json`, because MCTS profiles are resolved from it.

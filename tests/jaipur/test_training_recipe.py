@@ -60,7 +60,8 @@ def test_recipe_builds_model_and_enables_kata_options():
     from training.model import TokenTransformerPVNet, create_model_from_config
     cfg = _train_cfg()
     validate_guidance_until(cfg["heuristic_guidance"], TRAIN_CFG)
-    assert {"playout_cap", "score_head", "opponent_policy_head", "ema"} <= set(cfg["training"])
+    assert {"playout_cap", "score_head", "ema"} <= set(cfg["training"])
+    assert "opponent_policy_head" not in cfg["training"]
     for name in ("selfplay", "eval"):
         assert mcts_profile.resolve_profile(GAME, name).fpu_reduction == 0.2
     meta = engine.game_metadata(GAME)
@@ -85,7 +86,7 @@ def test_training_loop_with_the_recipe(tmp_path, caplog):
                       learning_rate=0.001, seed=5, save_every=0)
     steps = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Step ")]
     assert len(steps) == 2 and "h_ratio=1.00" in steps[0] and "h_ratio" not in steps[1]
-    assert all("s_loss=" in s and "o_loss=" in s for s in steps)
+    assert all("s_loss=" in s and "o_loss=" not in s for s in steps)
     latest = tmp_path / "models" / "model_latest.onnx"
     assert latest.exists()
     ep = engine.run_selfplay_episode(game_id=GAME, seed=3, model_path=str(latest), simulations=8, max_game_plies=200)

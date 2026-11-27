@@ -258,9 +258,9 @@
 
 A 面的 MLP 训练曾经锁死在固定的地形摆法上，所以这份配方把框架的 selfplay 探索选项都打开了（含义和调法见 `/training` 技能的 `exploration.md`）：
 
-- `training.opening_exploration`：30% 的对局先按原始策略采样走 2–20 步不搜索的开局（一回合约 5–7 步，20 步大约是双方各两回合的地形摆放），温度 1.25，其中 20% 是完全随机落子。
-- `train.json::mcts.selfplay.root_policy_temperature`：根先验温度 1.25，60 步内线性降到 1.1。
-- `train.json::mcts.selfplay.dirichlet_total_alpha` 10：合法动作数在"选 5 组之一"和"几十个落点"之间变化很大，噪声 alpha 按合法动作数缩放。
+- `training.opening_exploration` + `training.midgame_start`：25% 的对局走 2–14 步随机开局（温度 1.25，15% 均匀随机），另有 15% 的对局以温度 0.7 快速推演 20–50 步并在末步通过 `3..10` 候选锦标赛分叉切入中盘。
+- `train.json::mcts.selfplay.root_policy_temperature`：根先验温度 `1.25 → 1.1`，按 `halflife_plies: 10` 指数衰减（实战采样温度 `temperature_schedule` 同样以 `halflife_plies: 10` 从 `0.8` 指数衰减到 `0.1`）。
+- `train.json::mcts.selfplay.dirichlet_total_alpha` `10.83` + `dirichlet_shaped: true`：合法动作数变化很大，采用 KataGo 自适应对数先验塑形噪声。
 
 每步 200 局（约 5 千个训练样本、10 个 batch，和璀璨宝石配方一步的样本量、更新次数相当），共 20000 步；回放缓冲 30 万样本约等于最近 1.3 万局：
 

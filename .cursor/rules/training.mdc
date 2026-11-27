@@ -1,7 +1,8 @@
 ---
-description: Tune training hyperparameters and diagnose training issues
+description: Tune training hyperparameters, prevent policy/value overconfidence, configure KataGo exploration, selfplay throughput, and diagnose training issues
 globs:
   - "games/**/config/train.json"
+  - "games/**/config/train_*.json"
   - "games/**/config/mcts.json"
 alwaysApply: false
 ---
@@ -11,6 +12,9 @@ alwaysApply: false
 Read the rule matching your current task:
 
 - **Launch / resume / stop a run** (GPU env setup, `gpu_env.sh`, nohup launch, monitoring, clean stop): see `training-launch`
-- **Hyperparameter selection** (c_puct, network depth/width, lr, Dirichlet, opponent pool by game type): see `training-hyperparams`
-- **Diagnose issues** (symptom-to-cause checklist, concurrent inference setup, known BUGs): see `training-diagnostics`
-- **Selfplay exploration / policy lock-in** (same opening every game, random starting positions, root policy temperature, Dirichlet noise by legal-action count, `prior_ent` / `policy_kl` log fields): see `training-exploration`
+- **Hyperparameter selection** (c_puct, network depth/width, lr, KataGo exponential `temperature_schedule`, Dirichlet, opponent pool by game type): see `training-hyperparams`
+- **Prevent overconfidence** (policy prior collapse vs value outcome memorization, triage table, sample reuse `< 1.0`, layered prevention & rollback checklist): see `training-overconfidence`
+- **Selfplay exploration / policy lock-in** (`opening_exploration`, KataGo `midgame_start` + tournament fork, exponential `root_policy_temperature`, adaptive/shaped `dirichlet_total_alpha`, `prior_ent` / `policy_kl` logs): see `training-exploration`
+- **Diagnose issues** (symptom-to-cause checklist, concurrent inference setup, banned legacy keys, known BUGs): see `training-diagnostics`
+- **Selfplay throughput** (bottleneck diagnosis, workers / leaf batching, fp16, TensorRT, memory): see `training-performance`
+- **KataGo-style techniques** (playout cap randomization, FPU reduction, score / score-breakdown auxiliary heads, weight EMA): see `training-katago-techniques`

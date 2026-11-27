@@ -1,5 +1,5 @@
 ---
-description: Pick training hyperparameters by game type — c_puct, network depth/width, lr, Dirichlet, opponent pool, belief net
+description: Pick training hyperparameters by game type — c_puct, network depth/width, lr, KataGo exponential temperature_schedule, Dirichlet, opponent pool, belief net
 globs:
   - "games/**/config/train.json"
   - "games/**/config/mcts.json"
@@ -117,7 +117,7 @@ How to enable for a game:
 
 Sizing: the Splendor recipe is `d_model 128, num_layers 4, num_heads 4,
 ffn_dim 256` (about 0.6M parameters), small enough that selfplay is bound by
-evaluator latency (see [performance.md](performance.md) before growing it).
+evaluator latency (see `training-performance` before growing it).
 Long token sets (carcassonne_tok: up to ~160) are attention-bound: `attention: "fused"`;
 grids use `token_positions` + `relative_position_radius` (`carcassonne_tok`, `harmonies_tok`).
 
@@ -158,7 +158,7 @@ Example: `lr=2e-4, lr_min=4e-6` (50x decay).
 
 ## Batch Size and Replay
 
-Target **sample reuse below 1**: `reuse = batch_size * train_batches_per_step / new samples per step` (with `playout_cap`, count only the recorded full-search plies), with a replay buffer of about 100 or more steps of data. Every sample of a game carries the same win/loss label, so high reuse trains each game's one label many times and the value head memorises outcomes instead of generalising (symptom: diagnostics.md row 12). Carcassonne and Harmonies turned overconfident at reuse near 2 and recovered below 1, confirmed by fresh-game value probes and head-to-head games against the old runs: see the `value-overfit` skill.
+Target **sample reuse below 1**: `reuse = batch_size * train_batches_per_step / new samples per step` (with `playout_cap`, count only the recorded full-search plies), with a replay buffer of about 100 or more steps of data. Every sample of a game carries the same win/loss label, so high reuse trains each game's one label many times and the value head memorises outcomes instead of generalising (symptom: `training-diagnostics` row 10). Carcassonne and Harmonies turned overconfident at reuse near 2 and recovered below 1, confirmed by fresh-game value probes and head-to-head games against the old runs: see `value-overfit-reference`.
 
 | Field | Typical | Notes |
 |-------|---------|-------|
@@ -185,14 +185,8 @@ For bluff games, prefer a large buffer (150-200 steps of data) over the default.
 | dirichlet_on_first_n_plies | -1 = whole game. | -1 for most; explicit value to restrict noise to opening |
 
 ### alpha by action space
-- Rule of thumb: `alpha ~ 10 / action_space_size`
-- tictactoe (9 actions): ~1.0
-- quoridor (~130 actions): ~0.08-0.17
-- splendor (70 actions): ~0.15-0.33
-- coup (~20 actions): ~0.5-1.2
-- loveletter (~10 actions): ~1.0
-
-When the number of legal moves changes a lot within a game, set `dirichlet_total_alpha` instead (per-action alpha = total / legal moves at that root). That option, the root policy temperature and random starting positions are covered in [exploration.md](exploration.md).
+- Rule of thumb for fixed `dirichlet_alpha`: `alpha ~ 10 / action_space_size` (tictactoe `1.0`, loveletter `1.0`, coup `0.5-1.2`, quoridor `0.17`).
+- **Preferred for variable or wide branching (`N >= 20`)**: set `dirichlet_alpha: 0.0`, `dirichlet_total_alpha: 10.83`, and `dirichlet_shaped: true` (KataGo adaptive + log-prior shaped concentration: 50% uniform `1/N` + 50% excess log-prior capped at `max(0.01, 1/N)`). See `training-exploration` and `training-overconfidence`.
 
 ---
 
@@ -201,16 +195,28 @@ When the number of legal moves changes a lot within a game, set `dirichlet_total
 ```json
 "temperature_schedule": {
   "enabled": true,
-  "initial": 1.0,
+  "initial": 0.8,
   "final": 0.1,
-  "decay_plies": 60
+  "halflife_plies": 5
 }
 ```
 
-- Start at 1.0 for exploration in opening.
-- Decay to 0.1 for exploitation in midgame/endgame.
-- `decay_plies`: game-dependent. ~40% of max_game_plies is a good starting point.
-- Bluff games (coup): consider `enabled: false` with flat `temperature: 1.0` -- exploration throughout is important.
+Uses **KataGo-style exponential halflife decay** (`Search::interpolateEarly` in KataGo):
+`T(ply) = final + (initial - final) * 0.5^(ply / halflife_plies)`.
+(Legacy linear `decay_plies` has been completely removed and raises `ValueError`.)
+
+**Rule: follow KataGo's early-decay rhythm (`halflife_plies ~ 0.08 * avg_game_plies`).**
+Played-move temperature picks the move actually executed from finished visit counts; it does not change search or policy targets, only the trajectory and terminal `z` labels. Sampling noisy moves deep into a game degrades play and corrupts value labels (`training-overconfidence`). Position diversity comes from `opening_exploration` + `midgame_start` (`training-exploration`), not from a slow played-move temperature.
+
+- **KataGo reference (`selfplay8b20.cfg`)**: `initial: 0.8`, `final: 0.1`, `halflife_plies: 19` on ~240-ply 19x19 Go (`19 / 240 ~ 8%`).
+  - At `1 * halflife_plies` (~8% of game): `50%` decayed (`T = 0.45`) — opening moves still branch cleanly.
+  - At `2 * halflife_plies` (~16% of game): `75%` decayed (`T = 0.275`).
+  - At `3 * halflife_plies` (~24% of game): `87.5%` decayed (`T = 0.188`) — smoothly enters near-greedy play without a step cliff.
+- **Per-game `halflife_plies` (`7%-10%` of real `plies=` in `train.log`, NOT `max_game_plies`)**:
+  `6 nimmt!` (~24 plies): `2`; `Azul` (~54): `4.5`; `Jaipur` (~55): `5`; `Splendor` (~59): `5`; `Quoridor` (~60): `5`; `Harmonies` (~128): `10`; `Carcassonne` (~142): `11`; `Ark Nova` (~220): `18`.
+- **Empirical impact**: in `6 nimmt!` and `Harmonies`, slow temperature schedules stalled post-guidance progress because flatter network search distributions sampled blunders throughout the midgame; switching to fast early decay to `0.1` immediately restored head-to-head gains.
+- **Startup verification**: printed at launch as `temperature_schedule: enabled (exp), initial=..., final=..., halflife_plies=...`.
+- **Bluff / mixed-strategy games (`coup`, `liarsdice`)**: keep flat `temperature: 1.0` (`enabled: false`) or higher `final` when equilibrium play itself mixes actions.
 
 ---
 
@@ -223,11 +229,13 @@ When the number of legal moves changes a lot within a game, set `dirichlet_total
 | steps | **Absolute** step at which the ratio reaches 0 (linear decay from `hold_steps` to `steps`; must be > `hold_steps`). E.g. hold 100 / steps 1000 = 100 held + 900 decaying |
 | initial_ratio | 1.0 = 100% heuristic actions. 0.5 = 50/50. Default: **1.0**. `0.0` with `steps: 0` disables guidance. |
 | temperature | Heuristic action temperature. Default: **1.0** for games requiring mixed strategies (bluff/hidden-info), **0.0** (greedy) otherwise. |
-| until_win_rate | Hold until the eval win rate reaches a threshold, then decay (`steps: 0`; schema in `game-config/reference.md`). One 100-game eval is ±10%: raise `eval_games`. |
+| until_win_rate | Hold until the eval win rate reaches a threshold, then decay (`steps: 0`; schema in `game-config-reference`). One 100-game eval is ±10%: raise `eval_games`. |
 
 Guidance duration by heuristic strength:
 - Strong heuristic (PV model from previous training run, or strong rule heuristic): `hold_steps: 1000, steps: 2000, initial_ratio: 1.0`
 - Medium heuristic (basic rule heuristic): `hold_steps: 100, steps: 200, initial_ratio: 1.0`
+
+Policy target (`p` label) by teacher type: `mcts_pv` teachers (ONNX PV or C++ PV evaluator + MCTS) supervise the teacher's post-search visit distribution `p` (matching training-phase MCTS), whereas non-MCTS `rule` teachers supervise a strict one-hot `p` label on the chosen action.
 
 ---
 
@@ -237,10 +245,20 @@ Guidance duration by heuristic strength:
 |-------|---------|-------------|
 | opponent_pool_enabled | false | Self-play vs past checkpoints |
 | opponent_pool_self_ratio | 0.5 | Fraction of games vs current model |
+| opponent_pool_sampling | quality | `quality` or `uniform` (below) |
+| opponent_pool_window | 1.0 | Opponents only from the last `window` fraction of the run so far |
+| opponent_pool_quality_lr | 0.01 | Score lost per pool game the latest model wins |
+| opponent_pool_uniform_mix | 0.1 | Uniform share mixed into the quality draw |
 
 Enable for bluff/deception games (coup, liarsdice) where playing only against self leads to exploitable strategies. The pool prevents strategy collapse.
 
-`selfplay_concurrency.opponent_pool_max_distinct`: max distinct ONNX models loaded for concurrent pool play (memory bound; 3 is typical).
+`selfplay_concurrency.opponent_pool_max_distinct`: max distinct ONNX models loaded for concurrent pool play (memory bound; 3 is typical). Each step draws that many opponents; every pool game of the step plays one of them.
+
+Opponents are the run's `model_step_*.onnx` checkpoints (`training/opponent_pool.py`):
+
+- `uniform` draws them all with equal chance. Late in a run most are early checkpoints the latest model beats almost every game: pool games spent on them teach little.
+- `quality` (OpenAI Five, Berner et al. 2019, appendix N) gives each checkpoint a score q and draws from softmax(q) mixed with `uniform_mix` of uniform. A checkpoint enters at the top score and loses `lr / (N p)` for each pool game the latest model wins against it (a game scores (z + 1) / 2 from the latest seat's terminal value: 1 for a 2-player win, 1/2 for a draw), N being the checkpoints in the window. Checkpoints the latest model has outgrown fade from the draw; ones it still loses to keep their share, and the uniform mix keeps revisiting old ones so a forgotten weakness shows up. It uses only the pool games' own outcomes: no evaluation games. Pool games during heuristic guidance count `1 - guidance ratio`. Scores live in `models/opponent_pool.json` and survive `--resume`; the step log lists each opponent played with its draw probability and the latest model's score (`vs step_01750 p=0.21 14/20`).
+- `window` (Bansal et al. 2018, opponents from Uniform(δv, v)) drops early checkpoints outright; `window = 0.5` is their δ = 0.5. Useful when early networks play too weakly to be worth a game, with either sampling.
 
 ---
 

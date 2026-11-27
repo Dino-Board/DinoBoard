@@ -4,6 +4,7 @@ How to notice that selfplay has locked onto one line of play, and the
 framework options that counter it. All of them work for every game, are
 **off unless configured**, and act in selfplay only — eval and the
 web AI never explore. Field types and validation: `game-config/reference.md`.
+For how policy lock-in interacts with value overconfidence: [overconfidence.md](overconfidence.md).
 
 ## The problem
 
@@ -15,32 +16,33 @@ the same way, one placement pattern is reused regardless of the position, and
 the model is weak in positions it never steers into.
 
 An opponent pool (`hyperparams.md`) varies the *opponent*. The options here
-vary the *positions* and the *root search*, and combine freely with it.
+vary the *starting positions* and the *root search*, and combine freely with it.
 
 Not among them: the played-move temperature (`temperature_schedule`). Use these
-options for variety and let that temperature reach 0.1 after about 20% of a
-game (`hyperparams.md`, temperature_schedule): every sampled move makes the
-game, and so its value targets, worse.
+options for variety and let `temperature_schedule` decay exponentially (`halflife_plies`
+around 8% of a game's real plies, `initial: 0.8 -> final: 0.1`; see `hyperparams.md`):
+every noisy move played *after* search degrades game quality and corrupts value targets.
 
 | Option | Config | Acts on |
 |--------|--------|---------|
-| Opening exploration | `training.opening_exploration` | Which positions selfplay games start from |
-| Root policy temperature | `mcts.selfplay.root_policy_temperature` | How strongly the root follows the prior |
-| Dirichlet noise by action count | `mcts.selfplay.dirichlet_total_alpha` | Root noise shape when the number of legal moves varies |
-| Diversity read-out | always logged | `prior_ent`, `prior_top1`, `search_ent`, `policy_kl` in `train.log` |
+| Opening exploration | `training.opening_exploration` | Diverse high-entropy opening prefixes |
+| Midgame start + fork | `training.midgame_start` | KataGo-style sharp play-in + tournament fork into off-book midgames |
+| Root policy temperature | `mcts.selfplay.root_policy_temperature` | Exponential halflife flattening of root priors before noise |
+| Adaptive / shaped Dirichlet | `mcts.selfplay.dirichlet_total_alpha`, `dirichlet_shaped` | Root noise scaled by legal move count + KataGo log-prior shaping |
+| Diversity read-out | always logged | `prior_ent`, `prior_top1`, `search_ent`, `policy_kl`, `expl_*`, `mid_*` |
 
 ---
 
 ## Read the log first
 
 Every step line carries four averages over the searched plies that became
-training samples (plies with one legal move, tail-solved plies and
+training samples (forced 1-move plies, tail-solved plies, prefix plies, and
 heuristic-guided plies are left out):
 
 | Field | Meaning |
 |-------|---------|
 | `prior_ent` | Entropy (nats) of the network's raw policy at the root, before temperature and noise |
-| `prior_top1` | Largest prior probability |
+| `prior_top1` | Largest raw prior probability |
 | `search_ent` | Entropy (nats) of the root visit distribution, i.e. of the policy target |
 | `policy_kl` | KL(visits ‖ prior): how far search moved away from the network |
 
@@ -48,14 +50,11 @@ heuristic-guided plies are left out):
   `policy_kl` stays clearly positive while eval strength is still rising.
 - **Lock-in**: `prior_ent` drops fast towards 0 and `prior_top1` towards 1
   while eval win rate has stalled, and `policy_kl` is near 0 — search only
-  confirms what the network already believes. The same numbers at a high,
-  still-rising win rate just mean the model has converged.
+  confirms what the network already believes.
 - `prior_ent` and `prior_top1` describe the raw network output, so they stay
-  comparable when an option below is switched on. `search_ent` and
+  comparable when root exploration options are switched on. `search_ent` and
   `policy_kl` include the effect of root temperature and noise and rise by
-  construction when those are enabled; they also depend on the simulation
-  count, so compare runs with the same search settings.
-- The scale depends on the game: uniform over N legal moves is `ln N`.
+  construction when those are enabled.
 
 Plot them with
 `python3 scripts/plot_training_metrics.py runs/<run> --fields prior_ent,prior_top1,search_ent,policy_kl`
@@ -63,117 +62,130 @@ Plot them with
 
 ---
 
-## Opening exploration (random starting positions)
+## Opening exploration & Midgame start (KataGo position diversification)
 
 ```json
 "training": {
   "opening_exploration": {
-    "episode_ratio": 0.3,
+    "episode_ratio": 0.25,
     "min_plies": 1,
-    "max_plies": 8,
-    "temperature": 1.0,
-    "uniform_mix": 0.2
+    "max_plies": 6,
+    "temperature": 1.2,
+    "uniform_mix": 0.15
+  },
+  "midgame_start": {
+    "episode_ratio": 0.15,
+    "min_plies": 8,
+    "max_plies": 22,
+    "temperature": 0.7,
+    "fork_min_choices": 3,
+    "fork_max_choices": 8
   }
 }
 ```
 
-With probability `episode_ratio` an episode starts with a prefix of
-`uniform{min_plies..max_plies}` plies that are **not searched**: each move is
-sampled from the acting seat's raw policy `P` as
-`(1 − uniform_mix) · P^(1/temperature) / Z + uniform_mix / n` over the `n`
-legal moves. After the prefix the episode continues with normal search.
-Prefix plies never become training samples; the searched plies after them do,
-so the value and policy heads learn positions the current policy would not
-have reached by itself. All five keys are required.
+Both blocks advance a random prefix of unsearched plies (`1` forward pass per ply,
+no MCTS) before normal selfplay search begins, and **drop all prefix plies from
+training samples** so policy targets stay clean while searched post-prefix plies
+teach both policy and value on off-mainline states. They serve complementary roles
+and are **mutually exclusive per episode** (`opening.episode_ratio + midgame.episode_ratio <= 1.0`):
 
-| Key | Effect | Starting point |
-|-----|--------|----------------|
-| `episode_ratio` | Share of episodes that get a prefix. `0` switches the block off | 0.25–0.5 |
-| `min_plies` / `max_plies` | Prefix length range, counted in plies of any seat (forced moves count) | 1 to ~10–20% of a typical game |
-| `temperature` | >1 flattens the policy, <1 sharpens it | 1.0 |
-| `uniform_mix` | Share of fully random moves; the only way to reach moves the policy rates at ~0 | 0.1–0.25 |
+1. **`opening_exploration` (broad early branching)**: with probability `opening.episode_ratio`,
+   plays `uniform{min_plies..max_plies}` plies sampled from
+   `(1 - uniform_mix) * P^(1/temperature) / Z + uniform_mix / N`. High `temperature`
+   (`1.1-1.25`) plus `uniform_mix` (`0.1-0.2`) reaches moves the current policy rates near `0`.
+2. **`midgame_start` (KataGo fast play-in + tournament fork)**: playing `uniform_mix > 0`
+   for 20+ plies creates nonsensical junk boards that never arise in real play. Instead,
+   with probability `midgame.episode_ratio`, `midgame_start` advances `K = uniform{min_plies..max_plies}`
+   plies in two stages (modeled after KataGo's midgame play-in and `Play::maybeForkGame`):
+   - **Plies `0 .. K-2` (sharp play-in)**: sample from masked raw policy at sharp
+     `temperature` (`0.65-0.8`, `uniform_mix = 0`) to reach a coherent midgame board cheaply.
+   - **Ply `K-1` (tournament fork)**: when `fork_max_choices > 0` and `N >= 2`, draw
+     `k = uniform{fork_min_choices..fork_max_choices}` clamped to `[1, N - 1]`, sample `k`
+     distinct legal moves uniformly without replacement, and play the one with the
+     **highest raw policy prior**. Because `k <= N - 1`, at least one move (often the
+     top-1 favorite) is omitted from the subset whenever `k` is small relative to `N`,
+     forcing a clean branch onto a credible 2nd-5th candidate right before full search
+     takes over — without ever picking terrible moves! (`fork_min_choices = fork_max_choices = 0`
+     disables the fork and uses temperature sampling on ply `K-1` too.)
 
-- Keep the remaining episodes on the normal start so the real opening is
-  still trained with full search.
-- `max_plies` must be below `max_game_plies`. A game that ends inside its
-  prefix contributes no samples, so stay well under the shortest games.
-- The prefix costs one network evaluation per ply, no search. It honours the
-  game's training action filter, and reads the same masked view and belief
-  tracker a search root gets (no hidden information).
-- Heuristic guidance does not act inside the prefix; it resumes after it.
-- Ply-indexed schedules (`temperature_schedule`, `dirichlet_on_first_n_plies`,
-  the root policy temperature schedule) count prefix plies too.
-- Game metrics defined on the opening (e.g. a first-move rate) now include
-  the randomised episodes.
-- Logged per step as `expl_eps` (episodes with a prefix) and `expl_plies`
-  (their mean prefix length).
+### KataGo-style sizing rules (by real average game length `L_avg`)
 
-## Root policy temperature
+| Setting | Recommended budget / formula | Examples (`L_avg` from `plies=` in `train.log`) |
+|---------|------------------------------|-------------------------------------------------|
+| Normal searched start | `55% - 65%` of episodes (`1 - open - mid`) | Keeps canonical openings sharp under full search |
+| `opening_exploration.episode_ratio` | `0.20 - 0.30` | `0.25` standard (`Splendor`, `Azul`, `Harmonies`, `Carcassonne`, `Ark Nova`) |
+| `opening_exploration` plies | `1` (or `2`) to `~6%-12% * L_avg` | Splendor (`~59`): `1..6`; Azul (`~54`): `1..6`; Harmonies (`~128`): `2..14`; Carcassonne (`~142`): `2..12`; Ark Nova (`~220`): `2..14` |
+| `opening_exploration` temp / mix | `temperature: 1.15-1.25`, `uniform_mix: 0.15` | Enough uniform mass to visit neglected opening actions |
+| `midgame_start.episode_ratio` | `0.10 - 0.20` | `0.15` standard (`25% open + 15% mid = 60% normal`) |
+| `midgame_start` plies | `~15% * L_avg` to `~38%-42% * L_avg` | Splendor: `10..24`; Azul: `8..22`; Harmonies: `20..50`; Carcassonne: `20..56`; Ark Nova: `24..80` |
+| `midgame_start.temperature` | `0.65 - 0.80` (`0.7` standard) | Sharp enough that play-in boards stay realistic |
+| `fork_min_choices` / `fork_max_choices` | `3 .. 8` (medium `N`) or `3 .. 10` (wide `N`); `2 .. 5` (narrow `N <= 10`) | Larger `k` picks stronger alternatives; smaller `k` branches wider |
 
-```json
-"mcts": { "selfplay": { "root_policy_temperature": {"initial": 1.25, "final": 1.1, "decay_plies": 30} } }
-```
-
-At the root of every **full** selfplay search the prior becomes
-`P^(1/T)`, renormalised, before Dirichlet noise is mixed in. `T > 1` flattens
-it, so moves the network rates second or third get enough visits for their
-real value to show; if they are as good, the visit target moves towards them.
-Only the root is touched, the network output and deeper nodes are not.
-
-- Value: one number (the same `T` at every ply) or
-  `{"initial", "final", "decay_plies"}`, linear in the ply index.
-- KataGo uses 1.25 in the opening decaying to 1.1. Above ~1.5 the policy
-  target gets noticeably blurrier.
-- Fast searches of `playout_cap` keep `T = 1` (they are not training targets).
-- Different from `temperature` / `temperature_schedule`, which only pick the
-  played move from the finished visit counts.
-
-## Dirichlet noise by legal-action count
-
-```json
-"mcts": { "selfplay": { "dirichlet_alpha": 0.0, "dirichlet_total_alpha": 10.0, "dirichlet_epsilon": 0.25 } }
-```
-
-`dirichlet_alpha` is one fixed per-action value, tuned for one branching
-factor. `dirichlet_total_alpha` instead sets the per-action alpha to
-`total / N` for the `N` legal root moves of each position: with 10, a
-5-move position gets alpha 2 (smooth noise), a 200-move position 0.05
-(a few moves get a large boost). Use it when the number of legal moves
-changes a lot during a game (board-filling and tile-placement games).
-
-- KataGo's total is about 10.8; 10 is the usual starting point.
-- Exclusive with `dirichlet_alpha > 0` — set that to 0. `dirichlet_epsilon`
-  and `dirichlet_on_first_n_plies` keep their meaning.
+- Both prefixes honour the game's training action filter, masked view, and belief tracker (no hidden-info leak).
+- Heuristic guidance does not act inside either prefix; it resumes after the prefix ends.
+- Ply-indexed schedules (`temperature_schedule`, `dirichlet_on_first_n_plies`, `root_policy_temperature`) count prefix plies too, so a midgame-started game enters full search with midgame temperature (`~final`), exactly as intended.
+- Logged per step as `expl_eps` / `expl_plies` and `mid_eps` / `mid_plies`.
 
 ---
 
-## Where the keys go
+## Root policy temperature (exponential halflife)
 
-- `opening_exploration` belongs to the `training` block of whichever train
-  config the run uses (base `train.json`, a `--train-config` file, or a
-  `--config-override` such as `{"training": {"opening_exploration": {...}}}`).
-- `root_policy_temperature` and `dirichlet_total_alpha` are MCTS profile
-  fields accepted **only** in `train.json::mcts.selfplay`; `mcts.json`,
-  `web.json` and `mcts.eval` reject them. For variants trained through
-  `--train-config` (e.g. `_tok`), MCTS profiles are still read from the base
-  `train.json`, so put them there. `--config-override` cannot set them: an
-  `mcts` block in an override file is not read by profile resolution.
-- All of them are read from config on every run and can be changed on
-  `--resume`. The startup log prints the resolved values (`root noise`,
-  `root_policy_temperature`, `opening_exploration` lines).
+```json
+"mcts": {
+  "selfplay": {
+    "root_policy_temperature": { "initial": 1.25, "final": 1.1, "halflife_plies": 5 }
+  }
+}
+```
 
-## Suggested order
+At the root of every **full** selfplay search the prior becomes `P^(1/T)`,
+renormalized, before Dirichlet noise is mixed in. `T > 1` flattens the root prior
+so 2nd/3rd-ranked moves get enough visits for search to test them; deeper nodes keep `T = 1`.
 
-1. Look at `prior_ent` / `prior_top1` / `policy_kl` of the existing run.
-2. Lock-in visible in the opening (same first moves every game): add
-   `opening_exploration`, rather than sampling played moves longer.
-3. Lock-in throughout the game (one pattern everywhere): add
-   `root_policy_temperature`, and switch to `dirichlet_total_alpha` if the
-   branching factor varies.
-4. Change one thing at a time and compare models head-to-head
-   (`/eval-model`); selfplay losses are not comparable across these settings.
+- Value: a single float `> 0`, or `{"initial", "final", "halflife_plies"}` following
+  KataGo's exponential decay: `T(ply) = final + (initial - final) * 0.5^(ply / halflife_plies)`.
+  (Legacy linear `decay_plies` is removed and raises `ValueError`.)
+- **Rhythm**: match KataGo (`rootPolicyTemperatureEarly = 1.25`, `rootPolicyTemperature = 1.1`)
+  and use the **same `halflife_plies` (`~0.08 * L_avg`)** as `temperature_schedule`.
+  Above `~1.5` visit targets get noticeably blurry.
+- Fast searches of `playout_cap` keep `T = 1` (they are not training targets).
 
-Not implemented: forced playouts with policy target pruning, policy surprise
-weighting, Gumbel root selection.
+---
+
+## Adaptive & KataGo shaped Dirichlet noise
+
+```json
+"mcts": {
+  "selfplay": {
+    "dirichlet_alpha": 0.0,
+    "dirichlet_total_alpha": 10.83,
+    "dirichlet_shaped": true,
+    "dirichlet_epsilon": 0.25
+  }
+}
+```
+
+- **`dirichlet_total_alpha` (`10.83`, KataGo's `rootDirichletNoiseTotalConcentration`)**:
+  sizes total root Dirichlet concentration across the `N` legal moves of the current root
+  (exclusive with `dirichlet_alpha > 0`; set `dirichlet_alpha: 0.0`).
+- **`dirichlet_shaped: false` (default)**: uniform adaptive split `alpha_i = total_alpha / N`.
+  Good for small/medium action spaces (`N <= 15`, e.g. Jaipur) where almost every legal move is playable.
+- **`dirichlet_shaped: true` (KataGo `computeDirichletAlphaDistribution`)**: requires
+  `dirichlet_total_alpha > 0`. Splits `total_alpha` **50% uniformly (`1/N`)** and **50%
+  proportional to excess log-prior** `max(0, log(min(cap, P_i) + 1e-20) - mean_log)` with
+  `cap = max(0.01, 1/N)`.
+  - **Why use `dirichlet_shaped: true` on wide/variable action spaces (`Splendor`, `Azul`, `Harmonies`, `Carcassonne`, `Ark Nova`)**: when `N = 80..300` and only 5–12 moves are sensible, unshaped `10.83 / N` puts >90% of noise spikes onto dead placements that search immediately rejects. Shaped puts half the concentration onto moves above the mean log-prior while capping priors at `0.01`, so `0.02` blind-spot moves get the **same** concentration boost as an `0.85` favorite!
+
+---
+
+## Where the keys go & rollout order
+
+- `opening_exploration` and `midgame_start` live in `training` (`train.json`, `--train-config`, or `--config-override`).
+- `root_policy_temperature`, `dirichlet_total_alpha`, and `dirichlet_shaped` live **only** in
+  base `train.json::mcts.selfplay` (rejected in `mcts.json`, `web.json`, and `eval`; `--train-config`
+  variants inherit MCTS profiles from base `train.json`).
+- All exploration keys re-resolve from config on `--resume` and print at startup (`root noise`, `root_policy_temperature`, `opening_exploration`, `midgame_start`).
+- **Rollout**: for any strategic game with `N >= 25`, start with the full KataGo package (`dirichlet_total_alpha: 10.83`, `dirichlet_shaped: true`, `root_policy_temperature: 1.25 -> 1.1`, `25%` `opening_exploration` + `15%` `midgame_start`), verify `sample_reuse < 1.0`, and evaluate checkpoints head-to-head (`/eval-model`).
 
 Tests: `tests/framework/test_selfplay_exploration.py`.

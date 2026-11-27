@@ -28,12 +28,12 @@ The "model under test" rotates across all seats via `game_idx % num_players`.
 Usage:
   # 2p model-vs-default-eval-heuristic
   python scripts/eval_model.py --game quoridor \\
-    --model runs/quoridor_v14/models/model_best.onnx \\
+    --model runs/quoridor_v14/models/model_latest.onnx \\
     --opponent heuristic --games 40 --workers 4 --no-save -o /tmp/eval
 
   # 2p model-vs-specific-heuristic
   python scripts/eval_model.py --game 6nimmit_2p \\
-    --model runs/sixnimmit/models/model_best.onnx \\
+    --model runs/sixnimmit/models/model_latest.onnx \\
     --opponent heuristic:lkf_v1 --games 40 --no-save -o /tmp/eval
 
   # 2p heuristic-vs-heuristic (no model needed, just compare heuristics)
@@ -300,7 +300,7 @@ def main():
     p.add_argument("--profile", default="web_expert",
                    help="MCTS profile name for model seats (default 'web_expert'; "
                         "= the strength a web user faces). Other valid values: "
-                        "'eval' (gating + benchmark, lower sims), 'web_casual', "
+                        "'eval' (benchmark, lower sims), 'web_casual', "
                         "'analysis', 'selfplay'.")
     p.add_argument("--heuristic-selector", default="web",
                    choices=["web", "eval_vs_heuristic"],

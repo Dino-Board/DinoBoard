@@ -71,15 +71,14 @@ For `mcts_pv` entries, `simulations`, `c_puct`, and optional `model_path` are
 runtime construction inputs: the C++ registration reads them from
 `heuristic.json` before constructing `MctsPVHeuristic`.
 
-### Temperature
+### Temperature & Policy Labels
 
-Selection rule (argmax-with-tie or softmax(T)) is applied by the caller, not by
-the heuristic itself. Most heuristic episode/eval paths use
-`runtime::sample_heuristic_index`; selfplay guidance applies the same rule
-inline in `selfplay_runner.cpp` when it converts heuristic scores into training
-targets. All three configured consumers (`heuristic_guidance`,
-`eval_vs_heuristic`, `web`) must treat `temperature=0` as uniform sampling over
-argmax ties, not "first max wins".
+Selection rule is applied by the caller, not by the heuristic itself:
+- Heuristic episode/eval paths use `runtime::sample_heuristic_index` (`T=0` uniform argmax tie-break, `T>0` `softmax(scores/T)`).
+- In `selfplay_runner.cpp` (`heuristic_guidance`):
+  - **PV+MCTS teachers** (`HeuristicResult::action_visits` non-empty, i.e., `MctsPVHeuristic` from either ONNX PV or C++ PV evaluator): select the move from root visits via `search::select_action_from_visits` and supervise the teacher's **post-search visit distribution** as `p` (matching training-phase MCTS).
+  - **Rule-based teachers** (`action_visits` empty): select the move via `runtime::sample_heuristic_index`, then supervise a strict **one-hot** `p` label on the chosen action.
+- All three configured consumers (`heuristic_guidance`, `eval_vs_heuristic`, `web`) must treat `temperature=0` as uniform sampling over argmax ties, not "first max wins".
 
 ### MctsPVHeuristic Factory Methods
 
@@ -238,8 +237,7 @@ alongside the standard loss/win-rate columns.
 Configured by `train.json::training.opponent_pool_enabled` and
 `opponent_pool_self_ratio`. When enabled, each selfplay batch mixes mirror games
 against the latest model with games against historical `model_step_*.onnx`
-checkpoints from the current run's `models/` directory (`model_best.onnx`, the
-latest model as of the last eval, is not a pool source). By default
+checkpoints from the current run's `models/` directory. By default
 the checkpoints are drawn by quality scores that the pool games' outcomes keep
 up to date (`opponent_pool_sampling`, `training/hyperparams.md`).
 

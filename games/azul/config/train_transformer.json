@@ -29,19 +29,24 @@
       "loss_weight": 0.5,
       "scale": 40.0
     },
-    "opponent_policy_head": {
-      "loss_weight": 0.15
-    },
     "ema": {
       "decay": 0.99
     },
     "inference_precision": "fp16",
     "opening_exploration": {
-      "episode_ratio": 0.3,
+      "episode_ratio": 0.25,
       "min_plies": 1,
-      "max_plies": 8,
-      "temperature": 1.0,
-      "uniform_mix": 0.2
+      "max_plies": 6,
+      "temperature": 1.2,
+      "uniform_mix": 0.15
+    },
+    "midgame_start": {
+      "episode_ratio": 0.15,
+      "min_plies": 10,
+      "max_plies": 24,
+      "temperature": 0.7,
+      "fork_min_choices": 3,
+      "fork_max_choices": 8
     },
     "eval_benchmarks": [
       "heuristic_free"

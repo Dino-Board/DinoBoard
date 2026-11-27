@@ -253,15 +253,13 @@ def _train_cfg():
     return json.loads((ROOT / "games/carcassonne/config/train_transformer_guided.json").read_text(encoding="utf-8"))
 
 
-def test_config_enables_augmentation_and_rejects_the_opponent_policy_head():
+def test_config_enables_augmentation():
     meta = engine.game_metadata(GAME)
     kwargs = dict(feature_dim=0, action_space=meta["action_space"], token_layout=meta["token_layout"])
     training = _train_cfg()["training"]
-    assert training["symmetry_augmentation"] is True and "opponent_policy_head" not in training
+    assert training["symmetry_augmentation"] is True
     aug = parse_symmetry_augmentation(training, GAME, **kwargs)
     assert isinstance(aug, SampleSymmetryAugmenter) and aug.count == 4
-    with pytest.raises(ValueError, match="cannot be combined with training.opponent_policy_head"):
-        parse_symmetry_augmentation({**training, "opponent_policy_head": {"loss_weight": 0.15}}, GAME, **kwargs)
     with pytest.raises(ValueError, match="no board symmetries"):
         parse_symmetry_augmentation({"symmetry_augmentation": True}, "carcassonne", feature_dim=1,
                                     action_space=meta["action_space"], token_layout=None)

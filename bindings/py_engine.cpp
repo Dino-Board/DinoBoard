@@ -263,6 +263,7 @@ py::dict sample_to_py(const runtime::SelfplaySample& s, bool compact = false) {
   d["simulations"] = s.simulations;
   d["heuristic_simulations"] = s.heuristic_simulations;
   d["opening_exploration"] = s.opening_exploration;
+  d["midgame_start"] = s.midgame_start;
   // Search-diversity read-out (SelfplaySample::has_policy_stats); the four
   // values are 0 when has_policy_stats is false.
   d["has_policy_stats"] = s.has_policy_stats;
@@ -270,6 +271,9 @@ py::dict sample_to_py(const runtime::SelfplaySample& s, bool compact = false) {
   d["prior_top1"] = s.prior_top1;
   d["visit_entropy"] = s.visit_entropy;
   d["policy_kl"] = s.policy_kl;
+  d["policy_sampled"] = s.policy_sampled;
+  d["behavior_logp"] = s.behavior_logp;
+  d["behavior_value"] = s.behavior_value;
   return d;
 }
 
@@ -327,6 +331,7 @@ py::dict result_to_py(const runtime::SelfplayEpisodeResult& result,
   out["terminal_z_values"] = result.terminal_z_values;
   out["total_plies"] = result.total_plies;
   out["opening_exploration_plies"] = result.opening_exploration_plies;
+  out["midgame_start_plies"] = result.midgame_start_plies;
   out["samples"] = samples;
   py::list belief_samples;
   for (const auto& bs : result.belief_samples)
@@ -419,7 +424,7 @@ runtime::SelfplayConfig build_selfplay_config(
     bool tail_solve_enabled, int tail_solve_depth_limit,
     std::int64_t tail_solve_node_budget, float tail_solve_auxiliary_weight,
     double temperature_initial, double temperature_final,
-    int temperature_decay_plies,
+    double temperature_halflife_plies,
     double heuristic_guidance_ratio, double heuristic_temperature,
     double training_filter_ratio,
     search::OpponentSelection opp_sel,
@@ -458,7 +463,7 @@ runtime::SelfplayConfig build_selfplay_config(
       cfg.temperature_schedule.has_final = true;
       cfg.temperature_schedule.final_ = temperature_final;
     }
-    cfg.temperature_schedule.decay_plies = temperature_decay_plies;
+    cfg.temperature_schedule.halflife_plies = temperature_halflife_plies;
   }
   return cfg;
 }
@@ -466,30 +471,39 @@ runtime::SelfplayConfig build_selfplay_config(
 // Selfplay exploration options, passed by the three selfplay bindings as one
 // `exploration` dict so a new knob does not grow three argument lists.
 // Every key is optional (absent = off); unknown keys are rejected:
-//   dirichlet_total_alpha                 float  SelfplayConfig::dirichlet_total_alpha
-//   root_policy_temperature_initial       float  }
-//   root_policy_temperature_final         float  } SelfplayConfig::root_policy_temperature_*
-//   root_policy_temperature_decay_plies   int    }
-//   opening_exploration                   dict with exactly episode_ratio,
-//                                         min_plies, max_plies, temperature,
-//                                         uniform_mix (runtime::OpeningExploration)
+//   dirichlet_total_alpha                    float  SelfplayConfig::dirichlet_total_alpha
+//   dirichlet_shaped                         bool   SelfplayConfig::dirichlet_shaped
+//   root_policy_temperature_initial          float  }
+//   root_policy_temperature_final            float  } SelfplayConfig::root_policy_temperature_*
+//   root_policy_temperature_halflife_plies   float  }
+//   opening_exploration                      dict with episode_ratio, min_plies,
+//                                            max_plies, temperature, uniform_mix
+//   midgame_start                            dict with episode_ratio, min_plies,
+//                                            max_plies, temperature,
+//                                            fork_min_choices, fork_max_choices
 // Value ranges are checked by run_selfplay_episode. Must be parsed with the
 // GIL held, i.e. before the binding releases it.
 struct SelfplayExplorationArgs {
   double dirichlet_total_alpha = 0.0;
+  bool dirichlet_shaped = false;
   double root_policy_temperature_initial = 1.0;
   double root_policy_temperature_final = 1.0;
-  int root_policy_temperature_decay_plies = 0;
+  double root_policy_temperature_halflife_plies = 0.0;
   runtime::OpeningExploration opening{};
+  runtime::MidgameStart midgame{};
 };
 
 SelfplayExplorationArgs parse_selfplay_exploration(const py::dict& d) {
   static const std::unordered_set<std::string> kKeys = {
-      "dirichlet_total_alpha", "root_policy_temperature_initial",
-      "root_policy_temperature_final", "root_policy_temperature_decay_plies",
-      "opening_exploration"};
+      "dirichlet_total_alpha", "dirichlet_shaped",
+      "root_policy_temperature_initial", "root_policy_temperature_final",
+      "root_policy_temperature_halflife_plies",
+      "opening_exploration", "midgame_start"};
   static const std::unordered_set<std::string> kOpeningKeys = {
       "episode_ratio", "min_plies", "max_plies", "temperature", "uniform_mix"};
+  static const std::unordered_set<std::string> kMidgameKeys = {
+      "episode_ratio", "min_plies", "max_plies", "temperature",
+      "fork_min_choices", "fork_max_choices"};
   for (const auto& item : d) {
     const std::string key = py::str(item.first);
     if (!kKeys.count(key)) {
@@ -500,14 +514,21 @@ SelfplayExplorationArgs parse_selfplay_exploration(const py::dict& d) {
   if (d.contains("dirichlet_total_alpha")) {
     a.dirichlet_total_alpha = d["dirichlet_total_alpha"].cast<double>();
   }
+  if (d.contains("dirichlet_shaped")) {
+    if (!py::isinstance<py::bool_>(d["dirichlet_shaped"])) {
+      throw std::invalid_argument("selfplay exploration: dirichlet_shaped must be a bool");
+    }
+    a.dirichlet_shaped = d["dirichlet_shaped"].cast<bool>();
+  }
   if (d.contains("root_policy_temperature_initial")) {
     a.root_policy_temperature_initial = d["root_policy_temperature_initial"].cast<double>();
   }
   if (d.contains("root_policy_temperature_final")) {
     a.root_policy_temperature_final = d["root_policy_temperature_final"].cast<double>();
   }
-  if (d.contains("root_policy_temperature_decay_plies")) {
-    a.root_policy_temperature_decay_plies = d["root_policy_temperature_decay_plies"].cast<int>();
+  if (d.contains("root_policy_temperature_halflife_plies")) {
+    a.root_policy_temperature_halflife_plies =
+        d["root_policy_temperature_halflife_plies"].cast<double>();
   }
   if (d.contains("opening_exploration")) {
     const py::dict o = d["opening_exploration"].cast<py::dict>();
@@ -530,16 +551,124 @@ SelfplayExplorationArgs parse_selfplay_exploration(const py::dict& d) {
     a.opening.temperature = o["temperature"].cast<double>();
     a.opening.uniform_mix = o["uniform_mix"].cast<double>();
   }
+  if (d.contains("midgame_start")) {
+    const py::dict m = d["midgame_start"].cast<py::dict>();
+    for (const auto& item : m) {
+      const std::string key = py::str(item.first);
+      if (!kMidgameKeys.count(key)) {
+        throw std::invalid_argument(
+            "selfplay exploration: unknown midgame_start key '" + key + "'");
+      }
+    }
+    for (const auto& key : kMidgameKeys) {
+      if (!m.contains(key.c_str())) {
+        throw std::invalid_argument(
+            "selfplay exploration: midgame_start is missing '" + key + "'");
+      }
+    }
+    a.midgame.episode_ratio = m["episode_ratio"].cast<double>();
+    a.midgame.min_plies = m["min_plies"].cast<int>();
+    a.midgame.max_plies = m["max_plies"].cast<int>();
+    a.midgame.temperature = m["temperature"].cast<double>();
+    a.midgame.fork_min_choices = m["fork_min_choices"].cast<int>();
+    a.midgame.fork_max_choices = m["fork_max_choices"].cast<int>();
+  }
   return a;
 }
 
 void apply_selfplay_exploration(runtime::SelfplayConfig& cfg,
                                 const SelfplayExplorationArgs& a) {
   cfg.dirichlet_total_alpha = a.dirichlet_total_alpha;
+  cfg.dirichlet_shaped = a.dirichlet_shaped;
   cfg.root_policy_temperature_initial = a.root_policy_temperature_initial;
   cfg.root_policy_temperature_final = a.root_policy_temperature_final;
-  cfg.root_policy_temperature_decay_plies = a.root_policy_temperature_decay_plies;
+  cfg.root_policy_temperature_halflife_plies = a.root_policy_temperature_halflife_plies;
   cfg.opening_exploration = a.opening;
+  cfg.midgame_start = a.midgame;
+}
+
+// Search algorithm keys shared by selfplay's `search` dict and arena seat
+// configs (see NetMctsConfig::algorithm).
+struct SearchAlgorithmArgs {
+  search::SearchAlgorithm algorithm = search::SearchAlgorithm::kPuct;
+  search::GumbelConfig gumbel{};
+  search::RolloutConfig rollout{};
+  double time_limit_ms = 0.0;
+  bool policy_sampling = false;
+  double policy_sampling_temperature = 1.0;
+};
+
+inline search::SearchAlgorithm parse_search_algorithm(const std::string& s) {
+  if (s == "puct") return search::SearchAlgorithm::kPuct;
+  if (s == "gumbel") return search::SearchAlgorithm::kGumbel;
+  if (s == "rollout") return search::SearchAlgorithm::kRollout;
+  throw std::invalid_argument(
+      "algorithm: unknown value '" + s + "' (expected puct, gumbel or rollout)");
+}
+
+const std::unordered_set<std::string>& search_algorithm_keys() {
+  static const std::unordered_set<std::string> k = {
+      "algorithm", "time_limit_ms",
+      "gumbel_num_considered", "gumbel_c_visit", "gumbel_c_scale", "gumbel_rescale_values",
+      "rollout_depth", "rollout_rollouts_per_action", "rollout_max_candidates",
+      "rollout_mmd_eta", "rollout_mmd_alpha", "rollout_policy_temperature",
+      "rollout_sample_action"};
+  return k;
+}
+
+// Reads the search_algorithm_keys() present in `d`; other keys are the
+// caller's to validate.
+SearchAlgorithmArgs parse_search_algorithm_args(const py::dict& d) {
+  SearchAlgorithmArgs a;
+  if (d.contains("algorithm")) a.algorithm = parse_search_algorithm(d["algorithm"].cast<std::string>());
+  if (d.contains("time_limit_ms")) a.time_limit_ms = d["time_limit_ms"].cast<double>();
+  if (d.contains("gumbel_num_considered")) a.gumbel.num_considered = d["gumbel_num_considered"].cast<int>();
+  if (d.contains("gumbel_c_visit")) a.gumbel.c_visit = d["gumbel_c_visit"].cast<float>();
+  if (d.contains("gumbel_c_scale")) a.gumbel.c_scale = d["gumbel_c_scale"].cast<float>();
+  if (d.contains("gumbel_rescale_values")) {
+    a.gumbel.rescale_values = require_bool(d["gumbel_rescale_values"], "gumbel_rescale_values");
+  }
+  if (d.contains("rollout_depth")) a.rollout.depth = d["rollout_depth"].cast<int>();
+  if (d.contains("rollout_rollouts_per_action")) {
+    a.rollout.rollouts_per_action = d["rollout_rollouts_per_action"].cast<int>();
+  }
+  if (d.contains("rollout_max_candidates")) a.rollout.max_candidates = d["rollout_max_candidates"].cast<int>();
+  if (d.contains("rollout_mmd_eta")) a.rollout.mmd_eta = d["rollout_mmd_eta"].cast<float>();
+  if (d.contains("rollout_mmd_alpha")) a.rollout.mmd_alpha = d["rollout_mmd_alpha"].cast<float>();
+  if (d.contains("rollout_policy_temperature")) {
+    a.rollout.policy_temperature = d["rollout_policy_temperature"].cast<float>();
+  }
+  if (d.contains("rollout_sample_action")) {
+    a.rollout.sample_action = require_bool(d["rollout_sample_action"], "rollout_sample_action");
+  }
+  return a;
+}
+
+// Selfplay `search` dict: algorithm + gumbel_* (rollout and time limits are
+// test-time only) and the policy_sampling switch for on-policy RL.
+SearchAlgorithmArgs parse_selfplay_search(const py::dict& d) {
+  static const std::unordered_set<std::string> kKeys = {
+      "algorithm", "gumbel_num_considered", "gumbel_c_visit", "gumbel_c_scale", "gumbel_rescale_values",
+      "policy_sampling", "policy_sampling_temperature"};
+  for (const auto& item : d) {
+    const std::string key = py::str(item.first);
+    if (!kKeys.count(key)) {
+      throw std::invalid_argument("selfplay search: unknown key '" + key + "'");
+    }
+  }
+  SearchAlgorithmArgs a = parse_search_algorithm_args(d);
+  if (d.contains("policy_sampling")) a.policy_sampling = require_bool(d["policy_sampling"], "policy_sampling");
+  if (d.contains("policy_sampling_temperature")) {
+    a.policy_sampling_temperature = d["policy_sampling_temperature"].cast<double>();
+  }
+  return a;
+}
+
+void apply_selfplay_search(runtime::SelfplayConfig& cfg, const SearchAlgorithmArgs& a) {
+  cfg.algorithm = a.algorithm;
+  cfg.gumbel = a.gumbel;
+  cfg.policy_sampling = a.policy_sampling;
+  cfg.policy_sampling_temperature = a.policy_sampling_temperature;
 }
 
 struct BeliefEvalResult {
@@ -581,7 +710,7 @@ py::dict run_selfplay_episode_py(
     float tail_solve_auxiliary_weight,
     double temperature_initial,
     double temperature_final,
-    int temperature_decay_plies,
+    double temperature_halflife_plies,
     double heuristic_guidance_ratio,
     double heuristic_temperature,
     double training_filter_ratio,
@@ -672,7 +801,7 @@ py::dict run_selfplay_episode_py(
       dirichlet_alpha, dirichlet_epsilon, dirichlet_on_first_n_plies,
       max_game_plies, tail_solve_enabled, tail_solve_depth_limit,
       tail_solve_node_budget, tail_solve_auxiliary_weight,
-      temperature_initial, temperature_final, temperature_decay_plies,
+      temperature_initial, temperature_final, temperature_halflife_plies,
       heuristic_guidance_ratio, heuristic_temperature,
       training_filter_ratio, opp_sel, safe_mode, top_k, fpu_reduction,
       uct2_arrival_visits);
@@ -742,7 +871,7 @@ py::dict run_selfplay_episodes_batch_py(
     float tail_solve_auxiliary_weight,
     double temperature_initial,
     double temperature_final,
-    int temperature_decay_plies,
+    double temperature_halflife_plies,
     double heuristic_guidance_ratio,
     double heuristic_temperature,
     double training_filter_ratio,
@@ -922,12 +1051,11 @@ py::dict run_selfplay_episodes_batch_py(
       dirichlet_alpha, dirichlet_epsilon, dirichlet_on_first_n_plies,
       max_game_plies, tail_solve_enabled, tail_solve_depth_limit,
       tail_solve_node_budget, tail_solve_auxiliary_weight,
-      temperature_initial, temperature_final, temperature_decay_plies,
+      temperature_initial, temperature_final, temperature_halflife_plies,
       heuristic_guidance_ratio, heuristic_temperature,
       training_filter_ratio, opp_sel, safe_mode, top_k, fpu_reduction,
       uct2_arrival_visits);
   apply_selfplay_exploration(cfg, exploration_args);
-
   std::vector<runtime::SelfplayEpisodeResult> results;
   results.reserve(seeds.size());
   for (std::uint64_t seed : seeds) {
@@ -1016,7 +1144,7 @@ py::dict run_concurrent_selfplay_step_py(
     float tail_solve_auxiliary_weight,
     double temperature_initial,
     double temperature_final,
-    int temperature_decay_plies,
+    double temperature_halflife_plies,
     double heuristic_guidance_ratio,
     double heuristic_temperature,
     const std::string& heuristic_selector,
@@ -1039,9 +1167,11 @@ py::dict run_concurrent_selfplay_step_py(
     std::optional<float> fpu_reduction,
     bool compact_samples,
     bool uct2_arrival_visits,
-    const py::dict& exploration) {
+    const py::dict& exploration,
+    const py::dict& search_options) {
   const auto opp_sel = parse_opponent_selection(opponent_selection);
   const auto exploration_args = parse_selfplay_exploration(exploration);
+  const auto search_args = parse_selfplay_search(search_options);
   py::gil_scoped_release release;
 
   if (seeds.empty()) {
@@ -1262,7 +1392,7 @@ py::dict run_concurrent_selfplay_step_py(
       dirichlet_alpha, dirichlet_epsilon, dirichlet_on_first_n_plies,
       max_game_plies, tail_solve_enabled, tail_solve_depth_limit,
       tail_solve_node_budget, tail_solve_auxiliary_weight,
-      temperature_initial, temperature_final, temperature_decay_plies,
+      temperature_initial, temperature_final, temperature_halflife_plies,
       heuristic_guidance_ratio, heuristic_temperature,
       training_filter_ratio, opp_sel, safe_mode, top_k, fpu_reduction,
       uct2_arrival_visits);
@@ -1271,6 +1401,7 @@ py::dict run_concurrent_selfplay_step_py(
   cfg.full_search_prob = full_search_prob;
   cfg.encode_fast_samples = !compact_samples;
   apply_selfplay_exploration(cfg, exploration_args);
+  apply_selfplay_search(cfg, search_args);
 
   // ------------------------------------------------------------
   // Thread pool: shared seed counter (work-stealing). Each thread fixed in
@@ -1679,6 +1810,9 @@ py::dict run_arena_match_py(
   py::list ply_stats;
   for (const auto& ps : result.ply_stats) {
     py::dict d;
+    d["simulations_done"] = ps.simulations_done;
+    d["network_evaluations"] = ps.network_evaluations;
+    d["search_ms"] = ps.search_ms;
     d["tail_solved"] = ps.tail_solved;
     d["tail_solve_value"] = ps.tail_solve_value;
     ply_stats.append(d);
@@ -1743,6 +1877,7 @@ py::dict run_concurrent_arena_batch_py(
     std::vector<bool> seat_safe_mode;
     std::vector<int> seat_top_k;
     std::vector<int> seat_leaf_batch;
+    std::vector<SearchAlgorithmArgs> seat_search;
     std::string belief_model_path;
     // Per-seat belief model paths. Falls back to task-level belief_model_path.
     std::vector<std::string> seat_belief_paths;
@@ -1790,6 +1925,7 @@ py::dict run_concurrent_arena_batch_py(
     td.seat_safe_mode.resize(n_seats, safe_mode);
     td.seat_top_k.resize(n_seats, 0);
     td.seat_leaf_batch.resize(n_seats, 1);
+    td.seat_search.resize(n_seats);
     // Default per-seat belief paths to task-level belief_model_path.
     td.seat_belief_paths.resize(n_seats, td.belief_model_path);
     for (size_t i = 0; i < n_seats; ++i) {
@@ -1831,6 +1967,7 @@ py::dict run_concurrent_arena_batch_py(
             std::to_string(ti) + " seat " + std::to_string(i));
       }
       if (d.contains("belief_model_path")) td.seat_belief_paths[i] = d["belief_model_path"].cast<std::string>();
+      td.seat_search[i] = parse_search_algorithm_args(d);
     }
     // Collect all distinct belief paths for pool warm-up.
     for (const auto& bp : td.seat_belief_paths) {
@@ -1938,6 +2075,10 @@ py::dict run_concurrent_arena_batch_py(
           cfg.safe_mode = td.seat_safe_mode[i];
           cfg.top_k = td.seat_top_k[i];
           cfg.leaf_batch_size = td.seat_leaf_batch[i];
+          cfg.time_limit_ms = td.seat_search[i].time_limit_ms;
+          cfg.algorithm = td.seat_search[i].algorithm;
+          cfg.gumbel = td.seat_search[i].gumbel;
+          cfg.rollout = td.seat_search[i].rollout;
           if (td.seat_tail_solve[i]) {
             cfg.tail_solve_enabled = true;
             cfg.tail_solve_config.depth_limit = td.seat_ts_depth[i];
@@ -2013,6 +2154,9 @@ py::dict run_concurrent_arena_batch_py(
     py::list ply_stats;
     for (const auto& ps : r.ply_stats) {
       py::dict pd;
+      pd["simulations_done"] = ps.simulations_done;
+      pd["network_evaluations"] = ps.network_evaluations;
+      pd["search_ms"] = ps.search_ms;
       pd["tail_solved"] = ps.tail_solved;
       pd["tail_solve_value"] = ps.tail_solve_value;
       ply_stats.append(pd);
@@ -2258,11 +2402,20 @@ py::dict run_concurrent_eval_vs_heuristic_batch_py(
     int top_k,
     int leaf_batch_size,
     std::optional<float> fpu_reduction,
-    bool uct2_arrival_visits) {
+    bool uct2_arrival_visits,
+    const py::dict& search_options) {
   if (tasks.empty()) {
     throw std::invalid_argument(
         "run_concurrent_eval_vs_heuristic_batch: tasks must not be empty");
   }
+  for (const auto& item : search_options) {
+    const std::string key = py::str(item.first);
+    if (!search_algorithm_keys().count(key)) {
+      throw std::invalid_argument(
+          "run_concurrent_eval_vs_heuristic_batch: unknown search key '" + key + "'");
+    }
+  }
+  const SearchAlgorithmArgs search_args = parse_search_algorithm_args(search_options);
   if (num_threads <= 0) {
     throw std::invalid_argument(
         "run_concurrent_eval_vs_heuristic_batch: num_threads must be > 0");
@@ -2464,6 +2617,10 @@ py::dict run_concurrent_eval_vs_heuristic_batch_py(
             mcts_cfg.safe_mode = safe_mode;
             mcts_cfg.top_k = top_k;
             mcts_cfg.leaf_batch_size = leaf_batch_size;
+            mcts_cfg.time_limit_ms = search_args.time_limit_ms;
+            mcts_cfg.algorithm = search_args.algorithm;
+            mcts_cfg.gumbel = search_args.gumbel;
+            mcts_cfg.rollout = search_args.rollout;
             if (trackers.active()) mcts_cfg.root_belief_tracker = trackers.get(cp);
             if (bundle.belief_feature_extractor && belief_evaluator_ptr) {
               mcts_cfg.belief_extractor = bundle.belief_feature_extractor.get();
@@ -2492,9 +2649,8 @@ py::dict run_concurrent_eval_vs_heuristic_batch_py(
                 static_cast<std::uint64_t>(ply));
             mcts.search_root(*state, rules_for_model, *bundle.value_model,
                              *shared_eval, &stats, mcts_seed);
-            ActionId chosen = search::select_action_from_visits(
-                stats.root_actions, stats.root_action_visits, temperature,
-                td.seed ^ static_cast<std::uint64_t>(ply), top_k, legal[0]);
+            ActionId chosen = search::choose_root_action(
+                stats, temperature, td.seed ^ static_cast<std::uint64_t>(ply), top_k, legal[0]);
             action_history.push_back(chosen);
             std::unique_ptr<IGameState> state_before;
             if (trackers.active()) state_before = state->clone_state();
@@ -2813,7 +2969,7 @@ py::dict tail_solve_py(
 // is initialized once. The evaluator borrows the encoder of the bundle kept
 // beside it. Never destroyed: tearing down CUDA sessions during static
 // destruction races the driver's own shutdown.
-constexpr int kMaxSessionLeafBatch = 64;
+constexpr int kMaxSessionLeafBatch = 2048;
 
 struct SharedSessionEvaluator {
   std::unique_ptr<GameBundle> bundle;
@@ -2891,7 +3047,7 @@ class GameSessionWrapper {
     bt_ = bundle_->belief_tracker.get();
     // Per-perspective AI views: MCTS searches on these, never on the truth
     // state (bundle_->state). Skipped when external_obs_mode_ is set
-    // (external observations) — in that mode bundle_->state IS the AI view.
+    // (AI API path) — in that mode bundle_->state IS the AI view.
     init_ai_views_();
   }
 
@@ -3184,7 +3340,7 @@ class GameSessionWrapper {
     ++ply_count_;
   }
 
-  // Combined action + events step for external observations. Sequence:
+  // Combined action + events step for the AI API. Sequence:
   //   1. begin_step_for_session_observe() bumps step_count for DAG
   //      acyclicity (do_action_fast is intentionally skipped — the AI
   //      session never runs rules).
@@ -3571,7 +3727,7 @@ class GameSessionWrapper {
                          std::string opponent_selection = "puct",
                          double temperature_initial = -1.0,
                          double temperature_final = -1.0,
-                         int temperature_decay_plies = 0,
+                         double temperature_halflife_plies = 0.0,
                          int world_cap = 0,
                          double dirichlet_alpha = 0.0,
                          double dirichlet_epsilon = 0.0,
@@ -3580,14 +3736,27 @@ class GameSessionWrapper {
                          std::optional<float> fpu_reduction = std::nullopt,
                          bool uct2_arrival_visits = true,
                          double time_limit_ms = 0.0,
-                         int leaf_batch_size = 1) {
+                         int leaf_batch_size = 1,
+                         py::dict search = py::dict()) {
     if (!(time_limit_ms >= 0.0)) {
       throw std::invalid_argument("get_ai_action: time_limit_ms must be >= 0");
+    }
+    if (!(std::isfinite(temperature_halflife_plies) &&
+          temperature_halflife_plies >= 0.0)) {
+      throw std::invalid_argument(
+          "get_ai_action: temperature_halflife_plies must be a finite value >= 0");
     }
     if (leaf_batch_size < 1 || leaf_batch_size > kMaxSessionLeafBatch) {
       throw std::invalid_argument("get_ai_action: leaf_batch_size must be in [1, " +
                                   std::to_string(kMaxSessionLeafBatch) + "]");
     }
+    for (const auto& item : search) {
+      const std::string key = py::str(item.first);
+      if (!search_algorithm_keys().count(key)) {
+        throw std::invalid_argument("get_ai_action: unknown search key '" + key + "'");
+      }
+    }
+    const SearchAlgorithmArgs search_args = parse_search_algorithm_args(search);
     const auto opp_sel = parse_opponent_selection(opponent_selection);
     py::gil_scoped_release release;
 
@@ -3605,16 +3774,16 @@ class GameSessionWrapper {
         t_sched.has_final = true;
         t_sched.final_ = temperature_final;
       }
-      t_sched.decay_plies = temperature_decay_plies;
+      t_sched.halflife_plies = temperature_halflife_plies;
     }
-    const double effective_temperature = search::resolve_linear_temperature(
+    const double effective_temperature = search::resolve_exponential_temperature(
         t_sched, temperature, static_cast<int>(ply_count_));
 
     const IGameRules& rules = filtered_rules_ ? *filtered_rules_ : *bundle_->rules;
     const int cp = bundle_->state->current_player();
 
     // Select the search state / evaluator / tracker.
-    // External-obs mode: bundle_->state IS the AI view.
+    // External-obs mode (AI API): bundle_->state IS the AI view.
     // GameSession mode: route through perspective-specific ai_views_[cp].
     const IGameState* search_state = nullptr;
     const search::IPolicyValueEvaluator* eval_ptr = nullptr;
@@ -3647,8 +3816,11 @@ class GameSessionWrapper {
     // ISMCTS: root-sampling hidden info + DAG per-acting-player keying.
     search::NetMctsConfig mcts_cfg{};
     mcts_cfg.simulations = simulations;
-    mcts_cfg.time_limit_ms = time_limit_ms;
+    mcts_cfg.time_limit_ms = time_limit_ms > 0.0 ? time_limit_ms : search_args.time_limit_ms;
     mcts_cfg.leaf_batch_size = leaf_batch_size;
+    mcts_cfg.algorithm = search_args.algorithm;
+    mcts_cfg.gumbel = search_args.gumbel;
+    mcts_cfg.rollout = search_args.rollout;
     mcts_cfg.world_cap = world_cap;
     mcts_cfg.c_puct = c_puct;
     mcts_cfg.fpu_reduction = fpu_reduction;
@@ -3704,9 +3876,12 @@ class GameSessionWrapper {
     // even at temperature=0. Derive from (seed_, ply_count_) instead so
     // the session's action sequence is fully reproducible from its seed.
     std::uint64_t action_seed = mcts_seed ^ 0xBF58476D1CE4E5B9ULL;
-    ActionId chosen = search::select_action_from_visits(
-        stats.root_actions, stats.root_action_visits,
-        effective_temperature, action_seed, top_k, legal[0]);
+    ActionId chosen = (mcts_cfg.algorithm != search::SearchAlgorithm::kPuct &&
+                       stats.simulations_done > 0)
+                          ? stats.selected_action
+                          : search::select_action_from_visits(
+                                stats.root_actions, stats.root_action_visits,
+                                effective_temperature, action_seed, top_k, legal[0]);
 
     py::gil_scoped_acquire acquire;
     py::dict out;
@@ -3773,7 +3948,7 @@ class GameSessionWrapper {
       // GameSession's heuristic call routes through the acting player's
       // truth-free ai_view (same view MCTS reads from). Mask once more
       // before dispatch so viz=0 reads land on placeholder.
-      // External-obs mode: bundle_->state IS the AI view, as in
+      // External-obs mode (AI API): bundle_->state IS the AI view, as in
       // get_ai_action; ai_views_ stopped advancing when observations began.
       const int cp = bundle_->state->current_player();
       IGameState* base = bundle_->state.get();
@@ -4179,7 +4354,7 @@ PYBIND11_MODULE(dinoboard_engine, m) {
       py::arg("tail_solve_auxiliary_weight") = 0.0f,
       py::arg("temperature_initial") = -1.0,
       py::arg("temperature_final") = -1.0,
-      py::arg("temperature_decay_plies") = 0,
+      py::arg("temperature_halflife_plies") = 0.0,
       py::arg("heuristic_guidance_ratio") = 0.0,
       py::arg("heuristic_temperature") = 0.0,
       py::arg("training_filter_ratio") = 1.0,
@@ -4211,7 +4386,7 @@ PYBIND11_MODULE(dinoboard_engine, m) {
       py::arg("tail_solve_auxiliary_weight") = 0.0f,
       py::arg("temperature_initial") = -1.0,
       py::arg("temperature_final") = -1.0,
-      py::arg("temperature_decay_plies") = 0,
+      py::arg("temperature_halflife_plies") = 0.0,
       py::arg("heuristic_guidance_ratio") = 0.0,
       py::arg("heuristic_temperature") = 0.0,
       py::arg("training_filter_ratio") = 1.0,
@@ -4248,7 +4423,7 @@ PYBIND11_MODULE(dinoboard_engine, m) {
       py::arg("tail_solve_auxiliary_weight") = 0.0f,
       py::arg("temperature_initial") = -1.0,
       py::arg("temperature_final") = -1.0,
-      py::arg("temperature_decay_plies") = 0,
+      py::arg("temperature_halflife_plies") = 0.0,
       py::arg("heuristic_guidance_ratio") = 0.0,
       py::arg("heuristic_temperature") = 0.0,
       py::arg("heuristic_selector") = std::string(""),
@@ -4271,7 +4446,8 @@ PYBIND11_MODULE(dinoboard_engine, m) {
       py::arg("fpu_reduction") = py::none(),
       py::arg("compact_samples") = false,
       py::arg("uct2_arrival_visits").noconvert() = true,
-      py::arg("exploration") = py::dict());
+      py::arg("exploration") = py::dict(),
+      py::arg("search") = py::dict());
 
   m.def("run_arena_match", &run_arena_match_py,
       py::arg("game_id"),
@@ -4336,7 +4512,8 @@ PYBIND11_MODULE(dinoboard_engine, m) {
       py::arg("top_k") = 0,
       py::arg("leaf_batch_size") = 1,
       py::arg("fpu_reduction") = py::none(),
-      py::arg("uct2_arrival_visits").noconvert() = true);
+      py::arg("uct2_arrival_visits").noconvert() = true,
+      py::arg("search") = py::dict());
 
   m.def("run_constrained_eval_vs_heuristic", &run_constrained_eval_vs_heuristic_py,
       py::arg("game_id"),
@@ -4623,6 +4800,9 @@ PYBIND11_MODULE(dinoboard_engine, m) {
     return out;
   }, py::arg("game_id"), py::arg("name"));
 
+  m.def("gumbel_considered_visit_sequence", &search::gumbel_considered_visit_sequence,
+        py::arg("num_considered"), py::arg("num_simulations"));
+
   m.def("available_games", []() -> std::vector<std::string> {
     py::gil_scoped_release release;
     return GameRegistry::instance().game_ids();
@@ -4846,7 +5026,7 @@ PYBIND11_MODULE(dinoboard_engine, m) {
            py::arg("opponent_selection") = std::string("puct"),
            py::arg("temperature_initial") = -1.0,
            py::arg("temperature_final") = -1.0,
-           py::arg("temperature_decay_plies") = 0,
+           py::arg("temperature_halflife_plies") = 0.0,
            py::arg("world_cap") = 0,
            py::arg("dirichlet_alpha") = 0.0,
            py::arg("dirichlet_epsilon") = 0.0,
@@ -4855,7 +5035,8 @@ PYBIND11_MODULE(dinoboard_engine, m) {
            py::arg("fpu_reduction") = py::none(),
            py::arg("uct2_arrival_visits").noconvert() = true,
            py::arg("time_limit_ms") = 0.0,
-           py::arg("leaf_batch_size") = 1)
+           py::arg("leaf_batch_size") = 1,
+           py::arg("search") = py::dict())
       .def("get_heuristic_action", &GameSessionWrapper::get_heuristic_action,
            py::arg("selector"),
            py::arg("temperature") = 0.0)

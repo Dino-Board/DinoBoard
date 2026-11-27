@@ -156,6 +156,7 @@ HeuristicResult MctsPVHeuristic::pick(IGameState& masked_state,
   HeuristicResult out;
   out.simulations = stats.simulations_done;
   out.actions = stats.root_actions;
+  out.action_visits = stats.root_action_visits;
   out.scores.reserve(stats.root_action_visits.size());
   for (int v : stats.root_action_visits) {
     out.scores.push_back(static_cast<double>(v));
@@ -166,6 +167,7 @@ HeuristicResult MctsPVHeuristic::pick(IGameState& masked_state,
   if (out.actions.empty()) {
     out.actions = rules.legal_actions(masked_state);
     out.scores.assign(out.actions.size(), 1.0);
+    out.action_visits.assign(out.actions.size(), 1);
   }
   return out;
 }

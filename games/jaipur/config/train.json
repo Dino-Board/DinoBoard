@@ -17,6 +17,21 @@
     },
     "train_batches_per_step": 12,
     "replay_buffer_size": 200000,
+    "opening_exploration": {
+      "episode_ratio": 0.25,
+      "min_plies": 2,
+      "max_plies": 6,
+      "temperature": 1.25,
+      "uniform_mix": 0.15
+    },
+    "midgame_start": {
+      "episode_ratio": 0.15,
+      "min_plies": 10,
+      "max_plies": 24,
+      "temperature": 0.7,
+      "fork_min_choices": 3,
+      "fork_max_choices": 8
+    },
     "playout_cap": {
       "full_simulations": 800,
       "fast_simulations": 150,
@@ -25,9 +40,6 @@
     "score_head": {
       "loss_weight": 0.5,
       "scale": 50.0
-    },
-    "opponent_policy_head": {
-      "loss_weight": 0.15
     },
     "ema": {
       "decay": 0.99
@@ -52,16 +64,23 @@
   },
   "mcts": {
     "selfplay": {
-      "dirichlet_alpha": 1.0,
+      "dirichlet_alpha": 0.0,
+      "dirichlet_total_alpha": 10.83,
+      "dirichlet_shaped": true,
       "dirichlet_epsilon": 0.25,
+      "root_policy_temperature": {
+        "initial": 1.25,
+        "final": 1.1,
+        "halflife_plies": 4.5
+      },
       "simulations": 800,
       "fpu_reduction": 0.2,
       "temperature": 1.0,
       "temperature_schedule": {
         "enabled": true,
-        "initial": 1.0,
+        "initial": 0.8,
         "final": 0.1,
-        "decay_plies": 30
+        "halflife_plies": 4.5
       }
     },
     "eval": {

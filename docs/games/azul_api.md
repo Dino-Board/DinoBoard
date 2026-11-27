@@ -198,13 +198,12 @@ P = 玩家数，F = 工厂数。2p / 3p / 4p 分别是 43 / 59 / 75 个 token，
 
 ### 训练配方（`train_transformer.json`，20000 步）
 
-网络和优化与 Splendor 的 `train_transformer_kata_guided.json` 相同（网络 d128×4、每步 400 局、批 1024×12、学习率 2e-4 余弦降到 4e-6、回放池 20 万、fp16 推理），KataGo 的五项也全部打开。不同的是：旧网络是强老师，引导全程 1.0 保持到第 500 步，再线性退到第 1000 步（最初定的 1000 / 2000 在前 100 步就看出学得很快，缩短了）；每 100 步评估 200 局（对手就是 `pv_512x4`，一次评估的误差约 ±7%）。
+网络和优化与 Splendor 的 `train_transformer_kata_guided.json` 相同（网络 d128×4、每步 400 局、批 1024×12、学习率 2e-4 余弦降到 4e-6、回放池 20 万、fp16 推理），KataGo 的四项也全部打开。不同的是：旧网络是强老师，引导全程 1.0 保持到第 500 步，再线性退到第 1000 步（最初定的 1000 / 2000 在前 100 步就看出学得很快，缩短了）；每 100 步评估 200 局（对手就是 `pv_512x4`，一次评估的误差约 ±7%）。
 
 | 项 | 配置 | 值 |
 |----|------|----|
 | 随机搜索量（playout cap） | `training.playout_cap` | 完整 800 / 快速 150 / 完整概率 0.25 |
 | 分差辅助头 | `training.score_head` | 权重 0.5，`scale` 40 |
-| 对手策略辅助头 | `training.opponent_policy_head` | 权重 0.15 |
 | 权重滑动平均 | `training.ema` | 0.99 |
 | FPU 降低 | `train.json::mcts.selfplay` / `mcts.eval` 的 `fpu_reduction` | 0.2 |
 
@@ -214,9 +213,10 @@ P = 玩家数，F = 工厂数。2p / 3p / 4p 分别是 43 / 59 / 75 个 token，
 
 | 项 | 配置 | 值 |
 |----|------|----|
-| 开局随机走 | `training.opening_exploration` | 30% 的对局先按网络策略不搜索地走 1–8 步（温度 1.0，20% 完全随机），之后正常搜索；二人局一般 50–60 步 |
-| 按合法动作数分配的根噪声 | `train.json::mcts.selfplay.dirichlet_total_alpha` | 10（`dirichlet_alpha` 0）：开局 100 多个动作、终局几个动作，固定的单动作 alpha 不合适 |
-| 根节点策略温度 | `train.json::mcts.selfplay.root_policy_temperature` | 1.25 → 1.1，30 步线性 |
+| 开局随机走 | `training.opening_exploration` | 25% 的对局先按网络策略不搜索地走 1–6 步（温度 1.2，15% 完全随机），之后正常搜索；二人局一般 50–60 步 |
+| 中盘切入分叉 | `training.midgame_start` | 15% 的对局先按温度 0.7 快速推演 8–22 步，末步做 `3..8` 候选锦标赛分叉后进入正常搜索 |
+| 自适应塑形根噪声 | `train.json::mcts.selfplay.dirichlet_total_alpha` / `dirichlet_shaped` | `10.83` + `dirichlet_shaped: true`（`dirichlet_alpha` 0）：50% 均匀 + 50% 超额对数先验塑形 |
+| 根节点策略温度 | `train.json::mcts.selfplay.root_policy_temperature` | `1.25 → 1.1`，按 `halflife_plies: 4.5` 指数衰减（与 `temperature_schedule` `0.8 → 0.1` 半衰期一致） |
 
 唯一和 Splendor 数字不同的是 `score_head.scale`：它的单位是游戏分数。Splendor 的分差标准差约 4.5 分，除以 15 后目标方差约 0.09；Azul 旧网络对局的分差标准差约 11 分（带噪声的自我对弈约 21 分），要得到同样量级的目标需要除以 40（方差 0.08–0.29）。照搬 15 的话分差损失会比胜负损失还大。
 

@@ -1,6 +1,6 @@
 """Make a harmonies_tok network trained before the potential-score features ignore them.
 
-    python games/harmonies/tools/zero_new_features.py model_best.onnx \
+    python games/harmonies/tools/zero_new_features.py model_latest.onnx \
         games/harmonies/model/harmonies_tok_v2_teacher.onnx
 
 See scripts/zero_new_features.py.

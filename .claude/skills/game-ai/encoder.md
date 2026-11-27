@@ -165,9 +165,7 @@ not grow. Two ways, and an encoder offers at most one of them:
   one sample in place. Use it when the image depends on the sample itself,
   typically because the rules keep canonical forms (Carcassonne: a symmetric
   tile's rotation is stored reduced, a meeple is named by the lowest edge of
-  its feature, so a quarter turn re-canonicalises both). It cannot transform
-  an opponent-policy target, so it is rejected together with
-  `training.opponent_policy_head`.
+  its feature, so a quarter turn re-canonicalises both).
 
 Symmetry 0 is the identity in both. The contract to test: for every state
 `s` and symmetry `g`, the transformed `encode(s)` equals `encode(g·s)` (as a

@@ -1,0 +1,112 @@
+---
+description: Prevent policy prior collapse and value outcome memorization in self-play — triage table, sample reuse < 1.0, layered KataGo exploration, rollback checklist
+globs:
+  - "games/**/config/train.json"
+  - "games/**/config/train_*.json"
+  - "games/**/config/mcts.json"
+alwaysApply: false
+---
+
+# Preventing Overconfidence in Self-Play
+
+Self-play overconfidence has **two distinct failure modes** — **policy overconfidence** (prior collapse / search lock-in) and **value overconfidence** (outcome memorization / miscalibration). Externally both look like an eval plateau with sharp predictions and brittle play in unfamiliar positions, but their mechanisms and fixes are different. Diagnose which head went overconfident before changing knobs.
+
+---
+
+## Triage: Policy vs Value Overconfidence
+
+| Signal | Policy Overconfidence | Value Overconfidence |
+|--------|-----------------------|----------------------|
+| Core mechanism | PUCT positive feedback loop: visits follow `P`, `P` trains on visits | Every sample in an episode shares one terminal `z`; high reuse memorizes board signatures |
+| `train.log` clue | `prior_ent -> 0`, `prior_top1 -> 1`, `policy_kl -> 0` while eval stalls | `v_loss` keeps dropping (`0.55 -> 0.40`) in pure self-play while eval / head-to-head stalls |
+| Gameplay symptom | Identical openings or rigid placement templates; weak off-book play | Wild `best_value` swings near `+-1` in open midgames; blunders when plan breaks |
+| Ground-truth check | Plot `prior_ent,prior_top1,search_ent,policy_kl` across steps | Fresh-game value probe (`value-overfit` skill): fresh MSE > `v_loss`, midgame slope `< 0.8` |
+| Can it recover in-place? | Often yes, if caught early by enabling exploration knobs on `--resume` | **No** — an overconfident value head corrupts its own search; roll back to last calibrated checkpoint |
+
+---
+
+## 1. Preventing Policy Overconfidence
+
+In PUCT, unvisited or low-prior moves face the first-play urgency penalty `Q(parent) - fpu_reduction * sqrt(visited_prior)`. Once one move gets an early prior edge, rival moves stop getting enough simulations to prove their true value, and cross-entropy sharpens `P` further on the winner.
+
+Do **not** fight policy collapse by raising played-move `temperature_schedule` late into the game (that ruins game quality and value targets) or by adding an entropy bonus to the policy loss (that blurs tactical forced moves everywhere). Instead, layer four selfplay-only controls (`training-exploration`):
+
+### Layer A — Soften root priors (`root_policy_temperature`)
+```json
+"mcts": {
+  "selfplay": {
+    "root_policy_temperature": { "initial": 1.25, "final": 1.1, "halflife_plies": 5 }
+  }
+}
+```
+Transforms full-search root priors `P <- P^(1/T)` (renormalized) **before** Dirichlet noise. Second- and third-best candidates receive enough visits to overturn a stale prior, while interior tree nodes stay sharp (`T = 1.0`). Keep `initial <= 1.35` and `final` around `1.1`; above `1.5` visit targets become overly flat. Set `halflife_plies` to `~0.08 * avg_game_plies`.
+
+### Layer B — Focus root noise on plausible blind spots (`dirichlet_shaped`)
+```json
+"mcts": {
+  "selfplay": {
+    "dirichlet_alpha": 0.0,
+    "dirichlet_total_alpha": 10.83,
+    "dirichlet_shaped": true,
+    "dirichlet_epsilon": 0.25
+  }
+}
+```
+With `dirichlet_total_alpha: 10.83` and `dirichlet_shaped: true` (KataGo's `computeDirichletAlphaDistribution`), half of total concentration is distributed uniformly (`1/N`) and half goes to moves with log-prior above the mean, **capped at `max(0.01, 1/N)`**. Because every move with `P >= 0.01` hits the same cap, a `0.02` "blind-spot" candidate receives the **exact same** shaped alpha share as an `0.85` favorite, instead of wasting 90% of noise spikes on dead placements when `N` is large.
+
+### Layer C — Broaden starting states (`opening_exploration` + `midgame_start`)
+Root noise perturbs one ply at a time; it rarely escapes a deep strategic rut. Combine:
+- **`opening_exploration`** (`episode_ratio: 0.25`, first `6%-12%` of game plies, `temperature: 1.15-1.25`, `uniform_mix: 0.15`): forces early branching diversity including low-prior lines.
+- **`midgame_start`** (`episode_ratio: 0.15`, `15%-40%` of game plies, `temperature: 0.7`, `fork_min_choices: 3`, `fork_max_choices: 8-10`): plays fast sharp raw-policy moves into realistic midgames, then applies a **tournament fork** on the final prefix ply (picks the highest-prior move among `k` random legal moves, `k < N`), guaranteeing a strong off-mainline midgame branch before full search starts.
+
+Prefix plies are never stored in the replay buffer, so policy targets remain pure full-search distributions.
+
+### Layer D — Opponent diversity & FPU balance
+- **`fpu_reduction: 0.2`** (`mcts.selfplay` and `mcts.eval`): prevents unvisited children from defaulting to `Q = 0` (which is overly optimistic when losing and overly pessimistic when winning), letting root noise + softened priors systematically test reasonable alternatives.
+- **Quality-scored opponent pool** (`opponent_pool_enabled: true`, `opponent_pool_self_ratio: 0.75-0.80`): essential in hidden-info, bluffing, and interactive drafting games where pure self-play co-adapts into narrow conventions.
+
+---
+
+## 2. Preventing Value Overconfidence
+
+Every full-search ply recorded from one episode carries the **same terminal outcome `z` (`+-1`)**. A 120-ply game with `playout_cap.full_search_prob = 0.25` emits ~30 correlated states sharing a single noisy coin flip. When the optimizer draws those states repeatedly, the trunk memorizes subtle board/hand patterns of specific replay games and predicts `+-0.95` in positions whose true win rate is `0.55`.
+
+### Primary lever — Keep sample reuse `< 1.0` and replay window `>= 100` steps
+Compute effective reuse on **recorded** samples (only full-search plies count under `playout_cap`):
+```text
+new_samples_per_step = episodes_per_step * avg_searched_plies * full_search_prob
+sample_reuse         = (batch_size * train_batches_per_step) / new_samples_per_step
+buffer_steps         = replay_buffer_size / new_samples_per_step
+```
+- **Target `sample_reuse` in `0.5 - 0.9` (strictly `< 1.0`)**: reduce `train_batches_per_step` or raise `episodes_per_step` if reuse approaches `1.5-2.0` (where Harmonies and Carcassonne both went overconfident; see `value-overfit-reference`).
+- **Target `buffer_steps >= 100` (`100-200` steps of games)**: a narrow buffer (`20-50` steps) lets the value head overfit recent trajectories and amplifies strategy oscillation.
+
+### Keep value targets clean — Fast exponential `temperature_schedule`
+```json
+"temperature_schedule": {
+  "enabled": true,
+  "initial": 0.8,
+  "final": 0.1,
+  "halflife_plies": 5
+}
+```
+Sampling played moves at `T = 0.5-1.0` deep into the midgame injects random blunders into the trajectory; early positions are then labeled with who blundered last rather than who stood better, adding variance while encouraging spurious memorization. Set `halflife_plies ~ 0.08 * avg_game_plies` so `T` is `87.5%` decayed to `0.1` by `~24%` of the game (`training-hyperparams`).
+
+### Anchor representations with dense auxiliary heads & symmetries
+- **Auxiliary score heads (`score_head`, `score_breakdown_head`)**: predicting continuous final score margin `(own - best_opp) / scale` (and per-category score breakdown in multi-track games like Ark Nova) gives dense, low-variance gradients on every state instead of binary `+-1` outcomes alone (`training-katago-techniques`).
+- **Symmetry augmentation (`symmetry_augmentation: true`)**: whenever the encoder exposes board symmetries (e.g. Carcassonne rotations, Harmonies reflections), each SGD draw sees a random symmetry transform rather than an identical feature vector.
+- **Regularization (`weight_decay: 1e-4`, `ema.decay: 0.999`)**: bounds logit/value weight norm growth and smooths exported selfplay/eval weights across steps.
+
+---
+
+## Recovery Checklist When Overconfidence Appears
+
+1. **Run diagnostics before editing configs**: inspect `prior_ent / policy_kl` in `train.log` for policy lock-in, and run the fresh-game value probe (`value-overfit-reference`) on 400+ zero-noise games to check fresh MSE vs `v_loss` and midgame calibration slope.
+2. **If policy-locked (value still calibrated, `slope ~ 0.9-1.1`)**: enable `root_policy_temperature`, `dirichlet_shaped: true`, `opening_exploration`, and `midgame_start`, then `--resume`.
+3. **If value-overconfident (`fresh MSE >> v_loss`, midgame `slope < 0.75`)**: do **not** continue from `checkpoint.pt`. Probe earlier `models/model_step_*.onnx` checkpoints to find the last calibrated one (often near the end of heuristic guidance), lower `train_batches_per_step` so `reuse < 1.0`, enlarge `replay_buffer_size` to `>= 100` steps, and restart from that healthy checkpoint.
+
+## Known Issues
+
+- **Confusing falling `v_loss` with progress**: in pure self-play against an equally improving self, healthy `v_loss` stays flat (~0.65-0.75 in close Eurogames); a steadily falling `v_loss` alongside flat eval is a classic warning sign of buffer memorization, not stronger play.
+- **Adding `opening_exploration` + `midgame_start` without adjusting `sample_reuse`**: prefix plies are excluded from training samples, reducing `new_samples_per_step` by ~5%-10%; re-check `sample_reuse < 1.0` from `samples=` growth in `train.log` after enabling prefixes.
+- **Over-flattening `root_policy_temperature` (`> 1.5`)**: washes out tactical refutations at the root and inflates `policy_kl` artificially; keep `1.25 -> 1.1` and rely on `dirichlet_shaped` + prefixes for broader exploration.

@@ -74,7 +74,7 @@ Model vs model:
 ```bash
 python3 scripts/eval_model.py --game coup \
   --model runs/coup/models/model_latest.onnx --name-model latest \
-  --opponent runs/coup/models/model_best.onnx --name-opponent best \
+  --opponent runs/coup/models/model_step_05000.onnx --name-opponent step5000 \
   --games 40 --workers 40 --providers cuda,cpu \
   --no-save -o /tmp/eval
 ```

@@ -26,6 +26,21 @@
     "compact_replay": {
       "features_dtype": "float16"
     },
+    "opening_exploration": {
+      "episode_ratio": 0.25,
+      "min_plies": 2,
+      "max_plies": 14,
+      "temperature": 1.25,
+      "uniform_mix": 0.15
+    },
+    "midgame_start": {
+      "episode_ratio": 0.15,
+      "min_plies": 28,
+      "max_plies": 70,
+      "temperature": 0.7,
+      "fork_min_choices": 3,
+      "fork_max_choices": 10
+    },
     "playout_cap": {
       "full_simulations": 800,
       "fast_simulations": 150,

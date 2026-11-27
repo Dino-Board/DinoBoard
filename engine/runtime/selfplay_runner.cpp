@@ -9,6 +9,7 @@
 #include "../core/masked_state.h"
 #include "../core/rng_salt.h"
 #include "../core/snapshot_io.h"
+#include "heuristic_runner.h"
 
 namespace board_ai::runtime {
 
@@ -23,10 +24,23 @@ void validate_exploration_config(const SelfplayConfig& config) {
         std::to_string(config.root_policy_temperature_initial) + ", final=" +
         std::to_string(config.root_policy_temperature_final));
   }
-  if (config.root_policy_temperature_decay_plies < 0) {
+  if (!(std::isfinite(config.root_policy_temperature_halflife_plies) &&
+        config.root_policy_temperature_halflife_plies >= 0.0)) {
     throw std::invalid_argument(
-        "selfplay: root_policy_temperature decay_plies must be >= 0, got " +
-        std::to_string(config.root_policy_temperature_decay_plies));
+        "selfplay: root_policy_temperature halflife_plies must be a finite value >= 0, got " +
+        std::to_string(config.root_policy_temperature_halflife_plies));
+  }
+  if (config.root_policy_temperature_initial != config.root_policy_temperature_final &&
+      config.root_policy_temperature_halflife_plies <= 0.0) {
+    throw std::invalid_argument(
+        "selfplay: root_policy_temperature halflife_plies must be > 0 when initial != final");
+  }
+  if (config.temperature_schedule.enabled &&
+      !(std::isfinite(config.temperature_schedule.halflife_plies) &&
+        config.temperature_schedule.halflife_plies >= 0.0)) {
+    throw std::invalid_argument(
+        "selfplay: temperature_schedule halflife_plies must be a finite value >= 0, got " +
+        std::to_string(config.temperature_schedule.halflife_plies));
   }
   if (!(std::isfinite(config.dirichlet_total_alpha) && config.dirichlet_total_alpha >= 0.0)) {
     throw std::invalid_argument(
@@ -38,8 +52,12 @@ void validate_exploration_config(const SelfplayConfig& config) {
         "selfplay: dirichlet_alpha and dirichlet_total_alpha are two ways to size "
         "the same root noise; set only one of them");
   }
+  if (config.dirichlet_shaped && config.dirichlet_total_alpha <= 0.0) {
+    throw std::invalid_argument(
+        "selfplay: dirichlet_shaped requires dirichlet_total_alpha > 0");
+  }
   const OpeningExploration& oe = config.opening_exploration;
-  if (!(oe.episode_ratio >= 0.0 && oe.episode_ratio <= 1.0)) {
+  if (!(std::isfinite(oe.episode_ratio) && oe.episode_ratio >= 0.0 && oe.episode_ratio <= 1.0)) {
     throw std::invalid_argument(
         "selfplay: opening_exploration.episode_ratio must be in [0, 1], got " +
         std::to_string(oe.episode_ratio));
@@ -55,10 +73,41 @@ void validate_exploration_config(const SelfplayConfig& config) {
           "selfplay: opening_exploration.temperature must be a finite value > 0, got " +
           std::to_string(oe.temperature));
     }
-    if (!(oe.uniform_mix >= 0.0 && oe.uniform_mix <= 1.0)) {
+    if (!(std::isfinite(oe.uniform_mix) && oe.uniform_mix >= 0.0 && oe.uniform_mix <= 1.0)) {
       throw std::invalid_argument(
           "selfplay: opening_exploration.uniform_mix must be in [0, 1], got " +
           std::to_string(oe.uniform_mix));
+    }
+  }
+  const MidgameStart& ms = config.midgame_start;
+  if (!(std::isfinite(ms.episode_ratio) && ms.episode_ratio >= 0.0 && ms.episode_ratio <= 1.0)) {
+    throw std::invalid_argument(
+        "selfplay: midgame_start.episode_ratio must be in [0, 1], got " +
+        std::to_string(ms.episode_ratio));
+  }
+  if (oe.episode_ratio + ms.episode_ratio > 1.0 + 1e-12) {
+    throw std::invalid_argument(
+        "selfplay: opening_exploration.episode_ratio + midgame_start.episode_ratio "
+        "must be <= 1.0, got " + std::to_string(oe.episode_ratio + ms.episode_ratio));
+  }
+  if (ms.episode_ratio > 0.0) {
+    if (!(ms.min_plies >= 1 && ms.max_plies >= ms.min_plies)) {
+      throw std::invalid_argument(
+          "selfplay: midgame_start needs 1 <= min_plies <= max_plies, got " +
+          std::to_string(ms.min_plies) + ", " + std::to_string(ms.max_plies));
+    }
+    if (!positive(ms.temperature)) {
+      throw std::invalid_argument(
+          "selfplay: midgame_start.temperature must be a finite value > 0, got " +
+          std::to_string(ms.temperature));
+    }
+    const bool fork_off = (ms.fork_min_choices == 0 && ms.fork_max_choices == 0);
+    const bool fork_on = (ms.fork_min_choices >= 1 && ms.fork_max_choices >= ms.fork_min_choices);
+    if (!fork_off && !fork_on) {
+      throw std::invalid_argument(
+          "selfplay: midgame_start fork_min_choices / fork_max_choices must both be 0 "
+          "or satisfy 1 <= fork_min_choices <= fork_max_choices, got " +
+          std::to_string(ms.fork_min_choices) + ", " + std::to_string(ms.fork_max_choices));
     }
   }
 }
@@ -103,6 +152,51 @@ std::size_t sample_opening_action(const std::vector<float>& priors,
     if (r < cumulative) return i;
   }
   return last_possible;  // r landed in the rounding gap just below 1
+}
+
+// KataGo tournament fork move: draw k = uniform{fork_min_choices..fork_max_choices}
+// (clamped to [1, n - 1] so a >=2-move root always has genuine probability of
+// skipping the habitual top-1 move) distinct legal indices uniformly without
+// replacement, and pick the candidate with the highest raw policy prior (ties
+// broken uniformly at random via the random draw order).
+std::size_t sample_midgame_fork_action(const std::vector<float>& priors,
+                                       int fork_min_choices,
+                                       int fork_max_choices,
+                                       std::uint64_t seed) {
+  const std::size_t n = priors.size();
+  if (n <= 1) return 0;
+  double max_p = 0.0;
+  for (const float p : priors) {
+    if (!std::isfinite(p) || p < 0.0f) {
+      throw std::runtime_error(
+          "selfplay midgame start: evaluator returned a non-finite or negative prior");
+    }
+    max_p = std::max(max_p, static_cast<double>(p));
+  }
+  if (max_p <= 0.0) {
+    throw std::runtime_error(
+        "selfplay midgame start: evaluator returned zero prior mass over legal actions");
+  }
+  std::mt19937_64 rng(seed);
+  const int k_draw = std::uniform_int_distribution<int>(
+      fork_min_choices, fork_max_choices)(rng);
+  const std::size_t k_eff = std::max<std::size_t>(
+      1, std::min<std::size_t>(static_cast<std::size_t>(k_draw), n - 1));
+
+  std::vector<std::size_t> indices(n);
+  std::iota(indices.begin(), indices.end(), 0);
+  std::size_t best_idx = 0;
+  float best_prior = -1.0f;
+  for (std::size_t j = 0; j < k_eff; ++j) {
+    const std::size_t pick = std::uniform_int_distribution<std::size_t>(j, n - 1)(rng);
+    std::swap(indices[j], indices[pick]);
+    const std::size_t cand = indices[j];
+    if (priors[cand] > best_prior) {
+      best_prior = priors[cand];
+      best_idx = cand;
+    }
+  }
+  return best_idx;
 }
 
 // SelfplaySample search-diversity read-out from the root's raw prior and
@@ -315,28 +409,51 @@ SelfplayEpisodeResult run_selfplay_episode(
   std::mt19937_64 playout_cap_rng(
       board_ai::rng::derive_subseed(episode_seed, "selfplay.playout_cap"));
 
+  if (config.algorithm == search::SearchAlgorithm::kRollout) {
+    throw std::invalid_argument(
+        "selfplay: algorithm=rollout is a test-time search; selfplay supports puct and gumbel");
+  }
+  if (config.policy_sampling) {
+    if (playout_cap || config.tail_solve_enabled) {
+      throw std::invalid_argument(
+          "selfplay: policy_sampling does not search, so playout cap "
+          "(fast_simulations) and the tail solver must be off");
+    }
+    if (!(std::isfinite(config.policy_sampling_temperature) &&
+          config.policy_sampling_temperature > 0.0)) {
+      throw std::invalid_argument(
+          "selfplay: policy_sampling_temperature must be a finite value > 0");
+    }
+  }
+
   // Exploration knobs (all off by default). `opening_plies` is the length of
   // this episode's opening-exploration prefix, 0 for a normal episode.
   validate_exploration_config(config);
   const OpeningExploration& opening = config.opening_exploration;
+  const MidgameStart& midgame = config.midgame_start;
   int opening_plies = 0;
-  if (opening.episode_ratio > 0.0) {
-    std::mt19937_64 opening_rng(board_ai::rng::derive_subseed(
+  int midgame_plies = 0;
+  if (opening.episode_ratio > 0.0 || midgame.episode_ratio > 0.0) {
+    std::mt19937_64 start_rng(board_ai::rng::derive_subseed(
         episode_seed, "selfplay.opening_exploration"));
-    if (std::uniform_real_distribution<double>(0.0, 1.0)(opening_rng) <
-        opening.episode_ratio) {
+    const double u = std::uniform_real_distribution<double>(0.0, 1.0)(start_rng);
+    if (u < opening.episode_ratio) {
       opening_plies = std::uniform_int_distribution<int>(
-          opening.min_plies, opening.max_plies)(opening_rng);
+          opening.min_plies, opening.max_plies)(start_rng);
+    } else if (u < opening.episode_ratio + midgame.episode_ratio) {
+      std::mt19937_64 mid_rng(board_ai::rng::derive_subseed(
+          episode_seed, "selfplay.midgame_start"));
+      midgame_plies = std::uniform_int_distribution<int>(
+          midgame.min_plies, midgame.max_plies)(mid_rng);
     }
   }
   auto root_policy_temperature_at = [&](int ply_index) -> float {
-    const int decay = config.root_policy_temperature_decay_plies;
+    const double hl = config.root_policy_temperature_halflife_plies;
     const double t1 = config.root_policy_temperature_final;
-    if (decay <= 0) return static_cast<float>(t1);
     const double t0 = config.root_policy_temperature_initial;
-    const double progress = std::min(
-        1.0, static_cast<double>(std::max(0, ply_index)) / static_cast<double>(decay));
-    return static_cast<float>(t0 + (t1 - t0) * progress);
+    if (!(hl > 0.0) || t0 == t1) return static_cast<float>(t1);
+    const double clipped_ply = static_cast<double>(std::max(0, ply_index));
+    return static_cast<float>(t1 + (t0 - t1) * std::pow(0.5, clipped_ply / hl));
   };
   auto tracker_for = [&](int seat) -> IBeliefTracker* {
     return (use_per_perspective && seat >= 0 &&
@@ -537,6 +654,55 @@ SelfplayEpisodeResult run_selfplay_episode(
       continue;
     }
 
+    // Midgame-start prefix: fast-forward along a low-temperature policy
+    // trajectory, then optionally take a KataGo tournament fork move on the
+    // final prefix ply (`ply == midgame_plies - 1`). Dropped from training.
+    if (ply < midgame_plies) {
+      ActionId chosen = legal[0];
+      if (legal.size() > 1) {
+        auto masked = make_masked_state(ai_view, ai_view.schema_ref(), player);
+        std::vector<float> priors;
+        std::vector<float> values;
+        if (!evaluator_for_player(player).evaluate(
+                *masked, player, tracker_for(player), legal, &priors, &values)) {
+          throw std::runtime_error(
+              "selfplay midgame start: evaluator.evaluate() failed");
+        }
+        if (priors.size() != legal.size()) {
+          throw std::runtime_error(
+              "selfplay midgame start: evaluator returned " +
+              std::to_string(priors.size()) + " priors for " +
+              std::to_string(legal.size()) + " actions");
+        }
+        const std::uint64_t pick_seed = board_ai::rng::derive_subseed(
+            episode_seed, "selfplay.midgame_start.pick",
+            static_cast<std::uint64_t>(ply));
+        if (ply == midgame_plies - 1 && midgame.fork_max_choices > 0) {
+          chosen = legal[sample_midgame_fork_action(
+              priors, midgame.fork_min_choices, midgame.fork_max_choices, pick_seed)];
+        } else {
+          const OpeningExploration fast_forward{1.0, 1, 1, midgame.temperature, 0.0};
+          chosen = legal[sample_opening_action(priors, fast_forward, pick_seed)];
+        }
+      }
+
+      SelfplaySample sample{};
+      sample.ply = ply;
+      sample.player = player;
+      sample.action_id = chosen;
+      sample.full_search = false;
+      sample.midgame_start = true;
+      if (encoder && config.encode_fast_samples) {
+        encoder->encode(ai_view, player, tracker_for(player), full_legal,
+                        &sample.features, &sample.legal_mask);
+      }
+      result.samples.push_back(std::move(sample));
+
+      commit_action(effective_rules, chosen, player);
+      result.midgame_start_plies += 1;
+      continue;
+    }
+
     const bool use_heuristic = heuristic &&
         config.heuristic_guidance_ratio > 0.0 &&
         heuristic_dist(heuristic_rng) < config.heuristic_guidance_ratio;
@@ -556,52 +722,48 @@ SelfplayEpisodeResult run_selfplay_episode(
               ? per_perspective_trackers[player]
               : nullptr;
       auto hr = heuristic->pick(*masked, hr_tracker, effective_rules, hr_seed);
-
-      const size_t n_actions = hr.actions.size();
-      std::vector<double> probs(n_actions);
-      double max_score = *std::max_element(hr.scores.begin(), hr.scores.end());
-
-      if (config.heuristic_temperature > 1e-6) {
-        double inv_temp = 1.0 / config.heuristic_temperature;
-        double sum_exp = 0.0;
-        for (size_t i = 0; i < n_actions; ++i) {
-          probs[i] = std::exp((hr.scores[i] - max_score) * inv_temp);
-          sum_exp += probs[i];
-        }
-        for (auto& p : probs) p /= sum_exp;
-      } else {
-        int count = 0;
-        for (size_t i = 0; i < n_actions; ++i) {
-          if (hr.scores[i] >= max_score - 1e-9) ++count;
-        }
-        for (size_t i = 0; i < n_actions; ++i) {
-          probs[i] = (hr.scores[i] >= max_score - 1e-9) ? 1.0 / count : 0.0;
-        }
+      if (hr.actions.empty() || hr.scores.size() != hr.actions.size()) {
+        throw std::runtime_error(
+            "selfplay heuristic guidance: invalid HeuristicResult at ply " +
+            std::to_string(ply));
       }
 
-      // Convert to fake visits for policy target
-      std::vector<int> fake_visits(n_actions);
-      for (size_t i = 0; i < n_actions; ++i) {
-        fake_visits[i] = static_cast<int>(probs[i] * 10000.0 + 0.5);
-      }
-
-      // Sample action from distribution
-      const std::uint64_t h = board_ai::rng::derive_subseed(
+      const std::uint64_t sample_seed = board_ai::rng::derive_subseed(
           hr_seed, "selfplay.heuristic_sample");
-      double r = static_cast<double>(h & 0xFFFFFFFF) / 4294967296.0;
-      size_t chosen_idx = n_actions - 1;
-      double cumulative = 0.0;
-      for (size_t i = 0; i < n_actions; ++i) {
-        cumulative += probs[i];
-        if (r <= cumulative) { chosen_idx = i; break; }
+      ActionId chosen = hr.actions[0];
+      std::vector<int> target_visits;
+
+      if (!hr.action_visits.empty()) {
+        if (hr.action_visits.size() != hr.actions.size()) {
+          throw std::runtime_error(
+              "selfplay heuristic guidance: action_visits/actions size mismatch at ply " +
+              std::to_string(ply));
+        }
+        // PV+MCTS teacher: pick the move from root visit counts (argmax with
+        // uniform tie-break at T=0, visits^(1/T) at T>0, matching training
+        // MCTS) and supervise the teacher's full post-search visit distribution
+        // as the policy target p.
+        chosen = search::select_action_from_visits(
+            hr.actions, hr.action_visits, config.heuristic_temperature,
+            sample_seed, 0, hr.actions[0]);
+        target_visits = std::move(hr.action_visits);
+      } else {
+        // Rule-based teacher: pick the move from rule scores (uniform tie-break
+        // over argmax at T=0, softmax(scores/T) at T>0), then supervise a
+        // strict one-hot policy target p on the chosen action.
+        const double r = static_cast<double>(sample_seed & 0xFFFFFFFF) / 4294967296.0;
+        const std::size_t chosen_idx =
+            sample_heuristic_index(hr.scores, config.heuristic_temperature, r);
+        chosen = hr.actions[chosen_idx];
+        target_visits.assign(hr.actions.size(), 0);
+        target_visits[chosen_idx] = 1;
       }
-      ActionId chosen = hr.actions[chosen_idx];
 
       SelfplaySample sample{};
       sample.ply = ply;
       sample.player = player;
       sample.action_id = chosen;
-      sample.policy_action_ids = hr.actions;
+      sample.policy_action_ids = std::move(hr.actions);
       if (encoder) {
         const IBeliefTracker* enc_tracker =
             (use_per_perspective && player >= 0 &&
@@ -610,12 +772,64 @@ SelfplayEpisodeResult run_selfplay_episode(
                 : nullptr;
         encoder->encode(ai_view, player, enc_tracker, full_legal, &sample.features, &sample.legal_mask);
       }
-      sample.policy_action_visits = fake_visits;
+      sample.policy_action_visits = std::move(target_visits);
       sample.heuristic_simulations = hr.simulations;
       result.samples.push_back(std::move(sample));
 
       commit_action(effective_rules, chosen, player);
       heuristic_moves += 1;
+      continue;
+    }
+
+    if (config.policy_sampling) {
+      auto masked = make_masked_state(ai_view, ai_view.schema_ref(), player);
+      std::vector<float> priors;
+      std::vector<float> values;
+      if (!evaluator_for_player(player).evaluate(
+              *masked, player, tracker_for(player), legal, &priors, &values)) {
+        throw std::runtime_error("selfplay policy_sampling: evaluator.evaluate() failed");
+      }
+      if (priors.size() != legal.size() ||
+          static_cast<int>(values.size()) < num_players) {
+        throw std::runtime_error(
+            "selfplay policy_sampling: evaluator returned " + std::to_string(priors.size()) +
+            " priors / " + std::to_string(values.size()) + " values for " +
+            std::to_string(legal.size()) + " actions / " + std::to_string(num_players) +
+            " players");
+      }
+      const double inv_t = 1.0 / config.policy_sampling_temperature;
+      std::vector<double> w(legal.size());
+      double w_sum = 0.0;
+      for (size_t i = 0; i < legal.size(); ++i) {
+        const double p = std::max(0.0, static_cast<double>(priors[i]));
+        w[i] = inv_t == 1.0 ? p : std::pow(p, inv_t);
+        w_sum += w[i];
+      }
+      if (!(std::isfinite(w_sum) && w_sum > 0.0)) {
+        throw std::runtime_error("selfplay policy_sampling: zero policy mass over legal actions");
+      }
+      std::mt19937_64 pick_rng(board_ai::rng::derive_subseed(
+          episode_seed, "selfplay.policy_sample", static_cast<std::uint64_t>(ply)));
+      std::discrete_distribution<size_t> pick(w.begin(), w.end());
+      const size_t idx = pick(pick_rng);
+      const ActionId chosen = legal[idx];
+
+      SelfplaySample sample{};
+      sample.ply = ply;
+      sample.player = player;
+      sample.action_id = chosen;
+      sample.policy_action_ids = legal;
+      sample.policy_action_visits.assign(legal.size(), 0);
+      sample.policy_action_visits[idx] = 1;
+      sample.policy_sampled = true;
+      sample.behavior_logp = static_cast<float>(std::log(w[idx] / w_sum));
+      sample.behavior_value = values[static_cast<size_t>(player)];
+      if (encoder) {
+        encoder->encode(ai_view, player, tracker_for(player), full_legal,
+                        &sample.features, &sample.legal_mask);
+      }
+      result.samples.push_back(std::move(sample));
+      commit_action(effective_rules, chosen, player);
       continue;
     }
 
@@ -632,7 +846,8 @@ SelfplayEpisodeResult run_selfplay_episode(
         std::uniform_real_distribution<double>(0.0, 1.0)(playout_cap_rng) < config.full_search_prob;
     const auto noise = search::resolve_root_dirichlet_noise(
         config.dirichlet_alpha, config.dirichlet_epsilon,
-        config.dirichlet_on_first_n_plies, ply, config.dirichlet_total_alpha);
+        config.dirichlet_on_first_n_plies, ply,
+        config.dirichlet_total_alpha, config.dirichlet_shaped);
 
     const bool try_tail_solve = config.tail_solve_enabled && tail_solver &&
         tail_solve_trigger && tail_solve_trigger(ai_view, ply);
@@ -648,11 +863,15 @@ SelfplayEpisodeResult run_selfplay_episode(
     mcts_cfg.root_dirichlet_alpha = full_search ? noise.alpha : 0.0;
     mcts_cfg.root_dirichlet_epsilon = full_search ? noise.epsilon : 0.0;
     mcts_cfg.root_dirichlet_total_alpha = full_search ? noise.total_alpha : 0.0f;
+    mcts_cfg.root_dirichlet_shaped = full_search ? noise.shaped : false;
     mcts_cfg.root_policy_temperature =
         full_search ? root_policy_temperature_at(ply) : 1.0f;
     mcts_cfg.opponent_selection = config.opponent_selection;
     mcts_cfg.safe_mode = config.safe_mode;
     mcts_cfg.leaf_batch_size = config.leaf_batch_size;
+    mcts_cfg.algorithm = config.algorithm;
+    mcts_cfg.gumbel = config.gumbel;
+    mcts_cfg.gumbel.noise = full_search;
     // ISMCTS: root-sampling hidden info + DAG per-acting-player keying.
     // MCTS uses the per-sim sampled world's rules.legal_actions at each node.
     if (mcts_tracker) {
@@ -713,13 +932,22 @@ SelfplayEpisodeResult run_selfplay_episode(
     sample.ply = ply;
     sample.player = player;
     sample.policy_action_ids = stats.root_actions;
-    sample.policy_action_visits = stats.root_action_visits;
+    if (stats.root_policy_target.empty()) {
+      sample.policy_action_visits = stats.root_action_visits;
+    } else {
+      // Improved-policy target as integer weights (the trainer normalizes).
+      sample.policy_action_visits.resize(stats.root_policy_target.size());
+      for (size_t i = 0; i < stats.root_policy_target.size(); ++i) {
+        sample.policy_action_visits[i] = static_cast<int>(
+            std::lround(static_cast<double>(stats.root_policy_target[i]) * 1e6));
+      }
+    }
     sample.tail_solved = stats.tail_solved;
     sample.full_search = full_search;
     sample.simulations = stats.simulations_done;
     if (!stats.tail_solved && stats.root_priors.size() >= 2 &&
-        stats.root_priors.size() == stats.root_action_visits.size()) {
-      fill_policy_stats(stats.root_priors, stats.root_action_visits, &sample);
+        stats.root_priors.size() == sample.policy_action_visits.size()) {
+      fill_policy_stats(stats.root_priors, sample.policy_action_visits, &sample);
     }
     if (encoder && (full_search || config.encode_fast_samples)) {
       const IBeliefTracker* enc_tracker =
@@ -731,12 +959,11 @@ SelfplayEpisodeResult run_selfplay_episode(
     }
 
     const double temperature = stats.tail_solved ? 0.0 :
-        search::resolve_linear_temperature(config.temperature_schedule, config.temperature, ply);
+        search::resolve_exponential_temperature(config.temperature_schedule, config.temperature, ply);
     const std::uint64_t action_seed = board_ai::rng::derive_subseed(
         episode_seed, "selfplay.action_pick", static_cast<std::uint64_t>(ply));
-    const ActionId chosen = search::select_action_from_visits(
-        stats.root_actions, stats.root_action_visits, temperature, action_seed,
-        config.top_k, legal[0]);
+    const ActionId chosen = search::choose_root_action(
+        stats, temperature, action_seed, config.top_k, legal[0]);
 
     sample.action_id = chosen;
     result.samples.push_back(std::move(sample));

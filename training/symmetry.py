@@ -154,11 +154,6 @@ def parse_symmetry_augmentation(train_cfg: dict, game_id: str, *, feature_dim: i
             f"the encoder of {game_id!r} offers both symmetry tables and sample-dependent symmetries; "
             f"it must offer one of the two")
     if sample_count >= 2:
-        if train_cfg.get("opponent_policy_head") is not None:
-            raise ValueError(
-                f"training.symmetry_augmentation cannot be combined with training.opponent_policy_head for "
-                f"{game_id!r}: its symmetries depend on the sample, and the opponent-policy target is a "
-                f"vector over the actions of a later state")
         return SampleSymmetryAugmenter(game_id, sample_count)
     if len(symmetries) < 2:
         raise ValueError(

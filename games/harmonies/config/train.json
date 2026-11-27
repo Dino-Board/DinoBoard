@@ -37,20 +37,21 @@
   "mcts": {
     "selfplay": {
       "dirichlet_alpha": 0.0,
-      "dirichlet_total_alpha": 10.0,
+      "dirichlet_total_alpha": 10.83,
+      "dirichlet_shaped": true,
       "dirichlet_epsilon": 0.25,
       "root_policy_temperature": {
         "initial": 1.25,
         "final": 1.1,
-        "decay_plies": 60
+        "halflife_plies": 10
       },
       "simulations": 1000,
       "temperature": 1.0,
       "temperature_schedule": {
         "enabled": true,
-        "initial": 1.0,
+        "initial": 0.8,
         "final": 0.1,
-        "decay_plies": 25
+        "halflife_plies": 10
       }
     },
     "eval": {

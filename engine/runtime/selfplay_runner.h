@@ -52,6 +52,11 @@ struct SelfplaySample {
   // policy without a search. Always full_search=false, simulations=0 and no
   // policy target, so the trainer drops it like a playout-cap fast ply.
   bool opening_exploration = false;
+  // True for a ply of the episode's midgame-start prefix
+  // (SelfplayConfig::midgame_start): played unsearched along a low-temperature
+  // policy trajectory (with an optional tournament fork move on the last
+  // prefix ply) and dropped by the trainer like opening_exploration.
+  bool midgame_start = false;
   // Search-diversity read-out, set (has_policy_stats=true) on every searched
   // ply with at least two root actions — not on forced, tail-solved,
   // heuristic-guided or opening-exploration plies. P is the network's own
@@ -64,6 +69,12 @@ struct SelfplaySample {
   // KL(pi || P), with P floored at 1e-9: how far the search moved away from
   // the prior ("policy surprise").
   float policy_kl = 0.0f;
+  // SelfplayConfig::policy_sampling plies: the move was sampled from the
+  // network policy without search. behavior_logp = log pi(action) of the
+  // sampling distribution, behavior_value = the network value for `player`.
+  bool policy_sampled = false;
+  float behavior_logp = 0.0f;
+  float behavior_value = 0.0f;
 };
 
 // Belief-net training sample (Coup belief net plan §2.2).
@@ -113,6 +124,8 @@ struct SelfplayEpisodeResult {
   int total_plies = 0;
   // Plies played as the opening-exploration prefix (0 for a normal episode).
   int opening_exploration_plies = 0;
+  // Plies played as the midgame-start prefix (0 when not triggered).
+  int midgame_start_plies = 0;
   std::vector<SelfplaySample> samples{};
   std::map<std::string, double> custom_stats{};
   std::unique_ptr<IGameState> final_state{};
@@ -159,6 +172,28 @@ struct OpeningExploration {
   double uniform_mix = 0.0;
 };
 
+// Midgame branching start (KataGo midgame play-in + maybeForkGame in spirit).
+// Mutually exclusive per episode with OpeningExploration (`opening.episode_ratio
+// + midgame.episode_ratio <= 1.0`). With probability `episode_ratio`, an
+// episode fast-forwards `uniform{min_plies..max_plies}` unsearched plies from
+// the acting seat's raw policy at `temperature` (typically 0.65-0.8 so the
+// trajectory reaches a realistic midgame state without random blunders). On
+// the final prefix ply, if `fork_max_choices > 0` and there are at least 2
+// legal moves, draws `k = uniform{fork_min_choices..fork_max_choices}`
+// (clamped to `num_legal - 1`) random legal moves without replacement and
+// plays the one with the highest raw policy prior — deviating from the
+// habitual top-1 move while rejecting blunder moves. Prefix plies are marked
+// `midgame_start=true` / `full_search=false` and dropped from training; normal
+// MCTS selfplay runs from the resulting midgame state to the end of the game.
+struct MidgameStart {
+  double episode_ratio = 0.0;
+  int min_plies = 0;
+  int max_plies = 0;
+  double temperature = 1.0;
+  int fork_min_choices = 0;
+  int fork_max_choices = 0;
+};
+
 struct SelfplayConfig {
   int simulations = 200;
   // ISMCTS K outer worlds × M inner sims-per-world cap. 0 = legacy
@@ -183,15 +218,18 @@ struct SelfplayConfig {
   // See NetMctsConfig::root_dirichlet_total_alpha. Same epsilon and ply
   // window as dirichlet_alpha; exclusive with it.
   double dirichlet_total_alpha = 0.0;
+  // See NetMctsConfig::root_dirichlet_shaped. Requires dirichlet_total_alpha > 0.
+  bool dirichlet_shaped = false;
   // Root policy temperature of full searches
-  // (NetMctsConfig::root_policy_temperature): linear in the ply index from
-  // `_initial` at ply 0 to `_final` at `_decay_plies` and beyond
-  // (decay_plies == 0: `_final` throughout). Both 1 = off. Playout-cap fast
-  // searches stay at 1, like they stay noise-free.
+  // (NetMctsConfig::root_policy_temperature): KataGo exponential decay in the
+  // ply index `final + (initial - final) * 0.5^(ply / halflife_plies)`
+  // (halflife_plies == 0 when initial == final: `final` throughout). Both 1 = off.
+  // Playout-cap fast searches stay at 1, like they stay noise-free.
   double root_policy_temperature_initial = 1.0;
   double root_policy_temperature_final = 1.0;
-  int root_policy_temperature_decay_plies = 0;
+  double root_policy_temperature_halflife_plies = 0.0;
   OpeningExploration opening_exploration{};
+  MidgameStart midgame_start{};
   int max_game_plies = 500;
 
   bool tail_solve_enabled = false;
@@ -229,6 +267,21 @@ struct SelfplayConfig {
   // them anyway; with long games and wide encoders they dominate the memory
   // of in-flight episodes). Episode stats then see a null features view.
   bool encode_fast_samples = true;
+
+  // Search run on MCTS plies (NetMctsConfig::algorithm). kGumbel: the search
+  // picks the move (Gumbel noise on full searches is the exploration, so
+  // root Dirichlet noise / root policy temperature must be off) and the
+  // sample's policy target is the improved policy. kRollout is a test-time
+  // search and is rejected here.
+  search::SearchAlgorithm algorithm = search::SearchAlgorithm::kPuct;
+  search::GumbelConfig gumbel{};
+
+  // On-policy RL (PPO): every non-heuristic ply samples its move from the
+  // network policy P^(1/policy_sampling_temperature) without search and
+  // records behavior_logp / behavior_value. Exclusive with playout cap and
+  // the tail solver.
+  bool policy_sampling = false;
+  double policy_sampling_temperature = 1.0;
 };
 
 using GameAdjudicator = board_ai::GameAdjudicator;

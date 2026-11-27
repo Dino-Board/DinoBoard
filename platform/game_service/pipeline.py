@@ -167,7 +167,7 @@ def _get_ai_move(gs: engine.GameSession, sess: dict) -> dict:
     if sess.get("temperature_schedule_enabled"):
         kwargs["temperature_initial"] = sess["temperature_initial"]
         kwargs["temperature_final"] = sess["temperature_final"]
-        kwargs["temperature_decay_plies"] = sess["temperature_decay_plies"]
+        kwargs["temperature_halflife_plies"] = sess["temperature_halflife_plies"]
     return gs.get_ai_action(**kwargs)
 
 

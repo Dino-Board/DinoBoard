@@ -147,7 +147,7 @@ def create_session(
             raise FileNotFoundError(
                 f"no trained model found for {actual_id}. "
                 f"Expected at {expected_model_path(actual_id).relative_to(PROJECT_ROOT)}. "
-                f"Copy from runs/<run_name>/models/model_best.onnx after training, "
+                f"Copy from runs/<run_name>/models/model_latest.onnx after training, "
                 f"renaming to <variant>.onnx."
             )
 
@@ -169,7 +169,7 @@ def create_session(
         t_sched_enabled = live_profile.temperature_schedule_enabled
         t_initial = live_profile.temperature_initial
         t_final = live_profile.temperature_final
-        t_decay = live_profile.temperature_decay_plies
+        t_halflife = live_profile.temperature_halflife_plies
         top_k = live_profile.top_k
         # Only `simulations` and `world_cap` are consumed from the analysis
         # profile. The analysis pipeline (pipeline.py) hard-codes
@@ -196,7 +196,7 @@ def create_session(
         t_sched_enabled = False
         t_initial = 0.0
         t_final = 0.0
-        t_decay = 0
+        t_halflife = 0.0
         top_k = 0
 
     # Live web session uses no filter (filter is for training only); analysis
@@ -255,7 +255,7 @@ def create_session(
         "temperature_schedule_enabled": t_sched_enabled,
         "temperature_initial": t_initial,
         "temperature_final": t_final,
-        "temperature_decay_plies": t_decay,
+        "temperature_halflife_plies": t_halflife,
         "top_k": top_k,
         "action_history": [],
         "replay_frames": [],

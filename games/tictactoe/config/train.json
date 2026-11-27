@@ -31,9 +31,9 @@
       "temperature": 1.0,
       "temperature_schedule": {
         "enabled": true,
-        "initial": 1.0,
+        "initial": 0.8,
         "final": 0.1,
-        "decay_plies": 8
+        "halflife_plies": 1.0
       }
     },
     "eval": {

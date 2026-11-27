@@ -176,14 +176,8 @@ For bluff games, prefer a large buffer (150-200 steps of data) over the default.
 | dirichlet_on_first_n_plies | -1 = whole game. | -1 for most; explicit value to restrict noise to opening |
 
 ### alpha by action space
-- Rule of thumb: `alpha ~ 10 / action_space_size`
-- tictactoe (9 actions): ~1.0
-- quoridor (~130 actions): ~0.08-0.17
-- splendor (70 actions): ~0.15-0.33
-- coup (~20 actions): ~0.5-1.2
-- loveletter (~10 actions): ~1.0
-
-When the number of legal moves changes a lot within a game, set `dirichlet_total_alpha` instead (per-action alpha = total / legal moves at that root). That option, the root policy temperature and random starting positions are covered in [exploration.md](exploration.md).
+- Rule of thumb for fixed `dirichlet_alpha`: `alpha ~ 10 / action_space_size` (tictactoe `1.0`, loveletter `1.0`, coup `0.5-1.2`, quoridor `0.17`).
+- **Preferred for variable or wide branching (`N >= 20`)**: set `dirichlet_alpha: 0.0`, `dirichlet_total_alpha: 10.83`, and `dirichlet_shaped: true` (KataGo adaptive + log-prior shaped concentration: 50% uniform `1/N` + 50% excess log-prior capped at `max(0.01, 1/N)`). See [exploration.md](exploration.md) and [overconfidence.md](overconfidence.md).
 
 ---
 
@@ -192,41 +186,28 @@ When the number of legal moves changes a lot within a game, set `dirichlet_total
 ```json
 "temperature_schedule": {
   "enabled": true,
-  "initial": 1.0,
+  "initial": 0.8,
   "final": 0.1,
-  "decay_plies": 12
+  "halflife_plies": 5
 }
 ```
 
-**Rule: finish the decay early.** The temperature picks the move actually played from the finished
-visit counts; it does not change the search or the policy target. What it changes is the game: the
-positions training sees and the result every sample of that game is labelled with. Sampled moves are
-weaker moves, so a long schedule trains the value head on how games end when play is half random.
-Variety of positions, the reason for a long schedule, comes from random openings
-(`training.opening_exploration`, `exploration.md`) or from the game's own chance (deals, tile draws),
-not from the temperature.
+Uses **KataGo-style exponential halflife decay** (`Search::interpolateEarly` in KataGo):
+`T(ply) = final + (initial - final) * 0.5^(ply / halflife_plies)`.
+(Legacy linear `decay_plies` has been completely removed and raises `ValueError`.)
 
-- `decay_plies`: about 20% of a game's real length (`plies=` in the step log, not max_game_plies),
-  then 0.1 (all but the most visited move). Azul 54 plies: 11; Splendor 59: 12; Harmonies 128: 25;
-  Carcassonne 142: 30; 6 nimmt! 24: 5. A deterministic game with no opening randomness needs
-  `opening_exploration`, not a longer schedule.
-- Why it matters more after heuristic guidance: guided plies are the teacher's moves, so the
-  temperature does not act on them. Once the network plays, its search distributions are much flatter
-  than the teacher's (`prior_ent` 6 nimmt! 0.6 -> 1.4, Harmonies 1.05 -> 1.87), and sampling from
-  them picks bad moves often.
-- 6 nimmt! sampled every move (1.0 to 0.5 over 20 of its 24 plies, never below 0.5). Its latest net,
-  a match for its guided-phase self when both picked the most visited move (-0.6 bullheads a hand),
-  lost by 3.6 bullheads a hand when both sampled, and the run made no progress after guidance (two
-  runs, 3500 and 9800 steps). Restarted with 1.0 to 0.1 over 5 plies, the same step was 1.1
-  bullheads a hand better than the old run (paired games, 55.9%) and kept improving.
-- Harmonies (1.0 to 0.1 over 60 of 128 plies): step 2200 beat step 800 55.5% picking the most
-  visited move but lost 41.7% when both sampled at 0.5, and no gating pass for 2700 steps.
-  Resumed at step 3196 with 25 plies: a new best at step 3500 (60.2%) and its highest eval within
-  400 steps.
-- Check what a run uses: `resolve_profile(game, "selfplay")` (`temperature_initial`,
-  `temperature_final`, `temperature_decay_plies`); the startup log does not print it.
-- Bluff games (coup): consider `enabled: false` with flat `temperature: 1.0` -- the mixed strategy is
-  the point there.
+**Rule: follow KataGo's early-decay rhythm (`halflife_plies ~ 0.08 * avg_game_plies`).**
+Played-move temperature picks the move actually executed from finished visit counts; it does not change search or policy targets, only the trajectory and terminal `z` labels. Sampling noisy moves deep into a game degrades play and corrupts value labels ([overconfidence.md](overconfidence.md)). Position diversity comes from `opening_exploration` + `midgame_start` ([exploration.md](exploration.md)), not from a slow played-move temperature.
+
+- **KataGo reference (`selfplay8b20.cfg`)**: `initial: 0.8`, `final: 0.1`, `halflife_plies: 19` on ~240-ply 19x19 Go (`19 / 240 ~ 8%`).
+  - At `1 * halflife_plies` (~8% of game): `50%` decayed (`T = 0.45`) — opening moves still branch cleanly.
+  - At `2 * halflife_plies` (~16% of game): `75%` decayed (`T = 0.275`).
+  - At `3 * halflife_plies` (~24% of game): `87.5%` decayed (`T = 0.188`) — smoothly enters near-greedy play without a step cliff.
+- **Per-game `halflife_plies` (`7%-10%` of real `plies=` in `train.log`, NOT `max_game_plies`)**:
+  `6 nimmt!` (~24 plies): `2`; `Azul` (~54): `4.5`; `Jaipur` (~55): `5`; `Splendor` (~59): `5`; `Quoridor` (~60): `5`; `Harmonies` (~128): `10`; `Carcassonne` (~142): `11`; `Ark Nova` (~220): `18`.
+- **Empirical impact**: in `6 nimmt!` and `Harmonies`, slow temperature schedules stalled post-guidance progress because flatter network search distributions sampled blunders throughout the midgame; switching to fast early decay to `0.1` immediately restored head-to-head gains.
+- **Startup verification**: printed at launch as `temperature_schedule: enabled (exp), initial=..., final=..., halflife_plies=...`.
+- **Bluff / mixed-strategy games (`coup`, `liarsdice`)**: keep flat `temperature: 1.0` (`enabled: false`) or higher `final` when equilibrium play itself mixes actions.
 
 ---
 
@@ -244,6 +225,8 @@ not from the temperature.
 Guidance duration by heuristic strength:
 - Strong heuristic (PV model from previous training run, or strong rule heuristic): `hold_steps: 1000, steps: 2000, initial_ratio: 1.0`
 - Medium heuristic (basic rule heuristic): `hold_steps: 100, steps: 200, initial_ratio: 1.0`
+
+Policy target (`p` label) by teacher type: `mcts_pv` teachers (ONNX PV or C++ PV evaluator + MCTS) supervise the teacher's post-search visit distribution `p` (matching training-phase MCTS), whereas non-MCTS `rule` teachers supervise a strict one-hot `p` label on the chosen action.
 
 ---
 
